@@ -1,0 +1,16 @@
+diff --git a/ps2xIOP/src/emulator/iop_emulator.h b/ps2xIOP/src/emulator/iop_emulator.h
+index 01b48df..070c473 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -37,6 +37,11 @@ namespace ps2x::iop::detail
+         [[nodiscard]] bool isMemoryRange(uint32_t address, size_t size) const;
+ 
+         [[nodiscard]] uint64_t cycles() const noexcept;
++        // When set, runCycles skips kernel entry while no ready thread can appear before a sealed cycle.
++        // Tests turn it off to lock the same wake cycle, and reseal to prove one invalidation.
++        void setIdleSkipCache(bool enabled) noexcept;
++        void testSealIdleSkip(uint64_t untilCycle) noexcept;
++        [[nodiscard]] uint64_t testIdleSkipCount() const noexcept;
+         [[nodiscard]] uint64_t instructions() const noexcept;
+         [[nodiscard]] uint32_t loadedModuleCount() const noexcept;
+         [[nodiscard]] uint32_t threadCount() const noexcept;
