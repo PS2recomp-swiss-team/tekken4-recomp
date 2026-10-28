@@ -297,7 +297,8 @@ namespace tekken4
     // and logs them as a second, combined list.
     std::atomic<HANDLE> g_gameThread{nullptr};
 
-    std::vector<HANDLE> otherProcessThreads(DWORD gameThreadId)
+    // nameFilter: only threads whose description (SetThreadDescription, e.g. "GSThread") contains it; empty = all.
+    std::vector<HANDLE> otherProcessThreads(DWORD gameThreadId, const std::string &nameFilter = {})
     {
         std::vector<HANDLE> threads;
         const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -310,8 +311,27 @@ namespace tekken4
             if (entry.th32OwnerProcessID != GetCurrentProcessId() || entry.th32ThreadID == GetCurrentThreadId() ||
                 entry.th32ThreadID == gameThreadId)
                 continue;
-            if (HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, entry.th32ThreadID))
-                threads.push_back(h);
+            HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE,
+                                 entry.th32ThreadID);
+            if (!h)
+                continue;
+            if (!nameFilter.empty())
+            {
+                PWSTR description = nullptr;
+                std::string name;
+                if (SUCCEEDED(GetThreadDescription(h, &description)) && description)
+                {
+                    for (const wchar_t *c = description; *c; ++c)
+                        name.push_back(static_cast<char>(*c < 128 ? *c : '?'));
+                    LocalFree(description);
+                }
+                if (name.find(nameFilter) == std::string::npos)
+                {
+                    CloseHandle(h);
+                    continue;
+                }
+            }
+            threads.push_back(h);
         }
         CloseHandle(snapshot);
         return threads;
@@ -346,14 +366,17 @@ namespace tekken4
         const double start = std::atof(spec);
         const char *colon = std::strchr(spec, ':');
         const double seconds = colon ? std::atof(colon + 1) : 10.0;
+        // TEKKEN4_PROFILE_THREADS=all: every other thread; =<name>: only threads whose description contains it
+        // (e.g. GSThread = the GL renderer's thread).
         const char *threadsEnv = std::getenv("TEKKEN4_PROFILE_THREADS");
-        const bool allThreads = threadsEnv && std::strcmp(threadsEnv, "all") == 0;
-        std::thread([start, seconds, allThreads]() {
+        const bool allThreads = threadsEnv && *threadsEnv;
+        const std::string threadFilter = (allThreads && std::strcmp(threadsEnv, "all") != 0) ? threadsEnv : "";
+        std::thread([start, seconds, allThreads, threadFilter]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(start * 1000.0)));
             HANDLE thread = g_gameThread.load();
             if (!thread)
                 return;
-            std::vector<HANDLE> others = allThreads ? otherProcessThreads(GetThreadId(thread)) : std::vector<HANDLE>{};
+            std::vector<HANDLE> others = allThreads ? otherProcessThreads(GetThreadId(thread), threadFilter) : std::vector<HANDLE>{};
             std::unordered_map<DWORD64, uint32_t> samples, otherSamples;
             uint32_t total = 0u, otherTotal = 0u;
             const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(static_cast<int>(seconds * 1000.0));
@@ -607,6 +630,42 @@ namespace tekken4
             setReturnS32(ctx, -1);
     }
 
+    // First unique 0x100 send buffers (byte queue, terminator 0xF0). Capped so a per-frame keepalive does not
+    // flood the log or move the fight fps comparison.
+    void logSoundQueue(uint8_t *rdram, uint32_t sendAddr, uint32_t sendSize)
+    {
+        static int logs = 0;
+        static uint8_t prev[128]{};
+        static uint32_t prevSize = 0;
+        if (logs >= 24 || sendSize == 0u || sendSize > sizeof(prev))
+            return;
+        const uint8_t *send = getMemPtr(rdram, sendAddr);
+        if (!send)
+            return;
+        if (prevSize == sendSize && std::memcmp(prev, send, sendSize) == 0)
+            return;
+        std::memcpy(prev, send, sendSize);
+        prevSize = sendSize;
+        ++logs;
+        std::ostringstream out;
+        out << "[tekken4] rpc 0x100 send";
+        for (uint32_t i = 0; i < sendSize; ++i)
+        {
+            if (send[i] == 0xF0u)
+            {
+                out << " F0";
+                break;
+            }
+            if (i >= 48u)
+            {
+                out << " ...";
+                break;
+            }
+            out << ' ' << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(send[i]);
+        }
+        RUNTIME_LOG(out.str() << "\n");
+    }
+
     void sifCallRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         ctx->pc = getRegU32(ctx, 31);
@@ -649,6 +708,8 @@ namespace tekken4
         }
         if (forward)
         {
+            if (function == kSoundFrameCall)
+                logSoundQueue(rdram, getRegU32(ctx, 7), getRegU32(ctx, 8));
             {
                 std::lock_guard<std::mutex> lock(g_mutex);
                 if (g_loggedCalls.insert(function).second)
@@ -915,6 +976,31 @@ namespace tekken4
         std::memcpy(p + 8, &zero, 4);
         std::memcpy(p, &cur, 4);
         setReturnU32(ctx, cur);
+    }
+
+    // The game's libc rand (0x2a3178). The recompiler maps it by name to the runtime's stub, which returns the host's
+    // std::rand(); the game's srand (0x2a3168) is not stubbed and seeds the guest state, which that stub never reads.
+    // The host generator was therefore never seeded: every run drew the same numbers and the CPU picked the same
+    // opponents (arcade always Law, story always Steve) where PCSX2 varies. This is the game's own routine:
+    // next = next * 1103515245 + 12345 on the 32-bit word at reent + 88 (reent = *0x3059d4), result next & 0x7fffffff.
+    constexpr uint32_t kRand = 0x002a3178u;
+    constexpr uint32_t kReentPtr = 0x003059d4u;
+    void guestRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        (void)runtime;
+        ctx->pc = getRegU32(ctx, 31);
+        uint32_t reent = 0, next = 0;
+        std::memcpy(&reent, rdram + kReentPtr, 4);
+        uint8_t *state = getMemPtr(rdram, reent + 88u);
+        if (!state)
+        {
+            setReturnS32(ctx, 0);
+            return;
+        }
+        std::memcpy(&next, state, 4);
+        next = next * 1103515245u + 12345u;
+        std::memcpy(state, &next, 4);
+        setReturnS32(ctx, static_cast<int32_t>(next & 0x7FFFFFFFu));
     }
 
     // Debug: the same close, logged from frame 4 on (TEKKEN4_IRQ_LOG).
@@ -1195,6 +1281,7 @@ namespace tekken4
         runtime.registerFunction(0x00292c18u, closeDmaTag);
         runtime.registerFunction(kSceMpegGetPicture, mpegGetPicture);
         runtime.registerFunction(kIpuImagesDecode, ipuImagesDecode);
+        runtime.registerFunction(kRand, guestRand);
         if (const char *presentLog = std::getenv("TEKKEN4_PRESENT_LOG"))
         {
             // Debug aid for a shaking picture: for <seconds>, samples the presented frame every 5 ms and logs each
