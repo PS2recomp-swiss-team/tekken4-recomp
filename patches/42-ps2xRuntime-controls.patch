@@ -1,0 +1,2708 @@
+diff --git a/ps2xRuntime/include/runtime/ps2_graphics_settings.h b/ps2xRuntime/include/runtime/ps2_graphics_settings.h
+index ba7e8fd..73498e8 100644
+--- a/ps2xRuntime/include/runtime/ps2_graphics_settings.h
++++ b/ps2xRuntime/include/runtime/ps2_graphics_settings.h
+@@ -3,6 +3,174 @@
+ // User graphics settings: the F2 settings window (ps2_debug_panel.cpp) changes them while the game runs, the host
+ // present path and the GS backend read them. PS2X_SETTINGS=<file> loads them at start and saves every change; without
+ // it the defaults hold and nothing is written (test runs stay reproducible).
++//
++// Controls (padmap-compatible, Windows): layout preset, per-button gamepad and keyboard bindings, radial deadzone,
++// invert Y, stick swap, analog trigger threshold. The pad read path uses a published snapshot, not this mutex.
++#include <cstdint>
++
++namespace ps2_controls
++{
++    constexpr int kButtonCount = 16;
++    constexpr int kStickDirCount = 8;
++    constexpr int kMaxSources = 4;
++    constexpr int kMaxKeys = 6;
++
++    // DS2 order used by the settings file and the F2 list.
++    enum Button : int
++    {
++        Up = 0,
++        Down,
++        Left,
++        Right,
++        Cross,
++        Circle,
++        Square,
++        Triangle,
++        L1,
++        R1,
++        L2,
++        R2,
++        L3,
++        R3,
++        Start,
++        Select
++    };
++
++    // Active-high bits, same positions as the active-low report.
++    constexpr uint16_t kButtonMask[kButtonCount] = {
++        0x0010u, 0x0040u, 0x0080u, 0x0020u, 0x4000u, 0x2000u, 0x8000u, 0x1000u,
++        0x0400u, 0x0800u, 0x0100u, 0x0200u, 0x0002u, 0x0004u, 0x0008u, 0x0001u};
++
++    enum StickDir : int
++    {
++        LStickUp = 0,
++        LStickDown,
++        LStickLeft,
++        LStickRight,
++        RStickUp,
++        RStickDown,
++        RStickLeft,
++        RStickRight
++    };
++
++    enum class Layout : int
++    {
++        Playstation = 0,
++        Xbox = 1,
++        Switch = 2,
++        SwitchLabels = 3,
++        Keyboard = 4
++    };
++
++    // Gamepad source: raylib GamepadButton 1..17, or a trigger axis (raylib 5.5 values).
++    constexpr int kSrcEmpty = 0;
++    constexpr int kSrcAxisLeft = -5;  // -(GAMEPAD_AXIS_LEFT_TRIGGER + 1)
++    constexpr int kSrcAxisRight = -6; // -(GAMEPAD_AXIS_RIGHT_TRIGGER + 1)
++    constexpr int kGpLeftTrigger2 = 10;
++    constexpr int kGpRightTrigger2 = 12;
++
++    struct Controls
++    {
++        Layout layout = Layout::Playstation;
++        bool ignoreGamepads = false;
++        int gp[kButtonCount][kMaxSources]{};
++        int gpCount[kButtonCount]{};
++        int keys[kButtonCount][kMaxKeys]{}; // raylib KeyboardKey
++        int keyCount[kButtonCount]{};
++        int stickKeys[kStickDirCount][kMaxSources]{};
++        int stickKeyCount[kStickDirCount]{};
++        float deadzoneLeft = 0.15f;
++        float deadzoneRight = 0.15f;
++        bool invertLeft = false;
++        bool invertRight = false; // padmap invert_y true
++        bool stickSwap = false;
++        float triggerThreshold = -1.f; // < 0: digital trigger buttons
++    };
++
++    struct StickFloats
++    {
++        float lx = 0.f;
++        float ly = 0.f;
++        float rx = 0.f;
++        float ry = 0.f;
++    };
++
++    struct Snap
++    {
++        uint16_t vkMask[256]{};
++        uint8_t pollVk[96]{};
++        int pollCount = 0;
++        struct RlKey
++        {
++            int key;
++            uint16_t mask;
++        };
++        RlKey rlKeys[96]{};
++        int rlCount = 0;
++        struct GpSrc
++        {
++            int src;
++            uint16_t mask;
++        };
++        GpSrc gp[64]{};
++        int gpCount = 0;
++        float deadzoneLeft = 0.15f;
++        float deadzoneRight = 0.15f;
++        bool invertLeft = false;
++        bool invertRight = false;
++        bool stickSwap = false;
++        bool ignoreGamepads = false;
++        float triggerThreshold = -1.f;
++        struct StickBind
++        {
++            int key;
++            int vk;
++            int stick;
++            int axis;
++            float value;
++        };
++        StickBind sticks[32]{};
++        int stickCount = 0;
++    };
++
++    Controls defaultControls();
++    // Resets gamepad sources to the preset. Keyboard bindings are left alone.
++    // Keyboard layout sets ignoreGamepads.
++    void applyLayout(Controls &controls, Layout layout);
++    int presetSource(Layout layout, int button);
++
++    const char *layoutName(Layout layout);
++    const char *buttonName(int button);
++    const char *stickDirName(int dir);
++    const char *sourceName(int src);
++    const char *keyName(int raylibKey);
++
++    int catalogKeyCount();
++    int catalogKeyRaylib(int index);
++
++    // Unknown keys and bad values return false and leave controls unchanged.
++    // An empty list (controls_key_UP=) is valid and clears that binding.
++    bool applyControlsField(Controls &controls, const char *key, const char *value);
++    // Each line is key=value. Unknown lines are skipped. Returns how many fields applied.
++    int applyControlsText(Controls &controls, const char *text);
++
++    // One settings-file field. Returns false when index is past the end.
++    bool controlsField(const Controls &controls, int index, char *key, int keyCap, char *value, int valueCap);
++
++    void fillSnap(Snap &snap, const Controls &controls);
++    const Snap *publishedSnap();
++    void publishControls(const Controls &controls);
++
++    void applyRadialDeadzone(float &x, float &y, float deadzone);
++    float triggerAmount(float raw, bool &signedRange);
++    // buttonsLive false: sticks only (a rebind press must not reach the game).
++    // down[18] indexed by raylib GamepadButton. axes[6] are raylib axes.
++    uint16_t mapGamepad(const Snap &snap, const bool down[18], const float axes[6], bool &signedL, bool &signedR,
++                        StickFloats &sticks, bool buttonsLive = true);
++    void swapSticksIf(const Snap &snap, StickFloats &sticks);
++    void invertAndDeadzone(const Snap &snap, StickFloats &sticks);
++}
++
+ namespace ps2_graphics
+ {
+     enum class Aspect : int
+@@ -28,6 +196,7 @@ namespace ps2_graphics
+         TextureFilter textureFilter = TextureFilter::Game;
+         bool fxaa = false;         // FXAA on the frame as it is drawn to the window
+         int sharpen = 0;           // 0..100 %, contrast-limited sharpening in the same pass
++        ps2_controls::Controls controls = ps2_controls::defaultControls();
+     };
+     constexpr int kMaxInternalScale = 4;
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_input_latency.h b/ps2xRuntime/include/runtime/ps2_input_latency.h
+index 8542dc5..3e68516 100644
+--- a/ps2xRuntime/include/runtime/ps2_input_latency.h
++++ b/ps2xRuntime/include/runtime/ps2_input_latency.h
+@@ -27,7 +27,18 @@ namespace ps2_input_latency
+     void waitMessage(unsigned timeoutMs);
+ 
+     // Game thread. Active-high pad bits. False: caller uses raylib IsKeyDown.
+-    bool sampleKeyboard(uint16_t &padDownMask);
++    // Stick pointers are filled only when a keyboard stick binding is down.
++    // While pad posting is suppressed, returns true with an empty mask so the
++    // legacy IsKeyDown path does not run either.
++    bool sampleKeyboard(uint16_t &padDownMask, float *stickLx = nullptr, float *stickLy = nullptr,
++                        float *stickRx = nullptr, float *stickRy = nullptr, bool *stickActive = nullptr);
++
++    // Rebind capture or an ImGui text field. The hook does not post pad bits.
++    void setPadPostingSuppressed(bool suppressed);
++    bool padPostingSuppressed();
++    // Rebind capture: gamepad buttons are not applied. Sticks still are.
++    void setGamepadButtonsBlocked(bool blocked);
++    bool gamepadButtonsBlocked();
+ 
+     // Game thread, after scePadRead wrote the pad packet. pressedMask is active-high.
+     void notePad(uint16_t pressedMask, uint64_t vsyncTick);
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index c5d37ff..932c6bd 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -1,6 +1,7 @@
+ #include "Common.h"
+ #include "Pad.h"
+ #include "runtime/ps2_input_latency.h"
++#include "runtime/ps2_graphics_settings.h"
+ 
+ namespace ps2_stubs
+ {
+@@ -123,106 +124,139 @@ namespace ps2_stubs
+         // scePadRead already fed it. Each later port is the next host gamepad.
+         // scePadPortOpen still succeeds when nothing is plugged in; libpad then
+         // reports that port disconnected (scePadStateDiscon) and scePadRead
+-        // returns no packet.
++        // returns no packet. The keyboard layout preset ignores gamepads on
++        // every port; port 0 stays connected because the keyboard is there.
+         bool hostControllerConnected(int port)
+         {
+             if (port == 0)
+             {
+                 return true;
+             }
++            const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++            if (snap && snap->ignoreGamepads)
++            {
++                return false;
++            }
+             return findNthGamepad(port) >= 0;
+         }
+ 
++        // Later ports, and the port-0 fallback when the backend declines.
++        // Stick bytes stay axisToByte (lround). Port 0's production path uses
++        // 128+axis*127 in ps2_pad.cpp. Buttons and sticks come from the shared
++        // snapshot (preset, overrides, deadzone, invert, swap, trigger axis).
+         void applyGamepadState(PadInputState &state, int gamepad)
+         {
+             if (!IsWindowReady() || gamepad < 0)
+             {
+                 return;
+             }
++            const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++            if (!snap || snap->ignoreGamepads)
++            {
++                return;
++            }
+ 
+-            // Raylib mapping (PS2 -> raylib buttons/axes):
+-            // D-Pad -> LEFT_FACE_*, Cross/Circle/Square/Triangle -> RIGHT_FACE_*
+-            // L1/R1 -> TRIGGER_1, L2/R2 -> TRIGGER_2, L3/R3 -> THUMB
+-            // Select/Start -> MIDDLE_LEFT/MIDDLE_RIGHT
+-            state.lx = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X));
+-            state.ly = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y));
+-            state.rx = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X));
+-            state.ry = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y));
+-
+-            setButton(state, kPadBtnUp, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_UP));
+-            setButton(state, kPadBtnDown, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN));
+-            setButton(state, kPadBtnLeft, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT));
+-            setButton(state, kPadBtnRight, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT));
+-
+-            setButton(state, kPadBtnCross, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN));
+-            setButton(state, kPadBtnCircle, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT));
+-            setButton(state, kPadBtnSquare, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT));
+-            setButton(state, kPadBtnTriangle, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP));
+-
+-            setButton(state, kPadBtnL1, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1));
+-            setButton(state, kPadBtnR1, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1));
+-            setButton(state, kPadBtnL2, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2));
+-            setButton(state, kPadBtnR2, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2));
++            bool down[18] = {};
++            const bool blockButtons = ps2_input_latency::gamepadButtonsBlocked();
++            if (!blockButtons)
++            {
++                for (int b = 1; b <= 17; ++b)
++                {
++                    down[b] = IsGamepadButtonDown(gamepad, b);
++                }
++            }
++            float axes[6];
++            for (int a = 0; a < 6; ++a)
++            {
++                axes[a] = GetGamepadAxisMovement(gamepad, a);
++            }
+ 
+-            setButton(state, kPadBtnL3, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_LEFT_THUMB));
+-            setButton(state, kPadBtnR3, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_RIGHT_THUMB));
++            static bool signedL[4] = {};
++            static bool signedR[4] = {};
++            const int slot = gamepad & 3;
++            ps2_controls::StickFloats sticks;
++            const uint16_t pressed = ps2_controls::mapGamepad(*snap, down, axes, signedL[slot], signedR[slot], sticks,
++                                                             !blockButtons);
++            ps2_controls::swapSticksIf(*snap, sticks);
++            ps2_controls::invertAndDeadzone(*snap, sticks);
++            state.lx = axisToByte(sticks.lx);
++            state.ly = axisToByte(sticks.ly);
++            state.rx = axisToByte(sticks.rx);
++            state.ry = axisToByte(sticks.ry);
++            state.buttons = static_cast<uint16_t>(state.buttons & static_cast<uint16_t>(~pressed));
++        }
+ 
+-            setButton(state, kPadBtnSelect, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_LEFT));
+-            setButton(state, kPadBtnStart, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT));
++        void applyKeyStick(const ps2_controls::Snap &snap, float x, float y, bool right, uint8_t &outX, uint8_t &outY)
++        {
++            if (x == 0.0f && y == 0.0f)
++            {
++                return;
++            }
++            if (right ? snap.invertRight : snap.invertLeft)
++            {
++                y = -y;
++            }
++            ps2_controls::applyRadialDeadzone(x, y, right ? snap.deadzoneRight : snap.deadzoneLeft);
++            outX = axisToByte(x);
++            outY = axisToByte(y);
+         }
+ 
++        // Fallback only (port 0 when the backend returns false). Same key table
++        // as the production path. Stick keys apply only in analog mode, and
++        // only when that stick's keys are actually down.
+         void applyKeyboardState(PadInputState &state, bool allowAnalog)
+         {
+-            if (!IsWindowReady())
++            if (!IsWindowReady() || ps2_input_latency::padPostingSuppressed())
+             {
+                 return;
+             }
+-
+-            // Keyboard mapping (PS2 -> keys), same as PSPadBackend::readState:
+-            // D-Pad: WASD, Square/Cross/Circle/Triangle: Left/Down/Right/Up arrows (or Z/X/C/V)
+-            // L1/R1: Q/E, L2/R2: 1/3, Start/Select: Enter/RightShift
+-            // L3/R3: LeftCtrl/RightCtrl, Analog left: WASD
+-            setButton(state, kPadBtnUp, IsKeyDown(KEY_W));
+-            setButton(state, kPadBtnDown, IsKeyDown(KEY_S));
+-            setButton(state, kPadBtnLeft, IsKeyDown(KEY_A));
+-            setButton(state, kPadBtnRight, IsKeyDown(KEY_D));
+-
+-            setButton(state, kPadBtnSquare, IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_Z));
+-            setButton(state, kPadBtnCross, IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_X));
+-            setButton(state, kPadBtnCircle, IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_C));
+-            setButton(state, kPadBtnTriangle, IsKeyDown(KEY_UP) || IsKeyDown(KEY_V));
+-
+-            setButton(state, kPadBtnL1, IsKeyDown(KEY_Q));
+-            setButton(state, kPadBtnR1, IsKeyDown(KEY_E));
+-            setButton(state, kPadBtnL2, IsKeyDown(KEY_ONE));
+-            setButton(state, kPadBtnR2, IsKeyDown(KEY_THREE));
+-
+-            setButton(state, kPadBtnStart, IsKeyDown(KEY_ENTER));
+-            setButton(state, kPadBtnSelect, IsKeyDown(KEY_RIGHT_SHIFT));
+-            setButton(state, kPadBtnL3, IsKeyDown(KEY_LEFT_CONTROL));
+-            setButton(state, kPadBtnR3, IsKeyDown(KEY_RIGHT_CONTROL));
+-
+-            if (!allowAnalog)
++            const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++            if (!snap)
+             {
+                 return;
+             }
+-
+-            float ax = 0.0f;
+-            float ay = 0.0f;
+-            if (IsKeyDown(KEY_D))
+-                ax += 1.0f;
+-            if (IsKeyDown(KEY_A))
+-                ax -= 1.0f;
+-            if (IsKeyDown(KEY_S))
+-                ay += 1.0f;
+-            if (IsKeyDown(KEY_W))
+-                ay -= 1.0f;
+-
+-            if (ax != 0.0f || ay != 0.0f)
++            for (int i = 0; i < snap->rlCount; ++i)
++            {
++                const int key = snap->rlKeys[i].key;
++                if (key > 0 && IsKeyDown(key))
++                {
++                    setButton(state, snap->rlKeys[i].mask, true);
++                }
++            }
++            if (!allowAnalog || snap->stickCount <= 0)
++            {
++                return;
++            }
++            float lx = 0.0f;
++            float ly = 0.0f;
++            float rx = 0.0f;
++            float ry = 0.0f;
++            for (int i = 0; i < snap->stickCount; ++i)
+             {
+-                state.lx = axisToByte(ax);
+-                state.ly = axisToByte(ay);
++                const ps2_controls::Snap::StickBind &bind = snap->sticks[i];
++                if (bind.key <= 0 || !IsKeyDown(bind.key))
++                {
++                    continue;
++                }
++                if (bind.stick == 0 && bind.axis == 0)
++                {
++                    lx += bind.value;
++                }
++                else if (bind.stick == 0)
++                {
++                    ly += bind.value;
++                }
++                else if (bind.axis == 0)
++                {
++                    rx += bind.value;
++                }
++                else
++                {
++                    ry += bind.value;
++                }
+             }
++            applyKeyStick(*snap, lx, ly, false, state.lx, state.ly);
++            applyKeyStick(*snap, rx, ry, true, state.rx, state.ry);
+         }
+ 
+         void resetPadStateLocked()
+diff --git a/ps2xRuntime/src/lib/ps2_debug_panel.cpp b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+index a06b40e..7392497 100644
+--- a/ps2xRuntime/src/lib/ps2_debug_panel.cpp
++++ b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+@@ -4,6 +4,7 @@
+ #include "ps2_log.h"
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/ps2_graphics_settings.h"
++#include "runtime/ps2_input_latency.h"
+ 
+ #include <unordered_set>
+ #include "Kernel/Syscalls/Helpers/State.h"
+@@ -2176,14 +2177,264 @@ namespace
+         }
+     }
+ 
++    // Rebind capture. A click arms the row; the next draw skips one frame so a
++    // stale GetKeyPressed / gamepad edge is not consumed. Esc cancels.
++    int g_rebindButton = -1;
++    int g_rebindArm = 0;
++    bool g_rebindAdd = false;
++    bool g_gateApplied = false;
++
++    void cancelControlsCapture()
++    {
++        g_rebindButton = -1;
++        g_rebindArm = 0;
++        g_rebindAdd = false;
++    }
++
++    void controlsInputGate()
++    {
++        const bool capture = g_rebindButton >= 0;
++        const bool text = ImGui::GetIO().WantTextInput;
++        ps2_input_latency::setPadPostingSuppressed(capture || text);
++        ps2_input_latency::setGamepadButtonsBlocked(capture);
++        g_gateApplied = true;
++    }
++
++    void controlsInputGateClear()
++    {
++        if (!g_gateApplied && g_rebindButton < 0)
++            return;
++        cancelControlsCapture();
++        ps2_input_latency::setPadPostingSuppressed(false);
++        ps2_input_latency::setGamepadButtonsBlocked(false);
++        g_gateApplied = false;
++    }
++
++    void formatBinding(const ps2_controls::Controls &controls, int button, char *dst, int cap)
++    {
++        if (g_rebindButton == button)
++        {
++            std::snprintf(dst, static_cast<std::size_t>(cap), "Press a button or key (Esc cancels)");
++            return;
++        }
++        char gp[80];
++        char keys[96];
++        gp[0] = '\0';
++        keys[0] = '\0';
++        int used = 0;
++        for (int i = 0; i < controls.gpCount[button] && i < ps2_controls::kMaxSources; ++i)
++        {
++            const char *name = ps2_controls::sourceName(controls.gp[button][i]);
++            if (!name)
++                continue;
++            const int n = std::snprintf(gp + used, sizeof(gp) - static_cast<std::size_t>(used), "%s%s", used ? "," : "", name);
++            if (n < 0 || used + n >= static_cast<int>(sizeof(gp)))
++                break;
++            used += n;
++        }
++        used = 0;
++        for (int i = 0; i < controls.keyCount[button] && i < ps2_controls::kMaxKeys; ++i)
++        {
++            const char *name = ps2_controls::keyName(controls.keys[button][i]);
++            if (!name)
++                continue;
++            const int n = std::snprintf(keys + used, sizeof(keys) - static_cast<std::size_t>(used), "%s%s", used ? "," : "", name);
++            if (n < 0 || used + n >= static_cast<int>(sizeof(keys)))
++                break;
++            used += n;
++        }
++        if (gp[0] && keys[0])
++            std::snprintf(dst, static_cast<std::size_t>(cap), "%s | %s", gp, keys);
++        else if (gp[0])
++            std::snprintf(dst, static_cast<std::size_t>(cap), "%s", gp);
++        else if (keys[0])
++            std::snprintf(dst, static_cast<std::size_t>(cap), "%s", keys);
++        else
++            std::snprintf(dst, static_cast<std::size_t>(cap), "(empty)");
++    }
++
++    bool pollRebind(ps2_controls::Controls &controls)
++    {
++        if (g_rebindButton < 0 || g_rebindButton >= ps2_controls::kButtonCount)
++            return false;
++        if (g_rebindArm > 0)
++        {
++            --g_rebindArm;
++            while (GetKeyPressed() != 0)
++            {
++            }
++            return false;
++        }
++        int key = 0;
++        for (;;)
++        {
++            const int next = GetKeyPressed();
++            if (next == 0)
++                break;
++            if (next == KEY_ESCAPE)
++            {
++                while (GetKeyPressed() != 0)
++                {
++                }
++                cancelControlsCapture();
++                return false;
++            }
++            if (key == 0)
++                key = next;
++        }
++        if (key == 0)
++        {
++            for (int i = 0; i < ps2_controls::catalogKeyCount(); ++i)
++            {
++                const int code = ps2_controls::catalogKeyRaylib(i);
++                if (code > 0 && IsKeyPressed(code))
++                {
++                    key = code;
++                    break;
++                }
++            }
++        }
++        if (key == KEY_ESCAPE)
++        {
++            cancelControlsCapture();
++            return false;
++        }
++        if (key != 0 && ps2_controls::keyName(key))
++        {
++            const int button = g_rebindButton;
++            if (!g_rebindAdd)
++            {
++                controls.keyCount[button] = 0;
++                for (int i = 0; i < ps2_controls::kMaxKeys; ++i)
++                    controls.keys[button][i] = 0;
++            }
++            bool exists = false;
++            for (int i = 0; i < controls.keyCount[button]; ++i)
++            {
++                if (controls.keys[button][i] == key)
++                    exists = true;
++            }
++            if (!exists && controls.keyCount[button] < ps2_controls::kMaxKeys)
++                controls.keys[button][controls.keyCount[button]++] = key;
++            cancelControlsCapture();
++            return true;
++        }
++
++        int src = 0;
++        static bool sigL[4] = {};
++        static bool sigR[4] = {};
++        for (int pad = 0; pad < 4 && src == 0; ++pad)
++        {
++            if (!IsGamepadAvailable(pad))
++                continue;
++            for (int btn = 1; btn <= 17; ++btn)
++            {
++                if (IsGamepadButtonPressed(pad, btn))
++                {
++                    src = btn;
++                    break;
++                }
++            }
++            if (src != 0)
++                break;
++            const float left = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_LEFT_TRIGGER);
++            const float right = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_RIGHT_TRIGGER);
++            if (ps2_controls::triggerAmount(left, sigL[pad]) >= 0.55f)
++                src = ps2_controls::kSrcAxisLeft;
++            else if (ps2_controls::triggerAmount(right, sigR[pad]) >= 0.55f)
++                src = ps2_controls::kSrcAxisRight;
++        }
++        if (src != 0)
++        {
++            const int button = g_rebindButton;
++            controls.gpCount[button] = 1;
++            controls.gp[button][0] = src;
++            for (int s = 1; s < ps2_controls::kMaxSources; ++s)
++                controls.gp[button][s] = ps2_controls::kSrcEmpty;
++            cancelControlsCapture();
++            return true;
++        }
++        return false;
++    }
++
+     // F2: the player's settings (ps2_graphics_settings.h). Changes apply on the next frame and are saved at once.
+     void drawSettingsWindow(bool &open)
+     {
+-        ImGui::SetNextWindowPos(ImVec2(170.0f, 40.0f), ImGuiCond_FirstUseEver); // right of the HUD
++        ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_FirstUseEver);
+         if (ImGui::Begin("Settings (F2)", &open, ImGuiWindowFlags_AlwaysAutoResize))
+         {
+             ps2_graphics::Settings settings = ps2_graphics::get();
+             bool changed = false;
++            if (pollRebind(settings.controls))
++                changed = true;
++
++            ImGui::SeparatorText("Controls");
++            static const char *const kLayouts[] = {"PlayStation (position)", "Xbox (position)", "Switch (position)",
++                                                   "Nintendo labels", "Keyboard"};
++            int layout = static_cast<int>(settings.controls.layout);
++            if (layout < 0 || layout >= IM_ARRAYSIZE(kLayouts))
++                layout = 0;
++            if (ImGui::Combo("Preset", &layout, kLayouts, IM_ARRAYSIZE(kLayouts)))
++            {
++                ps2_controls::applyLayout(settings.controls, static_cast<ps2_controls::Layout>(layout));
++                changed = true;
++            }
++            ImGui::TextDisabled("Click a row, then a gamepad button or key. Right-click adds a key. x clears keys.");
++            ImGui::BeginChild("controls-binds", ImVec2(420.0f, 200.0f), true);
++            for (int b = 0; b < ps2_controls::kButtonCount; ++b)
++            {
++                ImGui::PushID(b);
++                ImGui::AlignTextToFramePadding();
++                ImGui::TextUnformatted(ps2_controls::buttonName(b));
++                ImGui::SameLine(72.0f);
++                char label[160];
++                formatBinding(settings.controls, b, label, static_cast<int>(sizeof(label)));
++                if (ImGui::Button(label, ImVec2(300.0f, 0.0f)))
++                {
++                    g_rebindButton = b;
++                    g_rebindArm = 1;
++                    g_rebindAdd = false;
++                }
++                if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
++                {
++                    g_rebindButton = b;
++                    g_rebindArm = 1;
++                    g_rebindAdd = true;
++                }
++                ImGui::SameLine();
++                if (ImGui::SmallButton("x"))
++                {
++                    settings.controls.keyCount[b] = 0;
++                    for (int k = 0; k < ps2_controls::kMaxKeys; ++k)
++                        settings.controls.keys[b][k] = 0;
++                    if (g_rebindButton == b)
++                        cancelControlsCapture();
++                    changed = true;
++                }
++                ImGui::PopID();
++            }
++            ImGui::EndChild();
++            changed |= ImGui::SliderFloat("Deadzone left", &settings.controls.deadzoneLeft, 0.0f, 0.9f, "%.2f");
++            changed |= ImGui::SliderFloat("Deadzone right", &settings.controls.deadzoneRight, 0.0f, 0.9f, "%.2f");
++            float trigger = settings.controls.triggerThreshold > 0.0f ? settings.controls.triggerThreshold : 0.0f;
++            if (ImGui::SliderFloat("Trigger threshold (0 = buttons)", &trigger, 0.0f, 1.0f, "%.2f"))
++            {
++                settings.controls.triggerThreshold = trigger > 0.0f ? trigger : -1.0f;
++                changed = true;
++            }
++            bool invertRight = settings.controls.invertRight;
++            if (ImGui::Checkbox("Invert Y (right stick)", &invertRight))
++            {
++                settings.controls.invertRight = invertRight;
++                changed = true;
++            }
++            changed |= ImGui::Checkbox("Swap sticks", &settings.controls.stickSwap);
++            if (ImGui::Button("Reset controls to defaults"))
++            {
++                settings.controls = ps2_controls::defaultControls();
++                cancelControlsCapture();
++                changed = true;
++            }
+             ImGui::SeparatorText("Screen");
+             if (ImGui::Checkbox("Widescreen 16:9 (game patch by nemesis2000)", &settings.widescreen))
+             {
+@@ -2287,6 +2538,7 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
+ 
+     if (!m_visible && !m_settingsVisible)
+     {
++        controlsInputGateClear();
+         return;
+     }
+ 
+@@ -2296,8 +2548,13 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
+     {
+         drawSettingsWindow(m_settingsVisible);
+     }
++    if (!m_settingsVisible)
++    {
++        cancelControlsCapture();
++    }
+     if (!m_visible)
+     {
++        controlsInputGate();
+         rlImGuiEnd();
+         return;
+     }
+@@ -2387,6 +2644,7 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
+     }
+     ImGui::End();
+ 
++    controlsInputGate();
+     rlImGuiEnd();
+ #else
+     (void)runtime;
+diff --git a/ps2xRuntime/src/lib/ps2_graphics_settings.cpp b/ps2xRuntime/src/lib/ps2_graphics_settings.cpp
+index b879a30..1e118d6 100644
+--- a/ps2xRuntime/src/lib/ps2_graphics_settings.cpp
++++ b/ps2xRuntime/src/lib/ps2_graphics_settings.cpp
+@@ -1,12 +1,916 @@
+ #include "runtime/ps2_graphics_settings.h"
+ #include "runtime/ps2_switches.h"
+ 
++#include <atomic>
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+ #include <mutex>
+ #include <string>
+ 
++namespace ps2_controls
++{
++    namespace
++    {
++        struct KeyInfo
++        {
++            const char *name;
++            int raylib;
++            int vk;
++        };
++
++        // raylib 5.5 KeyboardKey values (cmake pins raylib GIT_TAG 5.5) and the Win32 VK the hook sees.
++        // VK 0: no fast-path code (KP_ENTER would alias Enter).
++        constexpr KeyInfo kKeys[] = {
++            {"APOSTROPHE", 39, 0xDE}, {"COMMA", 44, 0xBC}, {"MINUS", 45, 0xBD}, {"PERIOD", 46, 0xBE},
++            {"SLASH", 47, 0xBF},      {"ZERO", 48, '0'},   {"ONE", 49, '1'},     {"TWO", 50, '2'},
++            {"THREE", 51, '3'},       {"FOUR", 52, '4'},   {"FIVE", 53, '5'},    {"SIX", 54, '6'},
++            {"SEVEN", 55, '7'},       {"EIGHT", 56, '8'},  {"NINE", 57, '9'},    {"SEMICOLON", 59, 0xBA},
++            {"EQUAL", 61, 0xBB},      {"A", 65, 'A'},      {"B", 66, 'B'},       {"C", 67, 'C'},
++            {"D", 68, 'D'},           {"E", 69, 'E'},      {"F", 70, 'F'},       {"G", 71, 'G'},
++            {"H", 72, 'H'},           {"I", 73, 'I'},      {"J", 74, 'J'},       {"K", 75, 'K'},
++            {"L", 76, 'L'},           {"M", 77, 'M'},      {"N", 78, 'N'},       {"O", 79, 'O'},
++            {"P", 80, 'P'},           {"Q", 81, 'Q'},      {"R", 82, 'R'},       {"S", 83, 'S'},
++            {"T", 84, 'T'},           {"U", 85, 'U'},      {"V", 86, 'V'},       {"W", 87, 'W'},
++            {"X", 88, 'X'},           {"Y", 89, 'Y'},      {"Z", 90, 'Z'},       {"LEFT_BRACKET", 91, 0xDB},
++            {"BACKSLASH", 92, 0xDC},  {"RIGHT_BRACKET", 93, 0xDD}, {"GRAVE", 96, 0xC0}, {"SPACE", 32, 0x20},
++            {"ESCAPE", 256, 0x1B},    {"ENTER", 257, 0x0D}, {"TAB", 258, 0x09},  {"BACKSPACE", 259, 0x08},
++            {"INSERT", 260, 0x2D},    {"DELETE", 261, 0x2E}, {"RIGHT", 262, 0x27}, {"LEFT", 263, 0x25},
++            {"DOWN", 264, 0x28},      {"UP", 265, 0x26},   {"PAGE_UP", 266, 0x21}, {"PAGE_DOWN", 267, 0x22},
++            {"HOME", 268, 0x24},      {"END", 269, 0x23},  {"CAPS_LOCK", 280, 0x14}, {"SCROLL_LOCK", 281, 0x91},
++            {"NUM_LOCK", 282, 0x90},  {"PRINT_SCREEN", 283, 0x2C}, {"PAUSE", 284, 0x13}, {"F1", 290, 0x70},
++            {"F2", 291, 0x71},        {"F3", 292, 0x72},   {"F4", 293, 0x73},    {"F5", 294, 0x74},
++            {"F6", 295, 0x75},        {"F7", 296, 0x76},   {"F8", 297, 0x77},    {"F9", 298, 0x78},
++            {"F10", 299, 0x79},       {"F11", 300, 0x7A},  {"F12", 301, 0x7B},   {"LEFT_SHIFT", 340, 0xA0},
++            {"LEFT_CONTROL", 341, 0xA2}, {"LEFT_ALT", 342, 0xA4}, {"LEFT_SUPER", 343, 0x5B},
++            {"RIGHT_SHIFT", 344, 0xA1}, {"RIGHT_CONTROL", 345, 0xA3}, {"RIGHT_ALT", 346, 0xA5},
++            {"RIGHT_SUPER", 347, 0x5C}, {"KB_MENU", 348, 0x5D}, {"KP_0", 320, 0x60}, {"KP_1", 321, 0x61},
++            {"KP_2", 322, 0x62},      {"KP_3", 323, 0x63}, {"KP_4", 324, 0x64},  {"KP_5", 325, 0x65},
++            {"KP_6", 326, 0x66},      {"KP_7", 327, 0x67}, {"KP_8", 328, 0x68},  {"KP_9", 329, 0x69},
++            {"KP_DECIMAL", 330, 0x6E}, {"KP_DIVIDE", 331, 0x6F}, {"KP_MULTIPLY", 332, 0x6A},
++            {"KP_SUBTRACT", 333, 0x6D}, {"KP_ADD", 334, 0x6B}, {"KP_ENTER", 335, 0}, {"KP_EQUAL", 336, 0},
++            {"BACK", 4, 0},           {"MENU", 5, 0},      {"VOLUME_UP", 24, 0}, {"VOLUME_DOWN", 25, 0},
++        };
++        constexpr int kKeyCatalog = static_cast<int>(sizeof(kKeys) / sizeof(kKeys[0]));
++
++        struct GpName
++        {
++            const char *name;
++            int src;
++        };
++        constexpr GpName kGpNames[] = {
++            {"LEFT_FACE_UP", 1},       {"LEFT_FACE_RIGHT", 2},    {"LEFT_FACE_DOWN", 3},
++            {"LEFT_FACE_LEFT", 4},     {"RIGHT_FACE_UP", 5},      {"RIGHT_FACE_RIGHT", 6},
++            {"RIGHT_FACE_DOWN", 7},    {"RIGHT_FACE_LEFT", 8},    {"LEFT_TRIGGER_1", 9},
++            {"LEFT_TRIGGER_2", 10},    {"RIGHT_TRIGGER_1", 11},   {"RIGHT_TRIGGER_2", 12},
++            {"MIDDLE_LEFT", 13},       {"MIDDLE", 14},            {"MIDDLE_RIGHT", 15},
++            {"LEFT_THUMB", 16},        {"RIGHT_THUMB", 17},       {"LEFT_TRIGGER_AXIS", kSrcAxisLeft},
++            {"RIGHT_TRIGGER_AXIS", kSrcAxisRight},
++        };
++
++        constexpr const char *kButtonNames[kButtonCount] = {
++            "UP", "DOWN", "LEFT", "RIGHT", "CROSS", "CIRCLE", "SQUARE", "TRIANGLE",
++            "L1", "R1", "L2", "R2", "L3", "R3", "START", "SELECT"};
++        constexpr const char *kStickNames[kStickDirCount] = {
++            "LSTICK_UP", "LSTICK_DOWN", "LSTICK_LEFT", "LSTICK_RIGHT",
++            "RSTICK_UP", "RSTICK_DOWN", "RSTICK_LEFT", "RSTICK_RIGHT"};
++        // stick, axis (0=x, 1=y), value. Matches padmap STICK_DIRS.
++        constexpr int kStickStick[kStickDirCount] = {0, 0, 0, 0, 1, 1, 1, 1};
++        constexpr int kStickAxis[kStickDirCount] = {1, 1, 0, 0, 1, 1, 0, 0};
++        constexpr float kStickValue[kStickDirCount] = {-1.f, 1.f, -1.f, 1.f, -1.f, 1.f, -1.f, 1.f};
++
++        // Today's ps2_pad.cpp / vkToPad bindings. Not padmap's keyboard preset (that one drives sticks).
++        struct DefKey
++        {
++            int button;
++            int raylib;
++        };
++        constexpr DefKey kDefaultKeys[] = {
++            {Up, 87},        {Down, 83},       {Left, 65},        {Right, 68},
++            {Cross, 264},    {Cross, 88},      {Cross, 32},
++            {Circle, 262},   {Circle, 67},     {Circle, 256},
++            {Square, 263},   {Square, 90},     {Square, 320},
++            {Triangle, 265}, {Triangle, 86},   {Triangle, 321},
++            {L1, 81},        {R1, 69},         {L2, 340},         {R2, 344},
++            {Start, 257},    {Select, 258},
++        };
++
++        constexpr int kVkShift = 0x10;
++        constexpr int kVkLShift = 0xA0;
++
++        Snap g_snaps[3];
++        std::atomic<int> g_snapIndex{0};
++        std::once_flag g_snapOnce;
++
++        int asciiUpper(int c)
++        {
++            if (c >= 'a' && c <= 'z')
++                return c - ('a' - 'A');
++            return c;
++        }
++
++        bool sameName(const char *a, const char *b)
++        {
++            if (!a || !b)
++                return false;
++            while (*a && *b)
++            {
++                if (asciiUpper(static_cast<unsigned char>(*a)) != asciiUpper(static_cast<unsigned char>(*b)))
++                    return false;
++                ++a;
++                ++b;
++            }
++            return *a == '\0' && *b == '\0';
++        }
++
++        void trimInPlace(char *s)
++        {
++            if (!s)
++                return;
++            char *start = s;
++            while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
++                ++start;
++            if (start != s)
++                std::memmove(s, start, std::strlen(start) + 1);
++            std::size_t n = std::strlen(s);
++            while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n'))
++            {
++                s[n - 1] = '\0';
++                --n;
++            }
++        }
++
++        const KeyInfo *findKeyName(const char *name)
++        {
++            if (!name || !name[0])
++                return nullptr;
++            if ((name[0] == 'K' || name[0] == 'k') && (name[1] == 'E' || name[1] == 'e') &&
++                (name[2] == 'Y' || name[2] == 'y') && name[3] == '_')
++                name += 4;
++            for (const KeyInfo &info : kKeys)
++            {
++                if (sameName(info.name, name))
++                    return &info;
++            }
++            return nullptr;
++        }
++
++        const KeyInfo *findKeyCode(int raylib)
++        {
++            for (const KeyInfo &info : kKeys)
++            {
++                if (info.raylib == raylib)
++                    return &info;
++            }
++            return nullptr;
++        }
++
++        int findGpName(const char *name, int &src)
++        {
++            if (!name || !name[0])
++                return 0;
++            if ((name[0] == 'G' || name[0] == 'g') && sameName(name, "GAMEPAD_BUTTON_UNKNOWN"))
++                return 0;
++            const char *body = name;
++            const char prefix[] = "GAMEPAD_BUTTON_";
++            bool prefixed = true;
++            for (int i = 0; prefix[i]; ++i)
++            {
++                if (asciiUpper(static_cast<unsigned char>(name[i])) != prefix[i])
++                {
++                    prefixed = false;
++                    break;
++                }
++            }
++            if (prefixed)
++                body = name + sizeof(prefix) - 1;
++            for (const GpName &gp : kGpNames)
++            {
++                if (sameName(gp.name, body))
++                {
++                    src = gp.src;
++                    return 1;
++                }
++            }
++            return 0;
++        }
++
++        int findButtonName(const char *name)
++        {
++            for (int i = 0; i < kButtonCount; ++i)
++            {
++                if (sameName(kButtonNames[i], name))
++                    return i;
++            }
++            return -1;
++        }
++
++        int findStickName(const char *name)
++        {
++            for (int i = 0; i < kStickDirCount; ++i)
++            {
++                if (sameName(kStickNames[i], name))
++                    return i;
++            }
++            return -1;
++        }
++
++        int positionalSource(int button)
++        {
++            switch (button)
++            {
++            case Up: return 1;
++            case Down: return 3;
++            case Left: return 4;
++            case Right: return 2;
++            case Cross: return 7;
++            case Circle: return 6;
++            case Square: return 8;
++            case Triangle: return 5;
++            case L1: return 9;
++            case R1: return 11;
++            case L2: return 10;
++            case R2: return 12;
++            case L3: return 16;
++            case R3: return 17;
++            case Start: return 15;
++            case Select: return 13;
++            default: return kSrcEmpty;
++            }
++        }
++
++        bool parseUnit(const char *text, float &out)
++        {
++            if (!text || !text[0])
++                return false;
++            char buf[64];
++            std::snprintf(buf, sizeof(buf), "%s", text);
++            trimInPlace(buf);
++            for (char *p = buf; *p; ++p)
++            {
++                if (*p == ',')
++                    *p = '.';
++            }
++            char *end = nullptr;
++            const float v = std::strtof(buf, &end);
++            if (end == buf)
++                return false;
++            while (*end == ' ' || *end == '\t')
++                ++end;
++            if (*end != '\0')
++                return false;
++            out = v;
++            return true;
++        }
++
++        void formatUnit(char *dst, int cap, float v)
++        {
++            if (!(v > -10.f && v < 10.f))
++                v = 0.f;
++            const bool neg = v < 0.f;
++            const float mag = neg ? -v : v;
++            int milli = static_cast<int>(std::lround(mag * 1000.f));
++            if (milli < 0)
++                milli = 0;
++            std::snprintf(dst, static_cast<std::size_t>(cap), "%s%d.%03d", neg ? "-" : "", milli / 1000, milli % 1000);
++        }
++
++        bool parseList(const char *text, int *out, int max, int &count, bool keys)
++        {
++            count = 0;
++            if (!text)
++                return false;
++            char buf[192];
++            std::snprintf(buf, sizeof(buf), "%s", text);
++            trimInPlace(buf);
++            if (buf[0] == '\0')
++                return true;
++            char *cursor = buf;
++            while (*cursor)
++            {
++                while (*cursor == ' ' || *cursor == '\t' || *cursor == ',')
++                    ++cursor;
++                if (!*cursor)
++                    break;
++                char *start = cursor;
++                while (*cursor && *cursor != ',')
++                    ++cursor;
++                if (*cursor == ',')
++                {
++                    *cursor = '\0';
++                    ++cursor;
++                }
++                trimInPlace(start);
++                if (!start[0])
++                    continue;
++                if (count >= max)
++                    return false;
++                if (keys)
++                {
++                    const KeyInfo *info = findKeyName(start);
++                    if (!info)
++                        return false;
++                    out[count++] = info->raylib;
++                }
++                else
++                {
++                    int src = 0;
++                    if (!findGpName(start, src))
++                        return false;
++                    out[count++] = src;
++                }
++            }
++            return true;
++        }
++
++        void formatKeyList(const int *keys, int count, char *dst, int cap)
++        {
++            dst[0] = '\0';
++            int used = 0;
++            for (int i = 0; i < count; ++i)
++            {
++                const char *name = keyName(keys[i]);
++                if (!name)
++                    continue;
++                const int n = std::snprintf(dst + used, static_cast<std::size_t>(cap - used), "%s%s",
++                                            used ? "," : "", name);
++                if (n < 0 || used + n >= cap)
++                {
++                    dst[0] = '\0';
++                    return;
++                }
++                used += n;
++            }
++        }
++
++        void formatGpList(const int *src, int count, char *dst, int cap)
++        {
++            dst[0] = '\0';
++            int used = 0;
++            for (int i = 0; i < count; ++i)
++            {
++                const char *name = sourceName(src[i]);
++                if (!name || src[i] == kSrcEmpty)
++                    continue;
++                const int n = std::snprintf(dst + used, static_cast<std::size_t>(cap - used), "%s%s",
++                                            used ? "," : "", name);
++                if (n < 0 || used + n >= cap)
++                {
++                    dst[0] = '\0';
++                    return;
++                }
++                used += n;
++            }
++        }
++
++        const char *invertToken(const Controls &controls)
++        {
++            if (controls.invertLeft && controls.invertRight)
++                return "both";
++            if (controls.invertLeft)
++                return "left";
++            if (controls.invertRight)
++                return "true";
++            return "false";
++        }
++
++        void seedDefaultSnaps()
++        {
++            Snap snap;
++            fillSnap(snap, defaultControls());
++            g_snaps[0] = snap;
++            g_snaps[1] = snap;
++            g_snaps[2] = snap;
++        }
++    }
++
++    Controls defaultControls()
++    {
++        Controls controls;
++        applyLayout(controls, Layout::Playstation);
++        controls.deadzoneLeft = 0.15f;
++        controls.deadzoneRight = 0.15f;
++        controls.invertLeft = false;
++        controls.invertRight = false;
++        controls.stickSwap = false;
++        controls.triggerThreshold = -1.f;
++        controls.ignoreGamepads = false;
++        for (const DefKey &entry : kDefaultKeys)
++        {
++            const int b = entry.button;
++            if (controls.keyCount[b] < kMaxKeys)
++                controls.keys[b][controls.keyCount[b]++] = entry.raylib;
++        }
++        return controls;
++    }
++
++    void applyLayout(Controls &controls, Layout layout)
++    {
++        controls.layout = layout;
++        controls.ignoreGamepads = layout == Layout::Keyboard;
++        for (int b = 0; b < kButtonCount; ++b)
++        {
++            controls.gpCount[b] = 1;
++            controls.gp[b][0] = presetSource(layout, b);
++            for (int s = 1; s < kMaxSources; ++s)
++                controls.gp[b][s] = kSrcEmpty;
++        }
++    }
++
++    int presetSource(Layout layout, int button)
++    {
++        if (button < 0 || button >= kButtonCount)
++            return kSrcEmpty;
++        if (layout == Layout::SwitchLabels)
++        {
++            switch (button)
++            {
++            case Cross: return 6;     // RIGHT_FACE_RIGHT, Nintendo A
++            case Circle: return 7;    // RIGHT_FACE_DOWN, Nintendo B
++            case Square: return 5;    // RIGHT_FACE_UP, Nintendo X
++            case Triangle: return 8;  // RIGHT_FACE_LEFT, Nintendo Y
++            default: break;
++            }
++        }
++        return positionalSource(button);
++    }
++
++    const char *layoutName(Layout layout)
++    {
++        switch (layout)
++        {
++        case Layout::Playstation: return "playstation";
++        case Layout::Xbox: return "xbox";
++        case Layout::Switch: return "switch";
++        case Layout::SwitchLabels: return "switch-labels";
++        case Layout::Keyboard: return "keyboard";
++        }
++        return "playstation";
++    }
++
++    const char *buttonName(int button)
++    {
++        if (button < 0 || button >= kButtonCount)
++            return nullptr;
++        return kButtonNames[button];
++    }
++
++    const char *stickDirName(int dir)
++    {
++        if (dir < 0 || dir >= kStickDirCount)
++            return nullptr;
++        return kStickNames[dir];
++    }
++
++    const char *sourceName(int src)
++    {
++        for (const GpName &gp : kGpNames)
++        {
++            if (gp.src == src)
++                return gp.name;
++        }
++        return nullptr;
++    }
++
++    const char *keyName(int raylibKey)
++    {
++        const KeyInfo *info = findKeyCode(raylibKey);
++        return info ? info->name : nullptr;
++    }
++
++    int catalogKeyCount()
++    {
++        return kKeyCatalog;
++    }
++
++    int catalogKeyRaylib(int index)
++    {
++        if (index < 0 || index >= kKeyCatalog)
++            return 0;
++        return kKeys[index].raylib;
++    }
++
++    bool applyControlsField(Controls &controls, const char *key, const char *value)
++    {
++        if (!key || !value)
++            return false;
++        char kbuf[96];
++        char vbuf[192];
++        std::snprintf(kbuf, sizeof(kbuf), "%s", key);
++        std::snprintf(vbuf, sizeof(vbuf), "%s", value);
++        trimInPlace(kbuf);
++        trimInPlace(vbuf);
++        const char *prefix = "controls_";
++        if (std::strncmp(kbuf, prefix, 9) != 0)
++            return false;
++        const char *body = kbuf + 9;
++
++        if (sameName(body, "layout"))
++        {
++            Layout layout = controls.layout;
++            if (sameName(vbuf, "playstation"))
++                layout = Layout::Playstation;
++            else if (sameName(vbuf, "xbox"))
++                layout = Layout::Xbox;
++            else if (sameName(vbuf, "switch"))
++                layout = Layout::Switch;
++            else if (sameName(vbuf, "switch-labels") || sameName(vbuf, "switch_labels"))
++                layout = Layout::SwitchLabels;
++            else if (sameName(vbuf, "keyboard"))
++                layout = Layout::Keyboard;
++            else
++                return false;
++            applyLayout(controls, layout);
++            return true;
++        }
++        if (sameName(body, "deadzone"))
++        {
++            float v = 0.f;
++            if (!parseUnit(vbuf, v) || v < 0.f || v > 0.9f)
++                return false;
++            controls.deadzoneLeft = v;
++            controls.deadzoneRight = v;
++            return true;
++        }
++        if (sameName(body, "deadzone_left") || sameName(body, "deadzone_right"))
++        {
++            float v = 0.f;
++            if (!parseUnit(vbuf, v) || v < 0.f || v > 0.9f)
++                return false;
++            if (sameName(body, "deadzone_left"))
++                controls.deadzoneLeft = v;
++            else
++                controls.deadzoneRight = v;
++            return true;
++        }
++        if (sameName(body, "invert_y"))
++        {
++            if (sameName(vbuf, "false") || sameName(vbuf, "none") || sameName(vbuf, "0"))
++            {
++                controls.invertLeft = false;
++                controls.invertRight = false;
++            }
++            else if (sameName(vbuf, "true") || sameName(vbuf, "right") || sameName(vbuf, "1"))
++            {
++                controls.invertLeft = false;
++                controls.invertRight = true;
++            }
++            else if (sameName(vbuf, "left"))
++            {
++                controls.invertLeft = true;
++                controls.invertRight = false;
++            }
++            else if (sameName(vbuf, "both"))
++            {
++                controls.invertLeft = true;
++                controls.invertRight = true;
++            }
++            else
++                return false;
++            return true;
++        }
++        if (sameName(body, "stick_swap"))
++        {
++            if (sameName(vbuf, "1") || sameName(vbuf, "true"))
++                controls.stickSwap = true;
++            else if (sameName(vbuf, "0") || sameName(vbuf, "false"))
++                controls.stickSwap = false;
++            else
++                return false;
++            return true;
++        }
++        if (sameName(body, "trigger") || sameName(body, "trigger_threshold"))
++        {
++            if (vbuf[0] == '\0' || sameName(vbuf, "off") || sameName(vbuf, "none") || sameName(vbuf, "null") ||
++                sameName(vbuf, "-1"))
++            {
++                controls.triggerThreshold = -1.f;
++                return true;
++            }
++            float v = 0.f;
++            if (!parseUnit(vbuf, v))
++                return false;
++            if (v == 0.f)
++            {
++                controls.triggerThreshold = -1.f;
++                return true;
++            }
++            if (!(v > 0.f && v <= 1.f))
++                return false;
++            controls.triggerThreshold = v;
++            return true;
++        }
++        if (std::strncmp(body, "gp_", 3) == 0)
++        {
++            const int button = findButtonName(body + 3);
++            if (button < 0)
++                return false;
++            int src[kMaxSources];
++            int count = 0;
++            if (!parseList(vbuf, src, kMaxSources, count, false))
++                return false;
++            controls.gpCount[button] = count;
++            for (int i = 0; i < kMaxSources; ++i)
++                controls.gp[button][i] = i < count ? src[i] : kSrcEmpty;
++            return true;
++        }
++        if (std::strncmp(body, "key_", 4) == 0)
++        {
++            const char *name = body + 4;
++            const int stick = findStickName(name);
++            int codes[kMaxKeys];
++            int count = 0;
++            if (!parseList(vbuf, codes, stick >= 0 ? kMaxSources : kMaxKeys, count, true))
++                return false;
++            if (stick >= 0)
++            {
++                controls.stickKeyCount[stick] = count;
++                for (int i = 0; i < kMaxSources; ++i)
++                    controls.stickKeys[stick][i] = i < count ? codes[i] : 0;
++                return true;
++            }
++            const int button = findButtonName(name);
++            if (button < 0)
++                return false;
++            controls.keyCount[button] = count;
++            for (int i = 0; i < kMaxKeys; ++i)
++                controls.keys[button][i] = i < count ? codes[i] : 0;
++            return true;
++        }
++        return false;
++    }
++
++    int applyControlsText(Controls &controls, const char *text)
++    {
++        if (!text)
++            return 0;
++        int applied = 0;
++        const char *cursor = text;
++        while (*cursor)
++        {
++            char line[256];
++            int n = 0;
++            while (*cursor && *cursor != '\n' && n < 255)
++                line[n++] = *cursor++;
++            line[n] = '\0';
++            if (*cursor == '\n')
++                ++cursor;
++            trimInPlace(line);
++            char *eq = std::strchr(line, '=');
++            if (!eq)
++                continue;
++            *eq = '\0';
++            if (applyControlsField(controls, line, eq + 1))
++                ++applied;
++        }
++        return applied;
++    }
++
++    bool controlsField(const Controls &controls, int index, char *key, int keyCap, char *value, int valueCap)
++    {
++        if (!key || !value || keyCap < 8 || valueCap < 8 || index < 0)
++            return false;
++        value[0] = '\0';
++        auto putKey = [&](const char *name)
++        { std::snprintf(key, static_cast<std::size_t>(keyCap), "controls_%s", name); };
++        if (index == 0)
++        {
++            putKey("layout");
++            std::snprintf(value, static_cast<std::size_t>(valueCap), "%s", layoutName(controls.layout));
++            return true;
++        }
++        if (index == 1)
++        {
++            putKey("deadzone_left");
++            formatUnit(value, valueCap, controls.deadzoneLeft);
++            return true;
++        }
++        if (index == 2)
++        {
++            putKey("deadzone_right");
++            formatUnit(value, valueCap, controls.deadzoneRight);
++            return true;
++        }
++        if (index == 3)
++        {
++            putKey("invert_y");
++            std::snprintf(value, static_cast<std::size_t>(valueCap), "%s", invertToken(controls));
++            return true;
++        }
++        if (index == 4)
++        {
++            putKey("stick_swap");
++            std::snprintf(value, static_cast<std::size_t>(valueCap), "%d", controls.stickSwap ? 1 : 0);
++            return true;
++        }
++        if (index == 5)
++        {
++            putKey("trigger");
++            if (!(controls.triggerThreshold > 0.f))
++                std::snprintf(value, static_cast<std::size_t>(valueCap), "-1");
++            else
++                formatUnit(value, valueCap, controls.triggerThreshold);
++            return true;
++        }
++        if (index < 6 + kButtonCount)
++        {
++            const int button = index - 6;
++            std::snprintf(key, static_cast<std::size_t>(keyCap), "controls_gp_%s", kButtonNames[button]);
++            formatGpList(controls.gp[button], controls.gpCount[button], value, valueCap);
++            return true;
++        }
++        if (index < 6 + kButtonCount * 2)
++        {
++            const int button = index - (6 + kButtonCount);
++            std::snprintf(key, static_cast<std::size_t>(keyCap), "controls_key_%s", kButtonNames[button]);
++            formatKeyList(controls.keys[button], controls.keyCount[button], value, valueCap);
++            return true;
++        }
++        if (index < 6 + kButtonCount * 2 + kStickDirCount)
++        {
++            const int dir = index - (6 + kButtonCount * 2);
++            std::snprintf(key, static_cast<std::size_t>(keyCap), "controls_key_%s", kStickNames[dir]);
++            formatKeyList(controls.stickKeys[dir], controls.stickKeyCount[dir], value, valueCap);
++            return true;
++        }
++        return false;
++    }
++
++    void fillSnap(Snap &snap, const Controls &controls)
++    {
++        snap = Snap{};
++        snap.deadzoneLeft = controls.deadzoneLeft;
++        snap.deadzoneRight = controls.deadzoneRight;
++        snap.invertLeft = controls.invertLeft;
++        snap.invertRight = controls.invertRight;
++        snap.stickSwap = controls.stickSwap;
++        snap.ignoreGamepads = controls.ignoreGamepads;
++        snap.triggerThreshold = controls.triggerThreshold;
++        bool polled[256] = {};
++        for (int b = 0; b < kButtonCount; ++b)
++        {
++            for (int s = 0; s < controls.gpCount[b] && s < kMaxSources; ++s)
++            {
++                int src = controls.gp[b][s];
++                if (controls.triggerThreshold > 0.f)
++                {
++                    if (b == L2 && src == kGpLeftTrigger2)
++                        src = kSrcAxisLeft;
++                    else if (b == R2 && src == kGpRightTrigger2)
++                        src = kSrcAxisRight;
++                }
++                if (src == kSrcEmpty || snap.gpCount >= 64)
++                    continue;
++                snap.gp[snap.gpCount++] = Snap::GpSrc{src, kButtonMask[b]};
++            }
++            for (int k = 0; k < controls.keyCount[b] && k < kMaxKeys; ++k)
++            {
++                const KeyInfo *info = findKeyCode(controls.keys[b][k]);
++                if (!info || snap.rlCount >= 96)
++                    continue;
++                snap.rlKeys[snap.rlCount++] = Snap::RlKey{info->raylib, kButtonMask[b]};
++                if (info->vk > 0 && info->vk < 256)
++                {
++                    snap.vkMask[info->vk] = static_cast<uint16_t>(snap.vkMask[info->vk] | kButtonMask[b]);
++                    if (!polled[info->vk] && snap.pollCount < 96)
++                    {
++                        polled[info->vk] = true;
++                        snap.pollVk[snap.pollCount++] = static_cast<uint8_t>(info->vk);
++                    }
++                }
++            }
++        }
++        if (snap.vkMask[kVkLShift] != 0 && snap.vkMask[kVkShift] == 0)
++            snap.vkMask[kVkShift] = snap.vkMask[kVkLShift];
++        for (int d = 0; d < kStickDirCount; ++d)
++        {
++            for (int k = 0; k < controls.stickKeyCount[d] && k < kMaxSources; ++k)
++            {
++                const KeyInfo *info = findKeyCode(controls.stickKeys[d][k]);
++                if (!info || snap.stickCount >= 32)
++                    continue;
++                Snap::StickBind bind;
++                bind.key = info->raylib;
++                bind.vk = info->vk;
++                bind.stick = kStickStick[d];
++                bind.axis = kStickAxis[d];
++                bind.value = kStickValue[d];
++                snap.sticks[snap.stickCount++] = bind;
++                if (info->vk > 0 && info->vk < 256 && !polled[info->vk] && snap.pollCount < 96)
++                {
++                    polled[info->vk] = true;
++                    snap.pollVk[snap.pollCount++] = static_cast<uint8_t>(info->vk);
++                }
++            }
++        }
++    }
++
++    const Snap *publishedSnap()
++    {
++        std::call_once(g_snapOnce, seedDefaultSnaps);
++        return &g_snaps[g_snapIndex.load(std::memory_order_acquire)];
++    }
++
++    void publishControls(const Controls &controls)
++    {
++        std::call_once(g_snapOnce, seedDefaultSnaps);
++        const int cur = g_snapIndex.load(std::memory_order_relaxed);
++        const int next = (cur + 1) % 3;
++        fillSnap(g_snaps[next], controls);
++        g_snapIndex.store(next, std::memory_order_release);
++    }
++
++    void applyRadialDeadzone(float &x, float &y, float deadzone)
++    {
++        const float magnitude = std::sqrt(x * x + y * y);
++        if (magnitude <= deadzone || magnitude <= 0.f)
++        {
++            x = 0.f;
++            y = 0.f;
++            return;
++        }
++        const float clamped = magnitude > 1.f ? 1.f : magnitude;
++        const float span = 1.f - deadzone;
++        const float scale = span > 0.f ? (clamped - deadzone) / span / magnitude : 0.f;
++        x = x * scale;
++        y = y * scale;
++        if (x < -1.f)
++            x = -1.f;
++        else if (x > 1.f)
++            x = 1.f;
++        if (y < -1.f)
++            y = -1.f;
++        else if (y > 1.f)
++            y = 1.f;
++    }
++
++    float triggerAmount(float raw, bool &signedRange)
++    {
++        if (raw < -0.01f)
++            signedRange = true;
++        if (signedRange)
++            return (raw + 1.f) * 0.5f;
++        return raw;
++    }
++
++    uint16_t mapGamepad(const Snap &snap, const bool down[18], const float axes[6], bool &signedL, bool &signedR,
++                        StickFloats &sticks, bool buttonsLive)
++    {
++        sticks.lx = axes ? axes[0] : 0.f;
++        sticks.ly = axes ? axes[1] : 0.f;
++        sticks.rx = axes ? axes[2] : 0.f;
++        sticks.ry = axes ? axes[3] : 0.f;
++        uint16_t pressed = 0;
++        if (!buttonsLive || !axes)
++            return pressed;
++        for (int i = 0; i < snap.gpCount; ++i)
++        {
++            const int src = snap.gp[i].src;
++            const uint16_t mask = snap.gp[i].mask;
++            if (src > 0 && src < 18)
++            {
++                if (down && down[src])
++                    pressed = static_cast<uint16_t>(pressed | mask);
++                continue;
++            }
++            if (src != kSrcAxisLeft && src != kSrcAxisRight)
++                continue;
++            const int axis = src == kSrcAxisLeft ? 4 : 5;
++            bool &sig = axis == 4 ? signedL : signedR;
++            const float amount = triggerAmount(axes[axis], sig);
++            float threshold = snap.triggerThreshold;
++            if (!(threshold > 0.f))
++                threshold = 0.5f;
++            if (amount >= threshold)
++                pressed = static_cast<uint16_t>(pressed | mask);
++        }
++        return pressed;
++    }
++
++    void swapSticksIf(const Snap &snap, StickFloats &sticks)
++    {
++        if (!snap.stickSwap)
++            return;
++        const float lx = sticks.lx;
++        const float ly = sticks.ly;
++        sticks.lx = sticks.rx;
++        sticks.ly = sticks.ry;
++        sticks.rx = lx;
++        sticks.ry = ly;
++    }
++
++    void invertAndDeadzone(const Snap &snap, StickFloats &sticks)
++    {
++        if (snap.invertLeft)
++            sticks.ly = -sticks.ly;
++        if (snap.invertRight)
++            sticks.ry = -sticks.ry;
++        applyRadialDeadzone(sticks.lx, sticks.ly, snap.deadzoneLeft);
++        applyRadialDeadzone(sticks.rx, sticks.ry, snap.deadzoneRight);
++    }
++}
++
+ namespace ps2_graphics
+ {
+     namespace
+@@ -21,6 +925,46 @@ namespace ps2_graphics
+             return (path && path[0]) ? path : nullptr;
+         }
+ 
++        void logControlsLocked()
++        {
++            const ps2_controls::Controls &controls = g_settings.controls;
++            char cross[96];
++            char circle[96];
++            char key[64];
++            char value[96];
++            cross[0] = '\0';
++            circle[0] = '\0';
++            for (int i = 0; ps2_controls::controlsField(controls, i, key, 64, value, 96); ++i)
++            {
++                if (std::strcmp(key, "controls_key_CROSS") == 0)
++                    std::snprintf(cross, sizeof(cross), "%s", value);
++                else if (std::strcmp(key, "controls_key_CIRCLE") == 0)
++                    std::snprintf(circle, sizeof(circle), "%s", value);
++            }
++            char dzL[16];
++            char dzR[16];
++            char trig[16];
++            // Reuse the file tokens via the field walker above; format threshold here for the log.
++            std::snprintf(dzL, sizeof(dzL), "%.3f", static_cast<double>(controls.deadzoneLeft));
++            std::snprintf(dzR, sizeof(dzR), "%.3f", static_cast<double>(controls.deadzoneRight));
++            if (controls.triggerThreshold > 0.f)
++                std::snprintf(trig, sizeof(trig), "%.3f", static_cast<double>(controls.triggerThreshold));
++            else
++                std::snprintf(trig, sizeof(trig), "off");
++            const char *inv = "false";
++            if (controls.invertLeft && controls.invertRight)
++                inv = "both";
++            else if (controls.invertLeft)
++                inv = "left";
++            else if (controls.invertRight)
++                inv = "true";
++            std::fprintf(stderr,
++                         "[controls] layout=%s dz=%s/%s invert=%s swap=%d trigger=%s cross_keys=%s circle_keys=%s\n",
++                         ps2_controls::layoutName(controls.layout), dzL, dzR, inv, controls.stickSwap ? 1 : 0, trig,
++                         cross[0] ? cross : "-", circle[0] ? circle : "-");
++            std::fflush(stderr);
++        }
++
+         // key=value lines; unknown keys and bad values are ignored.
+         void loadLocked()
+         {
+@@ -38,8 +982,14 @@ namespace ps2_graphics
+                 if (!eq)
+                     continue;
+                 *eq = '\0';
++                const char *raw = eq + 1;
++                if (std::strncmp(line, "controls_", 9) == 0)
++                {
++                    ps2_controls::applyControlsField(g_settings.controls, line, raw);
++                    continue;
++                }
+                 const std::string key(line);
+-                const int value = std::atoi(eq + 1);
++                const int value = std::atoi(raw);
+                 if (key == "aspect" && value >= 0 && value <= static_cast<int>(Aspect::Native))
+                     g_settings.aspect = static_cast<Aspect>(value);
+                 else if (key == "smooth_screen")
+@@ -56,6 +1006,8 @@ namespace ps2_graphics
+                     g_settings.sharpen = value;
+             }
+             std::fclose(file);
++            ps2_controls::publishControls(g_settings.controls);
++            logControlsLocked();
+         }
+ 
+         // Settings that recompiled code reads through runtime switches.
+@@ -79,6 +1031,10 @@ namespace ps2_graphics
+             std::fprintf(file, "texture_filter=%d\n", static_cast<int>(g_settings.textureFilter));
+             std::fprintf(file, "fxaa=%d\n", g_settings.fxaa ? 1 : 0);
+             std::fprintf(file, "sharpen=%d\n", g_settings.sharpen);
++            char key[64];
++            char value[192];
++            for (int i = 0; ps2_controls::controlsField(g_settings.controls, i, key, 64, value, 192); ++i)
++                std::fprintf(file, "%s=%s\n", key, value);
+             std::fclose(file);
+         }
+     }
+@@ -90,6 +1046,8 @@ namespace ps2_graphics
+         {
+             loadLocked();
+             applySwitchesLocked();
++            if (!settingsPath())
++                ps2_controls::publishControls(g_settings.controls);
+         }
+         return g_settings;
+     }
+@@ -101,6 +1059,7 @@ namespace ps2_graphics
+         g_settings = settings;
+         applySwitchesLocked();
+         saveLocked();
++        ps2_controls::publishControls(g_settings.controls);
+     }
+ 
+     float displayAspect(const Settings &settings, float frameWidth, float frameHeight, float windowWidth,
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+index 4f605c1..d6ae2c7 100644
+--- a/ps2xRuntime/src/lib/ps2_input_latency.cpp
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -1,6 +1,7 @@
+ // Includes windows.h and not raylib (their names clash), so it is its own
+ // translation unit in the CMake source list.
+ #include "runtime/ps2_input_latency.h"
++#include "runtime/ps2_graphics_settings.h"
+ #include "runtime/ps2_hud.h"
+ 
+ #include <atomic>
+@@ -20,21 +21,6 @@
+ 
+ namespace
+ {
+-    constexpr uint16_t kUp = 0x0010u;
+-    constexpr uint16_t kDown = 0x0040u;
+-    constexpr uint16_t kLeft = 0x0080u;
+-    constexpr uint16_t kRight = 0x0020u;
+-    constexpr uint16_t kStart = 0x0008u;
+-    constexpr uint16_t kSelect = 0x0001u;
+-    constexpr uint16_t kSquare = 0x8000u;
+-    constexpr uint16_t kCross = 0x4000u;
+-    constexpr uint16_t kCircle = 0x2000u;
+-    constexpr uint16_t kTriangle = 0x1000u;
+-    constexpr uint16_t kR1 = 0x0800u;
+-    constexpr uint16_t kL1 = 0x0400u;
+-    constexpr uint16_t kR2 = 0x0200u;
+-    constexpr uint16_t kL2 = 0x0100u;
+-
+     constexpr int kSlots = 32;
+ 
+     struct Press
+@@ -53,6 +39,9 @@ namespace
+     };
+ 
+     std::atomic<uint16_t> g_posted{0};
++    std::atomic<bool> g_suppressKeys{false};
++    std::atomic<bool> g_blockGamepad{false};
++    std::atomic<uint64_t> g_vkHeld[4]{};
+     std::atomic<int> g_open{0};
+     std::atomic<uintptr_t> g_hwnd{0};
+     std::atomic<uint16_t> g_asyncCache{0};
+@@ -86,90 +75,50 @@ namespace
+         return static_cast<uint64_t>(f.QuadPart);
+     }
+ 
+-    // Same keys as PSPadBackend::readState. Letters match the VK the capture
+-    // script posts; arrows and Enter are the other bindings.
++    // Published keyboard table (ps2_controls). One load of the snapshot pointer;
++    // the 200 us async cache below still does the GetAsyncKeyState calls.
+     uint16_t vkToPad(WPARAM vk)
+     {
+-        switch (vk)
+-        {
+-        case 'W':
+-            return kUp;
+-        case 'S':
+-            return kDown;
+-        case 'A':
+-            return kLeft;
+-        case 'D':
+-            return kRight;
+-        case VK_DOWN:
+-        case 'X':
+-        case VK_SPACE:
+-            return kCross;
+-        case VK_RIGHT:
+-        case 'C':
+-        case VK_ESCAPE:
+-            return kCircle;
+-        case VK_LEFT:
+-        case 'Z':
+-        case VK_NUMPAD0:
+-            return kSquare;
+-        case VK_UP:
+-        case 'V':
+-        case VK_NUMPAD1:
+-            return kTriangle;
+-        case 'Q':
+-            return kL1;
+-        case 'E':
+-            return kR1;
+-        case VK_LSHIFT:
+-        case VK_SHIFT:
+-            return kL2;
+-        case VK_RSHIFT:
+-            return kR2;
+-        case VK_RETURN:
+-            return kStart;
+-        case VK_TAB:
+-            return kSelect;
+-        default:
++        if (vk >= 256)
+             return 0;
+-        }
++        const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++        return snap ? snap->vkMask[vk] : 0;
+     }
+ 
+     uint16_t asyncPadMask()
+     {
++        const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++        if (!snap)
++            return 0;
+         uint16_t m = 0;
+-        const auto down = [](int vk)
+-        { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+-        if (down('W'))
+-            m = static_cast<uint16_t>(m | kUp);
+-        if (down('S'))
+-            m = static_cast<uint16_t>(m | kDown);
+-        if (down('A'))
+-            m = static_cast<uint16_t>(m | kLeft);
+-        if (down('D'))
+-            m = static_cast<uint16_t>(m | kRight);
+-        if (down(VK_DOWN) || down('X') || down(VK_SPACE))
+-            m = static_cast<uint16_t>(m | kCross);
+-        if (down(VK_RIGHT) || down('C') || down(VK_ESCAPE))
+-            m = static_cast<uint16_t>(m | kCircle);
+-        if (down(VK_LEFT) || down('Z') || down(VK_NUMPAD0))
+-            m = static_cast<uint16_t>(m | kSquare);
+-        if (down(VK_UP) || down('V') || down(VK_NUMPAD1))
+-            m = static_cast<uint16_t>(m | kTriangle);
+-        if (down('Q'))
+-            m = static_cast<uint16_t>(m | kL1);
+-        if (down('E'))
+-            m = static_cast<uint16_t>(m | kR1);
+-        if (down(VK_LSHIFT))
+-            m = static_cast<uint16_t>(m | kL2);
+-        if (down(VK_RSHIFT))
+-            m = static_cast<uint16_t>(m | kR2);
+-        if (down(VK_RETURN))
+-            m = static_cast<uint16_t>(m | kStart);
+-        if (down(VK_TAB))
+-            m = static_cast<uint16_t>(m | kSelect);
++        for (int i = 0; i < snap->pollCount; ++i)
++        {
++            const unsigned vk = snap->pollVk[i];
++            if ((GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0)
++                m = static_cast<uint16_t>(m | snap->vkMask[vk]);
++        }
+         return m;
+     }
+ 
++    void clearHeldKeys()
++    {
++        g_posted.store(0, std::memory_order_release);
++        for (std::atomic<uint64_t> &word : g_vkHeld)
++            word.store(0, std::memory_order_release);
++    }
++
++    void setVkHeld(unsigned vk, bool down)
++    {
++        if (vk >= 256)
++            return;
++        std::atomic<uint64_t> &word = g_vkHeld[vk >> 6];
++        const uint64_t bit = 1ull << (vk & 63u);
++        if (down)
++            word.fetch_or(bit, std::memory_order_release);
++        else
++            word.fetch_and(~bit, std::memory_order_release);
++    }
++
+     void printPress(const Press &p)
+     {
+         std::fprintf(stderr,
+@@ -253,16 +202,22 @@ namespace
+             const bool repeat = down && ((lp & (static_cast<LPARAM>(1) << 30)) != 0);
+             if (down && !repeat && wp == VK_F3)
+                 ps2_hud::toggle();
+-            const uint16_t bit = vkToPad(wp);
+-            if (bit != 0)
++            // A rebind or an ImGui text field must not reach the game. F3 still toggles above.
++            if (!g_suppressKeys.load(std::memory_order_relaxed))
+             {
+-                if (down)
+-                    g_posted.fetch_or(bit, std::memory_order_release);
+-                else
+-                    g_posted.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_release);
+-                // One stamp per physical press. No hash. Idle path does not get here.
+-                if (down && !repeat)
+-                    openPress(static_cast<uint32_t>(wp), bit);
++                if (wp < 256)
++                    setVkHeld(static_cast<unsigned>(wp), down);
++                const uint16_t bit = vkToPad(wp);
++                if (bit != 0)
++                {
++                    if (down)
++                        g_posted.fetch_or(bit, std::memory_order_release);
++                    else
++                        g_posted.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_release);
++                    // One stamp per physical press. No hash. Idle path does not get here.
++                    if (down && !repeat)
++                        openPress(static_cast<uint32_t>(wp), bit);
++                }
+             }
+         }
+         if (g_oldProc)
+@@ -361,6 +316,8 @@ namespace ps2_input_latency
+     {
+         if (!hwnd)
+             return;
++        // Load PS2X_SETTINGS before the hook sees a key, so a remap is already published.
++        ps2_graphics::get();
+         if (legacy() && !enabled())
+             return;
+         auto window = static_cast<HWND>(hwnd);
+@@ -396,13 +353,43 @@ namespace ps2_input_latency
+         MsgWaitForMultipleObjects(0, nullptr, FALSE, timeoutMs, QS_ALLINPUT);
+     }
+ 
+-    bool sampleKeyboard(uint16_t &padDownMask)
++    void setPadPostingSuppressed(bool suppressed)
++    {
++        const bool prev = g_suppressKeys.exchange(suppressed, std::memory_order_acq_rel);
++        if (suppressed && !prev)
++            clearHeldKeys();
++    }
++
++    bool padPostingSuppressed()
++    {
++        return g_suppressKeys.load(std::memory_order_acquire);
++    }
++
++    void setGamepadButtonsBlocked(bool blocked)
+     {
++        g_blockGamepad.store(blocked, std::memory_order_release);
++    }
++
++    bool gamepadButtonsBlocked()
++    {
++        return g_blockGamepad.load(std::memory_order_acquire);
++    }
++
++    bool sampleKeyboard(uint16_t &padDownMask, float *stickLx, float *stickLy, float *stickRx, float *stickRy,
++                        bool *stickActive)
++    {
++        if (stickActive)
++            *stickActive = false;
+         if (legacy())
+             return false;
+         const uintptr_t raw = g_hwnd.load(std::memory_order_acquire);
+         if (raw == 0)
+             return false;
++        if (g_suppressKeys.load(std::memory_order_acquire))
++        {
++            padDownMask = 0;
++            return true;
++        }
+         uint16_t mask = g_posted.load(std::memory_order_acquire);
+         const uint64_t now = qpc();
+         const uint64_t cachedAt = g_asyncCacheQpc.load(std::memory_order_acquire);
+@@ -417,6 +404,38 @@ namespace ps2_input_latency
+             g_asyncCacheQpc.store(now, std::memory_order_release);
+         }
+         padDownMask = static_cast<uint16_t>(mask | asyncMask);
++        const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++        if (snap && snap->stickCount > 0 && stickLx && stickLy && stickRx && stickRy)
++        {
++            float acc[2][2] = {};
++            bool any = false;
++            const bool focused = GetForegroundWindow() == reinterpret_cast<HWND>(raw);
++            for (int i = 0; i < snap->stickCount; ++i)
++            {
++                const ps2_controls::Snap::StickBind &bind = snap->sticks[i];
++                bool down = false;
++                if (bind.vk > 0 && bind.vk < 256)
++                {
++                    const uint64_t word = g_vkHeld[static_cast<unsigned>(bind.vk) >> 6].load(std::memory_order_acquire);
++                    down = ((word >> (bind.vk & 63)) & 1ull) != 0;
++                    if (!down && focused)
++                        down = (GetAsyncKeyState(bind.vk) & 0x8000) != 0;
++                }
++                if (!down)
++                    continue;
++                acc[bind.stick][bind.axis] += bind.value;
++                any = true;
++            }
++            if (any)
++            {
++                *stickLx = acc[0][0];
++                *stickLy = acc[0][1];
++                *stickRx = acc[1][0];
++                *stickRy = acc[1][1];
++                if (stickActive)
++                    *stickActive = true;
++            }
++        }
+         if (padDownMask != 0)
+             stampSeen(padDownMask, 0);
+         return true;
+@@ -509,6 +528,12 @@ namespace ps2_input_latency
+ 
+ #else
+ 
++namespace
++{
++    std::atomic<bool> g_suppressKeys{false};
++    std::atomic<bool> g_blockGamepad{false};
++}
++
+ namespace ps2_input_latency
+ {
+     bool enabled() { return false; }
+@@ -518,7 +543,11 @@ namespace ps2_input_latency
+     void attachWindow(void *) {}
+     void detachWindow() {}
+     void waitMessage(unsigned) {}
+-    bool sampleKeyboard(uint16_t &) { return false; }
++    bool sampleKeyboard(uint16_t &, float *, float *, float *, float *, bool *) { return false; }
++    void setPadPostingSuppressed(bool suppressed) { g_suppressKeys.store(suppressed); }
++    bool padPostingSuppressed() { return g_suppressKeys.load(); }
++    void setGamepadButtonsBlocked(bool blocked) { g_blockGamepad.store(blocked); }
++    bool gamepadButtonsBlocked() { return g_blockGamepad.load(); }
+     void notePad(uint16_t, uint64_t) {}
+     void onLatchBegin(uint64_t) {}
+     void onLatchPixels(const uint8_t *, uint32_t, uint32_t) {}
+diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
+index d2d5631..c38cdbc 100644
+--- a/ps2xRuntime/src/lib/ps2_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_pad.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/ps2_pad.h"
++#include "runtime/ps2_graphics_settings.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "ps2_host_backend.h"
+ #include <cstring>
+@@ -8,22 +9,36 @@ namespace
+     constexpr uint8_t kPadAnalogMarker = 0x73;
+     constexpr uint8_t kPadStickCenter = 0x80;
+ 
+-    constexpr uint16_t PAD_LEFT = 0x0080u;
+-    constexpr uint16_t PAD_DOWN = 0x0040u;
+-    constexpr uint16_t PAD_RIGHT = 0x0020u;
+-    constexpr uint16_t PAD_UP = 0x0010u;
+-    constexpr uint16_t PAD_START = 0x0008u;
+-    constexpr uint16_t PAD_R3 = 0x0004u;
+-    constexpr uint16_t PAD_L3 = 0x0002u;
+-    constexpr uint16_t PAD_SELECT = 0x0001u;
+-    constexpr uint16_t PAD_SQUARE = 0x8000u;
+-    constexpr uint16_t PAD_CROSS = 0x4000u;
+-    constexpr uint16_t PAD_CIRCLE = 0x2000u;
+-    constexpr uint16_t PAD_TRIANGLE = 0x1000u;
+-    constexpr uint16_t PAD_R1 = 0x0800u;
+-    constexpr uint16_t PAD_L1 = 0x0400u;
+-    constexpr uint16_t PAD_R2 = 0x0200u;
+-    constexpr uint16_t PAD_L2 = 0x0100u;
++    // Port 0's historical byte: 128 + axis*127 (full left is 1, not 0).
++    uint8_t stickByte(float v)
++    {
++        if (v < -1.f)
++            v = -1.f;
++        else if (v > 1.f)
++            v = 1.f;
++        return static_cast<uint8_t>(128.f + v * 127.f);
++    }
++
++    bool g_triggerSignedL = false;
++    bool g_triggerSignedR = false;
++
++    void overlayKeySticks(const ps2_controls::Snap &snap, const ps2_controls::StickFloats &keySticks, bool active,
++                          ps2_controls::StickFloats &sticks)
++    {
++        if (!active)
++            return;
++        if (keySticks.lx != 0.f || keySticks.ly != 0.f)
++        {
++            sticks.lx = keySticks.lx;
++            sticks.ly = keySticks.ly;
++        }
++        if (keySticks.rx != 0.f || keySticks.ry != 0.f)
++        {
++            sticks.rx = keySticks.rx;
++            sticks.ry = keySticks.ry;
++        }
++        (void)snap;
++    }
+ }
+ 
+ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
+@@ -38,100 +53,79 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+     data[3] = 0xFF;
+     data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
+ 
+-    uint16_t btns = 0xFFFFu;
+-    constexpr int kGamepad = 0;
+-    const bool useGamepad = IsGamepadAvailable(kGamepad);
+-    auto clearBit = [&btns](uint16_t mask)
+-    { btns &= ~mask; };
++    const ps2_controls::Snap *snap = ps2_controls::publishedSnap();
++    if (!snap)
++        return true;
+ 
+-    if (useGamepad)
++    uint16_t pressed = 0;
++    ps2_controls::StickFloats sticks;
++    const bool blockButtons = ps2_input_latency::gamepadButtonsBlocked();
++    if (!snap->ignoreGamepads && IsGamepadAvailable(0))
+     {
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP))
+-            clearBit(PAD_UP);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
+-            clearBit(PAD_DOWN);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT))
+-            clearBit(PAD_LEFT);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT))
+-            clearBit(PAD_RIGHT);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))
+-            clearBit(PAD_CROSS);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT))
+-            clearBit(PAD_CIRCLE);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT))
+-            clearBit(PAD_SQUARE);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP))
+-            clearBit(PAD_TRIANGLE);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1))
+-            clearBit(PAD_L1);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1))
+-            clearBit(PAD_R1);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2))
+-            clearBit(PAD_L2);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2))
+-            clearBit(PAD_R2);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT))
+-            clearBit(PAD_START);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT))
+-            clearBit(PAD_SELECT);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB))
+-            clearBit(PAD_L3);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB))
+-            clearBit(PAD_R3);
+-
+-        float lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
+-        float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
+-        float rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
+-        float ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
+-        data[6] = static_cast<uint8_t>(128 + lx * 127);
+-        data[7] = static_cast<uint8_t>(128 + ly * 127);
+-        data[4] = static_cast<uint8_t>(128 + rx * 127);
+-        data[5] = static_cast<uint8_t>(128 + ry * 127);
++        bool down[18] = {};
++        if (!blockButtons)
++        {
++            for (int b = 1; b <= 17; ++b)
++                down[b] = IsGamepadButtonDown(0, b);
++        }
++        float axes[6];
++        for (int a = 0; a < 6; ++a)
++            axes[a] = GetGamepadAxisMovement(0, a);
++        pressed = ps2_controls::mapGamepad(*snap, down, axes, g_triggerSignedL, g_triggerSignedR, sticks, !blockButtons);
+     }
++    ps2_controls::swapSticksIf(*snap, sticks);
+ 
+-    // The keyboard always works, also with a gamepad plugged in:
+-    // D-pad = WASD, Cross/Circle/Square/Triangle = Down/Right/Left/Up arrows
+-    // (or X/C/Z/V), L1/R1 = Q/E, L2/R2 = LeftShift/RightShift, Start = Enter, Select = Tab.
+-    // Fast path: the window thread publishes posted keys and this thread samples
+-    // the physical keyboard. Legacy keeps raylib's once-per-frame IsKeyDown.
+-    uint16_t hostKeys = 0;
+-    if (ps2_input_latency::sampleKeyboard(hostKeys))
+-    {
+-        btns &= ~hostKeys;
+-    }
+-    else
++    if (!ps2_input_latency::padPostingSuppressed())
+     {
+-        if (IsKeyDown(KEY_W))
+-            clearBit(PAD_UP);
+-        if (IsKeyDown(KEY_S))
+-            clearBit(PAD_DOWN);
+-        if (IsKeyDown(KEY_A))
+-            clearBit(PAD_LEFT);
+-        if (IsKeyDown(KEY_D))
+-            clearBit(PAD_RIGHT);
+-        if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_X) || IsKeyDown(KEY_SPACE))
+-            clearBit(PAD_CROSS);
+-        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_C) || IsKeyDown(KEY_ESCAPE))
+-            clearBit(PAD_CIRCLE);
+-        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_Z) || IsKeyDown(KEY_KP_0))
+-            clearBit(PAD_SQUARE);
+-        if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_V) || IsKeyDown(KEY_KP_1))
+-            clearBit(PAD_TRIANGLE);
+-        if (IsKeyDown(KEY_Q))
+-            clearBit(PAD_L1);
+-        if (IsKeyDown(KEY_E))
+-            clearBit(PAD_R1);
+-        if (IsKeyDown(KEY_LEFT_SHIFT))
+-            clearBit(PAD_L2);
+-        if (IsKeyDown(KEY_RIGHT_SHIFT))
+-            clearBit(PAD_R2);
+-        if (IsKeyDown(KEY_ENTER))
+-            clearBit(PAD_START);
+-        if (IsKeyDown(KEY_TAB))
+-            clearBit(PAD_SELECT);
++        uint16_t hostKeys = 0;
++        float klx = 0.f, kly = 0.f, krx = 0.f, kry = 0.f;
++        bool keyStick = false;
++        if (ps2_input_latency::sampleKeyboard(hostKeys, &klx, &kly, &krx, &kry, &keyStick))
++        {
++            pressed = static_cast<uint16_t>(pressed | hostKeys);
++            ps2_controls::StickFloats fromKeys;
++            fromKeys.lx = klx;
++            fromKeys.ly = kly;
++            fromKeys.rx = krx;
++            fromKeys.ry = kry;
++            overlayKeySticks(*snap, fromKeys, keyStick, sticks);
++        }
++        else
++        {
++            for (int i = 0; i < snap->rlCount; ++i)
++            {
++                if (snap->rlKeys[i].key > 0 && IsKeyDown(snap->rlKeys[i].key))
++                    pressed = static_cast<uint16_t>(pressed | snap->rlKeys[i].mask);
++            }
++            ps2_controls::StickFloats fromKeys;
++            bool any = false;
++            for (int i = 0; i < snap->stickCount; ++i)
++            {
++                const ps2_controls::Snap::StickBind &bind = snap->sticks[i];
++                if (bind.key > 0 && IsKeyDown(bind.key))
++                {
++                    if (bind.stick == 0 && bind.axis == 0)
++                        fromKeys.lx += bind.value;
++                    else if (bind.stick == 0)
++                        fromKeys.ly += bind.value;
++                    else if (bind.axis == 0)
++                        fromKeys.rx += bind.value;
++                    else
++                        fromKeys.ry += bind.value;
++                    any = true;
++                }
++            }
++            overlayKeySticks(*snap, fromKeys, any, sticks);
++        }
+     }
+ 
+-    data[2] = static_cast<uint8_t>(btns & 0xFF);
+-    data[3] = static_cast<uint8_t>(btns >> 8);
++    ps2_controls::invertAndDeadzone(*snap, sticks);
++    const uint16_t activeLow = static_cast<uint16_t>(~pressed);
++    data[2] = static_cast<uint8_t>(activeLow & 0xFF);
++    data[3] = static_cast<uint8_t>(activeLow >> 8);
++    data[6] = stickByte(sticks.lx);
++    data[7] = stickByte(sticks.ly);
++    data[4] = stickByte(sticks.rx);
++    data[5] = stickByte(sticks.ry);
+     return true;
+ }
+diff --git a/ps2xTest/src/pad_input_tests.cpp b/ps2xTest/src/pad_input_tests.cpp
+index 07f9b7a..ff41a54 100644
+--- a/ps2xTest/src/pad_input_tests.cpp
++++ b/ps2xTest/src/pad_input_tests.cpp
+@@ -2,10 +2,14 @@
+ #include "ps2_stubs.h"
+ #include "ps2_syscalls.h"
+ #include "Stubs/Pad.h"
++#include "runtime/ps2_graphics_settings.h"
+ 
+ #include <vector>
+ #include <cstdint>
+ #include <string>
++#include <cmath>
++#include <cstdio>
++#include <cstring>
+ 
+ 
+ namespace
+@@ -62,6 +66,67 @@ namespace
+         const uint8_t *data = rdram.data() + kPadDataAddr;
+         return static_cast<uint16_t>(data[2] | (data[3] << 8));
+     }
++
++    bool nearf(float a, float b)
++    {
++        return std::fabs(a - b) < 1e-4f;
++    }
++
++    bool controlsFieldsEqual(const ps2_controls::Controls &a, const ps2_controls::Controls &b, std::string &why)
++    {
++        char ka[80];
++        char va[192];
++        char kb[80];
++        char vb[192];
++        for (int i = 0;; ++i)
++        {
++            const bool aa = ps2_controls::controlsField(a, i, ka, 80, va, 192);
++            const bool bb = ps2_controls::controlsField(b, i, kb, 80, vb, 192);
++            if (!aa && !bb)
++                return true;
++            if (!aa || !bb || std::strcmp(ka, kb) != 0 || std::strcmp(va, vb) != 0)
++            {
++                why = std::string(aa ? ka : "-") + "=" + (aa ? va : "-") + " vs " + (bb ? kb : "-") + "=" + (bb ? vb : "-");
++                return false;
++            }
++        }
++    }
++
++    ps2_controls::Controls roundTrip(const ps2_controls::Controls &src, bool &ok)
++    {
++        char text[16384];
++        int used = 0;
++        text[0] = '\0';
++        ok = true;
++        char key[80];
++        char value[192];
++        for (int i = 0; ps2_controls::controlsField(src, i, key, 80, value, 192); ++i)
++        {
++            const int n = std::snprintf(text + used, sizeof(text) - static_cast<std::size_t>(used), "%s=%s\n", key, value);
++            if (n < 0 || used + n >= static_cast<int>(sizeof(text)))
++            {
++                ok = false;
++                break;
++            }
++            used += n;
++        }
++        ps2_controls::Controls dst = ps2_controls::defaultControls();
++        if (ok)
++            ps2_controls::applyControlsText(dst, text);
++        return dst;
++    }
++
++    std::string fieldValue(const ps2_controls::Controls &controls, const char *want)
++    {
++        char key[80];
++        char value[192];
++        for (int i = 0; ps2_controls::controlsField(controls, i, key, 80, value, 192); ++i)
++        {
++            if (std::strcmp(key, want) == 0)
++                return value;
++        }
++        return std::string();
++    }
+ }
+ 
+ void register_pad_input_tests()
+@@ -530,4 +595,308 @@ void register_pad_input_tests()
+             t.IsTrue(std::string(reqStr).find("COMPLETE") != std::string::npos, "req string should include COMPLETE");
+         });
+     });
++
++    MiniTest::Case("ControlsMap", [](TestCase &tc)
++                   {
++        tc.Run("presets share the position map except Nintendo labels", [](TestCase &t)
++               {
++            const ps2_controls::Layout same[] = {ps2_controls::Layout::Playstation, ps2_controls::Layout::Xbox,
++                                                 ps2_controls::Layout::Switch, ps2_controls::Layout::Keyboard};
++            for (ps2_controls::Layout layout : same)
++            {
++                for (int b = 0; b < ps2_controls::kButtonCount; ++b)
++                {
++                    t.Equals(ps2_controls::presetSource(layout, b),
++                             ps2_controls::presetSource(ps2_controls::Layout::Playstation, b), "positional preset");
++                }
++            }
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::Playstation, ps2_controls::Cross), 7, "cross is face down");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::Playstation, ps2_controls::Circle), 6, "circle is face right");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::Playstation, ps2_controls::Square), 8, "square is face left");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::Playstation, ps2_controls::Triangle), 5, "triangle is face up");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::Playstation, ps2_controls::Select), 13, "select is middle left");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::SwitchLabels, ps2_controls::Cross), 6, "nintendo A is cross");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::SwitchLabels, ps2_controls::Circle), 7, "nintendo B is circle");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::SwitchLabels, ps2_controls::Square), 5, "nintendo X is square");
++            t.Equals(ps2_controls::presetSource(ps2_controls::Layout::SwitchLabels, ps2_controls::Triangle), 8, "nintendo Y is triangle");
++            for (int b = 0; b < ps2_controls::kButtonCount; ++b)
++            {
++                if (b == ps2_controls::Cross || b == ps2_controls::Circle || b == ps2_controls::Square || b == ps2_controls::Triangle)
++                    continue;
++                t.Equals(ps2_controls::presetSource(ps2_controls::Layout::SwitchLabels, b),
++                         ps2_controls::presetSource(ps2_controls::Layout::Playstation, b), "labels keep the other buttons");
++            }
++            ps2_controls::Controls keys = ps2_controls::defaultControls();
++            t.Equals(keys.keyCount[ps2_controls::Up], 1, "defaults already have a key");
++            ps2_controls::applyLayout(keys, ps2_controls::Layout::Keyboard);
++            t.IsTrue(keys.ignoreGamepads, "keyboard preset ignores gamepads");
++            t.Equals(keys.keyCount[ps2_controls::Up], 1, "layout change keeps keys");
++            t.IsFalse(ps2_controls::defaultControls().ignoreGamepads, "position default uses the gamepad");
++        });
++
++        tc.Run("default key table matches today's keyboard", [](TestCase &t)
++               {
++            const ps2_controls::Controls controls = ps2_controls::defaultControls();
++            ps2_controls::Snap snap;
++            ps2_controls::fillSnap(snap, controls);
++            t.Equals(snap.pollCount, 22, "22 default keys");
++            t.Equals(snap.rlCount, 22, "22 raylib keys");
++            t.Equals(snap.stickCount, 0, "no default stick keys");
++            t.IsTrue(nearf(snap.deadzoneLeft, 0.15f) && nearf(snap.deadzoneRight, 0.15f), "deadzone 0.15");
++            t.IsFalse(snap.invertLeft || snap.invertRight || snap.stickSwap || snap.ignoreGamepads, "no invert swap or ignore");
++            t.IsTrue(snap.triggerThreshold < 0.f, "digital triggers");
++            const struct
++            {
++                unsigned vk;
++                uint16_t mask;
++            } rows[] = {
++                {0x57, 0x0010}, {0x53, 0x0040}, {0x41, 0x0080}, {0x44, 0x0020},
++                {0x58, 0x4000}, {0x43, 0x2000}, {0x5A, 0x8000}, {0x56, 0x1000},
++                {0x51, 0x0400}, {0x45, 0x0800}, {0xA0, 0x0100}, {0x10, 0x0100}, {0xA1, 0x0200},
++                {0x0D, 0x0008}, {0x09, 0x0001}, {0x28, 0x4000}, {0x20, 0x4000},
++                {0x27, 0x2000}, {0x1B, 0x2000}, {0x25, 0x8000}, {0x60, 0x8000},
++                {0x26, 0x1000}, {0x61, 0x1000}, {0x42, 0},
++            };
++            for (const auto &row : rows)
++                t.Equals(snap.vkMask[row.vk], row.mask, "default vk mask");
++            t.Equals(fieldValue(controls, "controls_key_CROSS"), std::string("DOWN,X,SPACE"), "cross keys");
++            t.Equals(fieldValue(controls, "controls_key_CIRCLE"), std::string("RIGHT,C,ESCAPE"), "circle keys");
++            t.Equals(controls.keyCount[ps2_controls::L3], 0, "no L3 key");
++            t.Equals(controls.keyCount[ps2_controls::R3], 0, "no R3 key");
++            int l3 = 0;
++            int r3 = 0;
++            for (int v = 0; v < 256; ++v)
++            {
++                if ((snap.vkMask[v] & 0x0002u) != 0)
++                    ++l3;
++                if ((snap.vkMask[v] & 0x0004u) != 0)
++                    ++r3;
++            }
++            t.Equals(l3, 0, "L3 vk unused");
++            t.Equals(r3, 0, "R3 vk unused");
++        });
++
++        tc.Run("remapped keys or into the fast-path table", [](TestCase &t)
++               {
++            ps2_controls::Controls controls = ps2_controls::defaultControls();
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_key_CROSS", "DOWN,C,SPACE"), "cross remap");
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_key_CIRCLE", "RIGHT,X,ESCAPE"), "circle remap");
++            ps2_controls::Snap snap;
++            ps2_controls::fillSnap(snap, controls);
++            t.Equals(snap.vkMask[0x58], static_cast<uint16_t>(0x2000), "X is circle");
++            t.Equals(snap.vkMask[0x43], static_cast<uint16_t>(0x4000), "C is cross");
++            t.Equals(snap.vkMask[0x28], static_cast<uint16_t>(0x4000), "down arrow stays cross");
++            t.Equals(snap.vkMask[0x57], static_cast<uint16_t>(0x0010), "W stays up");
++            ps2_controls::Controls shared = ps2_controls::defaultControls();
++            t.IsTrue(ps2_controls::applyControlsField(shared, "controls_key_UP", "W,X"), "share X");
++            ps2_controls::fillSnap(snap, shared);
++            t.Equals(snap.vkMask[0x58], static_cast<uint16_t>(0x4010), "X ors up and cross");
++            t.Equals(snap.vkMask[0x57], static_cast<uint16_t>(0x0010), "W still up");
++        });
++
++        tc.Run("bad control fields are ignored", [](TestCase &t)
++               {
++            ps2_controls::Controls controls = ps2_controls::defaultControls();
++            const ps2_controls::Controls saved = controls;
++            std::string why;
++            const char *badKeys[] = {"controls_layout", "controls_deadzone", "controls_deadzone", "controls_invert_y",
++                                    "controls_gp_CROSS", "controls_key_CROSS", "controls_trigger", "controls_rumble",
++                                    "controls_gp_FOO", "controls_key_CROSS"};
++            const char *badVals[] = {"gamecube", "1.2", "-0.1", "sideways", "NOT_A_BUTTON", "NOT_A_KEY", "2", "1",
++                                    "LEFT_FACE_UP", "DOWN,NOT_A_KEY"};
++            for (int i = 0; i < 10; ++i)
++            {
++                t.IsFalse(ps2_controls::applyControlsField(controls, badKeys[i], badVals[i]), "bad field rejected");
++                t.IsTrue(controlsFieldsEqual(controls, saved, why), why.empty() ? "bad field changed state" : why);
++            }
++            t.IsFalse(ps2_controls::applyControlsField(controls, "Controls_layout", "xbox"), "prefix is case-sensitive");
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_key_UP", ""), "empty list clears");
++            t.Equals(controls.keyCount[ps2_controls::Up], 0, "UP cleared");
++            t.Equals(controls.keyCount[ps2_controls::Down], 1, "DOWN kept");
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_deadzone", "0,20"), "comma decimal");
++            t.Equals(fieldValue(controls, "controls_deadzone_left"), std::string("0.200"), "deadzone 0.200");
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_trigger", "off"), "trigger off");
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_trigger", "0"), "trigger 0 is off");
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_trigger", "null"), "trigger null is off");
++            t.IsTrue(controls.triggerThreshold < 0.f, "threshold stays off");
++        });
++
++        tc.Run("radial deadzone invert and swap", [](TestCase &t)
++               {
++            float x = 0.1f;
++            float y = 0.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(x == 0.f && y == 0.f, "inside deadzone");
++            x = -0.1f;
++            y = 0.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(x == 0.f && y == 0.f, "negative inside deadzone");
++            x = 0.f;
++            y = 0.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(x == 0.f && y == 0.f, "origin");
++            x = 1.f;
++            y = 0.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(nearf(x, 1.f) && y == 0.f, "full deflection");
++            x = -1.f;
++            y = 0.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(nearf(x, -1.f) && y == 0.f, "full left");
++            x = 0.5f;
++            y = 0.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(nearf(x, 0.4117647f), "half rescaled");
++            x = 3.f;
++            y = 4.f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.15f);
++            t.IsTrue(nearf(x, 0.6f) && nearf(y, 0.8f), "over-range unit clamp");
++            x = 0.25f;
++            y = -0.4f;
++            ps2_controls::applyRadialDeadzone(x, y, 0.f);
++            t.IsTrue(nearf(x, 0.25f) && nearf(y, -0.4f), "zero deadzone keeps the vector");
++
++            ps2_controls::Snap snap{};
++            snap.deadzoneLeft = 0.f;
++            snap.deadzoneRight = 0.f;
++            snap.invertRight = true;
++            ps2_controls::StickFloats sticks;
++            sticks.ry = 0.5f;
++            ps2_controls::invertAndDeadzone(snap, sticks);
++            t.IsTrue(nearf(sticks.ry, -0.5f) && sticks.ly == 0.f, "invert right only");
++
++            snap = ps2_controls::Snap{};
++            snap.invertLeft = true;
++            snap.deadzoneLeft = 0.15f;
++            sticks = ps2_controls::StickFloats{};
++            sticks.ly = 0.5f;
++            ps2_controls::invertAndDeadzone(snap, sticks);
++            t.IsTrue(nearf(sticks.ly, -0.4117647f), "invert then deadzone");
++
++            snap = ps2_controls::Snap{};
++            snap.deadzoneLeft = 0.f;
++            snap.deadzoneRight = 0.f;
++            snap.stickSwap = true;
++            snap.invertRight = true;
++            sticks = ps2_controls::StickFloats{};
++            sticks.lx = 0.2f;
++            sticks.ly = 0.3f;
++            sticks.rx = -0.4f;
++            sticks.ry = 0.8f;
++            ps2_controls::swapSticksIf(snap, sticks);
++            ps2_controls::invertAndDeadzone(snap, sticks);
++            t.IsTrue(nearf(sticks.lx, -0.4f) && nearf(sticks.ly, 0.8f) && nearf(sticks.rx, 0.2f) && nearf(sticks.ry, -0.3f),
++                     "swap then invert right");
++        });
++
++        tc.Run("gamepad map and trigger threshold", [](TestCase &t)
++               {
++            ps2_controls::Controls controls = ps2_controls::defaultControls();
++            ps2_controls::Snap snap;
++            ps2_controls::fillSnap(snap, controls);
++            bool down[18] = {};
++            float axes[6] = {};
++            bool signedL = false;
++            bool signedR = false;
++            ps2_controls::StickFloats sticks;
++            down[7] = true;
++            uint16_t pressed = ps2_controls::mapGamepad(snap, down, axes, signedL, signedR, sticks, true);
++            t.Equals(pressed, static_cast<uint16_t>(0x4000), "face down is cross");
++            down[7] = false;
++            axes[0] = 0.4f;
++            pressed = ps2_controls::mapGamepad(snap, down, axes, signedL, signedR, sticks, false);
++            t.Equals(pressed, static_cast<uint16_t>(0), "blocked buttons");
++            t.IsTrue(nearf(sticks.lx, 0.4f), "sticks still copy");
++
++            ps2_controls::applyLayout(controls, ps2_controls::Layout::SwitchLabels);
++            ps2_controls::fillSnap(snap, controls);
++            down[6] = true;
++            axes[0] = 0.f;
++            pressed = ps2_controls::mapGamepad(snap, down, axes, signedL, signedR, sticks, true);
++            t.Equals(pressed, static_cast<uint16_t>(0x4000), "nintendo A is cross");
++            down[6] = false;
++            down[7] = true;
++            pressed = ps2_controls::mapGamepad(snap, down, axes, signedL, signedR, sticks, true);
++            t.Equals(pressed, static_cast<uint16_t>(0x2000), "nintendo B is circle");
++
++            controls = ps2_controls::defaultControls();
++            ps2_controls::fillSnap(snap, controls);
++            bool digital[18] = {};
++            digital[10] = true;
++            float idle[6] = {};
++            signedL = false;
++            pressed = ps2_controls::mapGamepad(snap, digital, idle, signedL, signedR, sticks, true);
++            t.Equals(pressed & static_cast<uint16_t>(0x0100), static_cast<uint16_t>(0x0100), "digital L2");
++            digital[10] = false;
++            idle[4] = 1.f;
++            pressed = ps2_controls::mapGamepad(snap, digital, idle, signedL, signedR, sticks, true);
++            t.Equals(pressed & static_cast<uint16_t>(0x0100), static_cast<uint16_t>(0), "axis ignored while digital");
++
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_gp_L2", "LEFT_TRIGGER_AXIS"), "bind axis");
++            ps2_controls::fillSnap(snap, controls);
++            idle[4] = 1.f;
++            signedL = false;
++            pressed = ps2_controls::mapGamepad(snap, digital, idle, signedL, signedR, sticks, true);
++            t.Equals(pressed & static_cast<uint16_t>(0x0100), static_cast<uint16_t>(0x0100), "axis at 1 uses 0.5");
++            idle[4] = 0.4f;
++            pressed = ps2_controls::mapGamepad(snap, digital, idle, signedL, signedR, sticks, true);
++            t.Equals(pressed & static_cast<uint16_t>(0x0100), static_cast<uint16_t>(0), "axis 0.4 below 0.5");
++
++            controls = ps2_controls::defaultControls();
++            t.IsTrue(ps2_controls::applyControlsField(controls, "controls_trigger", "0.4"), "threshold 0.4");
++            t.Equals(fieldValue(controls, "controls_trigger"), std::string("0.400"), "trigger field");
++            ps2_controls::fillSnap(snap, controls);
++            bool sawAxis = false;
++            bool sawDigital = false;
++            for (int i = 0; i < snap.gpCount; ++i)
++            {
++                if (snap.gp[i].mask != 0x0100u)
++                    continue;
++                if (snap.gp[i].src == ps2_controls::kSrcAxisLeft)
++                    sawAxis = true;
++                if (snap.gp[i].src == ps2_controls::kGpLeftTrigger2)
++                    sawDigital = true;
++            }
++            t.IsTrue(sawAxis, "L2 rewritten to the axis");
++            t.IsFalse(sawDigital, "digital L2 removed");
++            float trig[6] = {};
++            bool none[18] = {};
++            signedL = false;
++            trig[4] = 1.f;
++            pressed = ps2_controls::mapGamepad(snap, none, trig, signedL, signedR, sticks, true);
++            t.IsTrue((pressed & 0x0100u) != 0 && !signedL, "unsigned full press");
++            trig[4] = -1.f;
++            pressed = ps2_controls::mapGamepad(snap, none, trig, signedL, signedR, sticks, true);
++            t.IsTrue((pressed & 0x0100u) == 0 && signedL, "signed rest is clear");
++            trig[4] = 0.f;
++            pressed = ps2_controls::mapGamepad(snap, none, trig, signedL, signedR, sticks, true);
++            t.IsTrue((pressed & 0x0100u) != 0 && signedL, "signed centre is half");
++            trig[4] = -0.3f;
++            pressed = ps2_controls::mapGamepad(snap, none, trig, signedL, signedR, sticks, true);
++            t.IsTrue((pressed & 0x0100u) == 0, "signed 0.35 is under 0.4");
++        });
++
++        tc.Run("settings text round-trips", [](TestCase &t)
++               {
++            bool ok = false;
++            std::string why;
++            const ps2_controls::Controls defaults = ps2_controls::defaultControls();
++            const ps2_controls::Controls back = roundTrip(defaults, ok);
++            t.IsTrue(ok, "default text fits");
++            t.IsTrue(controlsFieldsEqual(defaults, back, why), why.empty() ? "default round trip" : why);
++
++            ps2_controls::Controls modified = ps2_controls::defaultControls();
++            t.IsTrue(ps2_controls::applyControlsField(modified, "controls_layout", "switch-labels"), "layout");
++            t.IsTrue(ps2_controls::applyControlsField(modified, "controls_deadzone", "0.25"), "deadzone");
++            t.IsTrue(ps2_controls::applyControlsField(modified, "controls_invert_y", "both"), "invert");
++            t.IsTrue(ps2_controls::applyControlsField(modified, "controls_stick_swap", "1"), "swap");
++            t.IsTrue(ps2_controls::applyControlsField(modified, "controls_key_CROSS", "DOWN,C,SPACE"), "cross");
++            t.IsTrue(ps2_controls::applyControlsField(modified, "controls_key_CIRCLE", "RIGHT,X,ESCAPE"), "circle");
++            const ps2_controls::Controls again = roundTrip(modified, ok);
++            t.IsTrue(ok, "modified text fits");
++            t.IsTrue(controlsFieldsEqual(modified, again, why), why.empty() ? "modified round trip" : why);
++            t.IsTrue(again.ignoreGamepads == false, "switch-labels still uses gamepads");
++            t.Equals(again.gp[ps2_controls::Cross][0], 6, "round trip keeps nintendo A");
++        });
++                   });
+ }

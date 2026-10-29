@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-29 14:53 (session 7)_
+_Last updated: 2026-10-29 19:34 (session 7)_
 
 ## Resume here
 To continue, open Claude Code in this folder and say: "read docs/status.md and continue".
@@ -1153,6 +1153,13 @@ The user pre-authorized publishing every successful milestone on three channels:
     extractor from the ELF file table (0x314360 PAL: sector, size, checksum, key; first 4 KB ~word+key), (2) PAL<->US
     address/patch translator (generalise US map_pal_to_us.py / us_site.py: the super recompiler's core), (3) a netplay
     state-hash / desync checker for both builds.
+  - **Grok batch 18:10-19:2x, reviewed by Claude in pairs:** databin + pnach (c522b15), pal-us-map + packaging
+    (d8d71ee), controls = **patch 42** (fork 5c6a39e: presets, per-button gamepad/keyboard remap, deadzone, invert,
+    swap, trigger threshold, F2 Controls; Claude: tests 489/489, beach fight 60/60 fps, input avg 17 ms, remap
+    controls_key_CROSS=K proven by the closed-loop test failing at the display step). netplay-hash re-scoped to the
+    US build's netplay (user: online support focuses on US) running since 19:23 (report logs/grok/netplay-us-report.md).
+    User cleanup (no-delete rule): 466 empty zips *-20261029T173145Z.zip in ~/tekken4-saves and ~/tekken4-saves/cloud;
+    logs/databin/pal/manifest.json (0 bytes; real one manifest-2.json).
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
