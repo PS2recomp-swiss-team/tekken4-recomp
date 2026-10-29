@@ -2,13 +2,12 @@ param([string]$RunDir = "", [string[]]$Shots = @(), [string[]]$Env = @(), [strin
       [double]$Until = 100)
 # Repeatable test fight (user, 2026-10-28: tests never use Story/Arcade, they pick the opponent and the stage):
 # PRACTICE, Kazuya (1P) vs CPU Yoshimitsu on -Stage (default arena = the cage; names as in tools\stage_card.py).
-# Path (shown by the user in logs\user_path3, checked in logs\fixed_try4..8): PAL60 + main menu as usual; 4x Down =
-# PRACTICE (VS BATTLE is greyed out and skipped), Cross; the 1P cursor starts on Kazuya: Cross; the CPU cursor starts on
-# Kazuya too: Up, Up (Hwoarang), Right = Yoshimitsu, Cross. That Cross opens the stage card on the character-select
-# screen (a corner card, random art, countdown). run_capture.ps1 -StagePick waits until that card is settled
-# (stage_card.py dist<=22 and gap>=30), presses Left/Right until the art is -Stage, then Cross, then Start 11 s later
-# (command-list help). The old fixed presses from 57 s confirmed whatever was up when the load was late
-# (logs/grok/stage-pick-notes.md). Exit 2 if the card never settles on -Stage.
+# Menus are closed-loop (run_capture.ps1 -StagePick, no timed keys): an on-demand frame is read before each press
+# (tools\menu_screen.py, crops in logs\menu_refs\). PAL60 on the display menu, Yes on Start game, Start skips the
+# movie, Cross accepts MEDIUM, MODE SELECT is read until PRACTICE, 1P Kazuya Cross, CPU cursor until Yoshimitsu.
+# That Cross opens the stage card. run_capture then waits until the card is settled (stage_card.py dist<=22 and
+# gap>=30), presses Left/Right until the art is -Stage, then Cross, then Start 11 s later (command-list help).
+# Exit 2 with "menu step failed: <step>" if a screen never arrives, or "stage pick failed: ..." if the card does not.
 # TEKKEN4_FIXED_LATE=<seconds> delays only the CPU-confirm Cross, so the card opens that much later (late-screen test).
 # -Shots are absolute seconds (frame_NNs.bmp); a shot is always taken at -Until (the run's end). The process stays
 # ~2.5 s past -Until so the runtime's frame shot at that second is written.
@@ -34,11 +33,8 @@ $late = 0.0
 if ($env:TEKKEN4_FIXED_LATE) { $late = [double]$env:TEKKEN4_FIXED_LATE }
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 $cpuCross = [string]::Format($inv, "{0:0.###}:Cross", (53.5 + $late))
-$keys = @("10:Down", "12:Cross", "15:Left", "16.5:Cross", "30:Start", "36:Cross",   # PAL60, Start game: Yes, movie, menu
-          "40:Down", "41:Down", "42:Down", "43:Down", "44.5:Cross",               # PRACTICE
-          "48:Cross", "50:Up", "51:Up", "52:Right", $cpuCross)                    # Kazuya; CPU Yoshimitsu (opens the card)
 $allShots = @($Shots | ForEach-Object { $_ -split ',' } | Where-Object { $_ }) + @("$Until")
 "fixed fight: Kazuya vs CPU Yoshimitsu on $Stage ($n x $dir), fight from ~$($confirm + 13) s"
 if ($late -ne 0.0) { "stage card opens late: CPU confirm Cross at {0}" -f $cpuCross }
-& (Join-Path $PSScriptRoot "run_capture.ps1") -RunDir $RunDir -Keys ($keys -join ',') -Shots ($allShots -join ',') -StagePick $Stage
+& (Join-Path $PSScriptRoot "run_capture.ps1") -RunDir $RunDir -Shots ($allShots -join ',') -StagePick $Stage
 if ($global:TekkenStagePickExit) { exit $global:TekkenStagePickExit }

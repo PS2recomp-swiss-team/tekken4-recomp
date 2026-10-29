@@ -3,16 +3,18 @@ param([string]$RunDir = "", [string[]]$Shots = @("20"), [string[]]$Keys = @(), [
 $Shots = @($Shots | ForEach-Object { $_ -split ',' } | Where-Object { $_ } | ForEach-Object { [double]$_ })
 $Shots = @($Shots | Sort-Object { [double]$_ } -Unique)  # the runtime takes frame shots in list order ($Shots is string[])
 $Keys = @($Keys | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
-# Runs ps2EntryRunner on the Tekken 4 ELF, hides the runtime's debug panel (F1), presses pad buttons at given
+# Runs ps2EntryRunner on the Tekken 4 ELF with the runtime's debugger off (PS2X_DEBUG_PANEL=0), presses pad buttons at given
 # times, saves window captures at the given second marks, then closes it. Output: stdout.txt, stderr.txt and
 # shot_NNs.png in $RunDir (default logs\run_<time>).
 # Keys are "<seconds>:<key>" with key = Up, Down, Left, Right, Start, Select, Cross, Circle, Square, Triangle, posted
 # to the window as key presses (held ~250 ms) that the runtime maps to pad 1 (D-pad WASD, Enter, Tab, X, C, Z, V; patch 29).
 # Always pick PAL60 on the display-mode menu (user's request):
 #   powershell -File tools\run_capture.ps1 -Keys "10:Down","12:Cross" -Shots 9,11,16,25
-# -StagePick <name> (tools\run_fixed_fight.ps1): after the timed keys, wait until the stage card is really on screen,
-# read it (on-demand frame shot), press Left/Right until it is <name>, then Cross. Sets TEKKEN4_FRAME_SHOT_POLL=1.
-# On failure sets $global:TekkenStagePickExit = 2 and prints "stage pick failed: ...".
+# -StagePick <name> (tools\run_fixed_fight.ps1): sets TEKKEN4_FRAME_SHOT_POLL=1. With no -Keys, the menus up to the
+# CPU confirm are closed-loop (tools\menu_screen.py on an on-demand frame before each press). Then wait until the
+# stage card is settled, press Left/Right until it is <name>, then Cross. On failure sets
+# $global:TekkenStagePickExit = 2 and prints "menu step failed: <step>" or "stage pick failed: ...".
+# -Keys plus -StagePick keeps the old order: play those keys, then pick the card (no menu loop).
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $RunDir) { $RunDir = Join-Path $root ("logs\run_" + (Get-Date -Format "yyyyMMdd_HHmmss")) }
 $script:ring = @("arena", "airport", "building", "mall_a", "mall_b", "shinjuku", "beach", "laboratory", "parking", "underground")
@@ -67,13 +69,14 @@ $events = @($events | Sort-Object t)
 # Frame shots from the runtime's own presented frame (runtime/tekken4_frameshot_overrides.cpp): frame_NNs.bmp, valid
 # even when the monitor is off or the run comes from a hidden process, where the window captures come back blank.
 if (-not $env:TEKKEN4_FRAME_SHOTS) { $env:TEKKEN4_FRAME_SHOTS = ($Shots -join ',') }
+# The runtime debugger (F1) starts hidden since patch 39; =0 also ignores F1, so nothing covers the picture.
+if (-not $env:PS2X_DEBUG_PANEL) { $env:PS2X_DEBUG_PANEL = "0" }
 $p = Start-Process -FilePath $exe -ArgumentList "`"$elf`"" -WorkingDirectory $RunDir `
     -RedirectStandardOutput "$RunDir\stdout.txt" -RedirectStandardError "$RunDir\stderr.txt" -PassThru
 $t0 = Get-Date
 while (((Get-Date) - $t0).TotalSeconds -lt 3 -and -not $p.HasExited) { Start-Sleep -Milliseconds 250 }
 $p.Refresh(); if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
     [void][RunCaptureWin]::SetWindowText($p.MainWindowHandle, $windowTitle)
-    Send-Key $p.MainWindowHandle 0x70 0x3B $false 100
 }
 function Send-Pad([string]$keyName) {
     # Success is $script:padOk. Printed lines stay on the output stream (a returned bool would mix with them).
@@ -83,7 +86,7 @@ function Send-Pad([string]$keyName) {
     [void][RunCaptureWin]::SetWindowText($h, $windowTitle)
     if (-not $script:vk.ContainsKey($keyName)) { "unknown key $keyName"; return }
     Send-Key $h $script:vk[$keyName] $script:scan[$keyName] $false 250
-    "pressed $keyName at {0:N1} s" -f ((Get-Date) - $t0).TotalSeconds
+    Write-Host ("pressed $keyName at {0:N1} s" -f ((Get-Date) - $t0).TotalSeconds)
     $script:padOk = $true
 }
 function Get-StageDir([string]$current, [string]$target) {
@@ -93,6 +96,183 @@ function Get-StageDir([string]$current, [string]$target) {
     $cw = ($j - $i + $script:ring.Count) % $script:ring.Count
     if ($cw -le [int]($script:ring.Count / 2)) { return "Right" }
     return "Left"
+}
+function Fail-Menu([string]$step) {
+    if ($script:phase -eq "fail" -or $script:phase -eq "done" -or $script:phase -eq "help" -or $script:phase -eq "seek") { return }
+    $script:phase = "fail"
+    $global:TekkenStagePickExit = 2
+    "menu step failed: $step"
+}
+function Set-MenuStep([string]$step, [int]$seconds) {
+    if ($script:menuStep -eq $step) { return }
+    $script:menuStep = $step
+    $script:menuPresses = 0
+    $script:stepDeadline = (Get-Date).AddSeconds($seconds)
+}
+function Read-MenuFrame([string]$bmp) {
+    $raw = & python -I $script:menuPy --json $bmp 2>&1
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $line = @($raw) | Where-Object { $_ -match '^\{' } | Select-Object -First 1
+    if (-not $line) { return $null }
+    try { return ($line | ConvertFrom-Json) } catch { return $null }
+}
+function Press-Menu([string]$key, [int]$holdMs) {
+    if ($script:menuPresses -ge $script:menuPressMax) { Fail-Menu $script:menuStep; return $false }
+    # Same signature: the last press has not landed yet. A second Cross locks the next
+    # cursor; a second Right on Hwoarang moves the stage card (menu-pick notes).
+    if ($script:menuActSig -eq $script:menuSig -and $script:menuActAt) {
+        if (((Get-Date) - $script:menuActAt).TotalMilliseconds -lt 1800) { return $false }
+    }
+    Send-Pad $key
+    if (-not $script:padOk) { $script:menuWait = (Get-Date).AddMilliseconds(400); return $false }
+    $script:menuPresses++
+    $script:menuWait = (Get-Date).AddMilliseconds($holdMs)
+    $script:menuActSig = $script:menuSig
+    $script:menuActAt = Get-Date
+    $script:menuSig = ""
+    $script:menuN = 0
+    return $true
+}
+function Press-Confirm([string]$tag, [string]$key, [int]$holdMs, [int]$retryMs) {
+    if ($retryMs -le 0) { $retryMs = 2200 }
+    if ($script:once.ContainsKey($tag)) {
+        if (((Get-Date) - $script:once[$tag]).TotalMilliseconds -lt $retryMs) { return $false }
+    }
+    if (-not (Press-Menu $key $holdMs)) { return $false }
+    $script:once[$tag] = Get-Date
+    return $true
+}
+function Save-YoshimitsuRef([string]$bmp) {
+    $dest = Join-Path (Split-Path -Parent $PSScriptRoot) "logs\grok\menupick-yoshi.bmp"
+    Copy-Item -LiteralPath $bmp -Destination $dest
+    & python -I $script:menuPy --make-refs | Out-Null
+    "menu saved yoshimitsu nameplate from $bmp"
+}
+# Closed-loop menus. Act only after two reads of the same screen. Exit via Fail-Menu when the step's clock runs out.
+function Update-Menu() {
+    if ($script:phase -ne "menu" -and $script:phase -ne "late") { return }
+    $elapsed = ((Get-Date) - $t0).TotalSeconds
+    if ($script:phase -eq "late") {
+        if ((Get-Date) -ge $script:lateUntil) {
+            Send-Pad "Cross"
+            if (-not $script:padOk) { $script:lateUntil = (Get-Date).AddMilliseconds(400); return }
+            "menu cpu confirmed at {0:N1} s (late {1} s)" -f $elapsed, $script:lateSec
+            $script:phase = "seek"
+            $script:stableName = ""
+            $script:stableCount = 0
+            $script:cardSeenAt = $null
+            $script:presses = 0
+            $script:awaitingChange = $false
+            $script:nextPollAt = (Get-Date).AddMilliseconds(400)
+        }
+        return
+    }
+    if ((Get-Date) -gt $script:stepDeadline -or $elapsed -gt $script:menuDeadline) { Fail-Menu $script:menuStep; return }
+    if ($script:inflight -ne 0) {
+        $ok = Join-Path $RunDir ("frame_req_{0:D8}.ok" -f $script:inflight)
+        $bmp = Join-Path $RunDir ("frame_req_{0:D8}.bmp" -f $script:inflight)
+        if (-not (Test-Path $ok)) {
+            if (((Get-Date) - $script:reqSince).TotalSeconds -gt 3) {
+                "menu {0:N1} s shot {1} timed out" -f $elapsed, $script:inflight
+                $script:inflight = 0
+                if ($elapsed -gt 8) { $script:shotTimeouts++ }
+                if ($script:shotTimeouts -gt 6) { Fail-Menu $script:menuStep }
+            }
+            return
+        }
+        $id = $script:inflight
+        $script:inflight = 0
+        $script:shotTimeouts = 0
+        $info = Read-MenuFrame $bmp
+        if (-not $info) { "menu {0:N1} s menu_screen.py failed" -f $elapsed; $script:nextPollAt = (Get-Date).AddMilliseconds(300); return }
+        "menu {0:N1} s {1} row {2} side {3} char {4} detail {5} dist {6} frame_req_{7:D8}" -f $elapsed, $info.screen, $info.row, $info.side, $info.char, $info.detail, $info.dist, $id
+        $sig = "{0}|{1}|{2}|{3}|{4}" -f $info.screen, $info.row, $info.side, $info.char, $info.detail
+        if ($sig -eq $script:menuSig) { $script:menuN++ } else { $script:menuSig = $sig; $script:menuN = 1 }
+        $rank = @{ display = 0; startgame = 1; movie = 2; title = 3; difficulty = 4; mode = 5; fighter = 6 }
+        if ($rank.ContainsKey([string]$info.screen) -and $rank[[string]$info.screen] -gt $rank[$script:menuStep]) {
+            $secs = @{ movie = 40; difficulty = 18; mode = 22; fighter = 28; startgame = 18; title = 18 }
+            Set-MenuStep ([string]$info.screen) $secs[[string]$info.screen]
+        }
+        if ($script:menuN -lt 2) { $script:nextPollAt = (Get-Date).AddMilliseconds(220); return }
+        if ($script:menuWait -and (Get-Date) -lt $script:menuWait) { $script:nextPollAt = (Get-Date).AddMilliseconds(200); return }
+        $screen = [string]$info.screen
+        if ($screen -eq "display") {
+            $script:menuPressMax = 6
+            if ($info.detail -eq "pal60") { if (Press-Confirm "display-cross" "Cross" 500 2200) { Set-MenuStep "startgame" 18 } }
+            elseif ($info.detail -eq "above") { [void](Press-Menu "Down" 400) }
+            elseif ($info.detail -eq "below") { [void](Press-Menu "Up" 400) }
+        } elseif ($screen -eq "startgame") {
+            $script:menuPressMax = 4
+            if ($info.detail -eq "yes") { if (Press-Confirm "startgame-cross" "Cross" 500 2200) { Set-MenuStep "movie" 40 } }
+            elseif ($info.detail -eq "no") { [void](Press-Menu "Left" 400) }
+        } elseif ($screen -eq "movie") {
+            $script:menuPressMax = 8
+            if (Press-Menu "Start" 1000) { $script:menuStarts++ }
+            if ($script:menuStarts -gt 8) { Fail-Menu "movie" }
+        } elseif ($screen -eq "title") {
+            $script:menuPressMax = 3
+            if (Press-Confirm "title-cross" "Cross" 600 2200) { Set-MenuStep "difficulty" 18 }
+        } elseif ($screen -eq "other" -and $script:menuStarts -ge 1) {
+            $script:menuPressMax = 4
+            $script:menuStep = "title"
+            if (Press-Confirm "title-cross" "Cross" 600 2200) { $script:titleCross++ }
+            if ($script:titleCross -gt 3) { Fail-Menu "title" }
+        } elseif ($screen -eq "difficulty") {
+            $script:menuPressMax = 8
+            if ($info.row -eq "medium") { if (Press-Confirm "difficulty-cross" "Cross" 500 2200) { Set-MenuStep "mode" 22 } }
+            elseif ($info.row -eq "easy") { [void](Press-Menu "Down" 400) }
+            elseif ($info.row -eq "hard" -or $info.row -eq "veryhard" -or $info.row -eq "ultrahard") { [void](Press-Menu "Up" 400) }
+        } elseif ($screen -eq "mode") {
+            $script:menuPressMax = 14
+            $rows = @("story", "arcade", "vs", "team", "survival", "practice", "training", "tekken", "options")
+            $i = [array]::IndexOf($rows, [string]$info.row)
+            if ($i -ge 0 -and $info.row -eq "practice") { if (Press-Confirm "mode-cross" "Cross" 500 2200) { Set-MenuStep "fighter" 28 } }
+            elseif ($i -ge 0 -and $i -lt 5) { [void](Press-Menu "Down" 400) }
+            elseif ($i -gt 5) { [void](Press-Menu "Up" 400) }
+        } elseif ($screen -eq "fighter") {
+            $script:menuPressMax = 12
+            if ($info.side -eq "1p" -and $info.char -eq "kazuya") {
+                # 4.5 s: the 1P lock animation can still read as Kazuya. A second Cross locks CPU on Xiaoyu.
+                if (Press-Confirm "fighter-cross" "Cross" 700 4500) { $script:picked1p = $true }
+            } elseif ($info.side -eq "cpu" -and $info.char -eq "yoshimitsu") {
+                $script:phase = "late"
+                $script:lateUntil = (Get-Date).AddSeconds($script:lateSec)
+                "menu yoshimitsu at {0:N1} s, CPU Cross in {1} s" -f $elapsed, $script:lateSec
+            } elseif ($info.side -eq "cpu" -and ($info.char -eq "xiaoyu" -or $info.char -eq "kazuya")) {
+                # Kazuya is directly below Xiaoyu, Xiaoyu below Hwoarang (strategywiki grid; menupick-1 CPU started on Kazuya).
+                $script:expectYoshi = $false
+                $script:yoshiSeen = 0
+                [void](Press-Menu "Up" 450)
+            } elseif ($info.side -eq "cpu" -and $info.char -eq "hwoarang") {
+                # One Right. A second Right moves the stage card, not the cursor.
+                if (-not $script:expectYoshi) {
+                    if (Press-Menu "Right" 500) { $script:expectYoshi = $true; $script:yoshiSeen = 0 }
+                }
+            } elseif ($script:expectYoshi -and -not $info.char) {
+                # Nameplate animation changes the crop hash every frame, so menuN does not climb. Count reads instead.
+                $script:yoshiSeen++
+                if ($script:yoshiSeen -ge 4 -and -not $script:yoshiSaved) {
+                    $script:yoshiSaved = $true
+                    Save-YoshimitsuRef $bmp
+                    $again = Read-MenuFrame $bmp
+                    if ($again -and $again.char -eq "yoshimitsu") {
+                        $script:phase = "late"
+                        $script:lateUntil = (Get-Date).AddSeconds($script:lateSec)
+                        "menu yoshimitsu at {0:N1} s, CPU Cross in {1} s" -f $elapsed, $script:lateSec
+                    }
+                }
+            } elseif ($script:picked1p -and -not $info.char -and -not $script:expectYoshi) {
+                [void](Press-Menu "Up" 450)
+            }
+        }
+        return
+    }
+    if ((Get-Date) -lt $script:nextPollAt) { return }
+    $script:reqSeq++
+    $idText = "$($script:reqSeq) $($script:reqSeq)`n"
+    [System.IO.File]::WriteAllText((Join-Path $RunDir "frame_req.id"), $idText)
+    $script:inflight = $script:reqSeq
+    $script:reqSince = Get-Date
 }
 function Fail-StagePick([string]$why) {
     if ($script:phase -eq "fail" -or $script:phase -eq "done" -or $script:phase -eq "help") { return }
@@ -221,11 +401,32 @@ if (-not $StagePick) {
     $script:shotTimeouts = 0
     $script:cardSeenAt = $null
     $script:cardPy = Join-Path $PSScriptRoot "stage_card.py"
+    $script:menuPy = Join-Path $PSScriptRoot "menu_screen.py"
     $script:vk = $vk
     $script:scan = $scan
+    $script:menuStep = "display"
+    $script:menuSig = ""
+    $script:menuN = 0
+    $script:menuPresses = 0
+    $script:menuPressMax = 6
+    $script:menuStarts = 0
+    $script:titleCross = 0
+    $script:picked1p = $false
+    $script:expectYoshi = $false
+    $script:yoshiSeen = 0
+    $script:yoshiSaved = $false
+    $script:once = @{}
+    $script:menuActSig = ""
+    $script:menuActAt = $null
+    $script:menuWait = $null
+    $script:lateSec = 0.0
+    if ($env:TEKKEN4_FIXED_LATE) { $script:lateSec = [double]$env:TEKKEN4_FIXED_LATE }
+    $script:lateUntil = $null
+    $script:stepDeadline = (Get-Date).AddSeconds(40)
+    $script:menuDeadline = $script:pickDeadline - 12.0
     $pendingKeys = @($events | Where-Object { $_.kind -eq "key" }).Count
     $ei = 0
-    if ($pendingKeys -eq 0) { $script:phase = "seek"; $script:nextPollAt = (Get-Date).AddMilliseconds(400) }
+    if ($pendingKeys -eq 0) { $script:phase = "menu"; $script:nextPollAt = (Get-Date).AddSeconds(4) }
     while (((Get-Date) - $t0).TotalSeconds -lt $script:endT -and -not $p.HasExited) {
         $elapsed = ((Get-Date) - $t0).TotalSeconds
         while ($ei -lt $events.Count -and $events[$ei].t -le $elapsed -and -not $p.HasExited) {
@@ -261,13 +462,15 @@ if (-not $StagePick) {
             if ($script:padOk) { $script:phase = "done" }
             else { $script:helpAt = (Get-Date).AddMilliseconds(400) }
         }
+        Update-Menu
         Update-StagePick
         if ($script:phase -eq "fail") { break }
         Start-Sleep -Milliseconds 50
     }
     if ($p.HasExited -and $script:phase -ne "done" -and $script:phase -ne "fail") {
         "exited early after {0:N1} s" -f ((Get-Date) - $t0).TotalSeconds
-        Fail-StagePick "game exited before the stage was confirmed"
+        if ($script:phase -eq "menu" -or $script:phase -eq "late") { Fail-Menu $script:menuStep }
+        else { Fail-StagePick "game exited before the stage was confirmed" }
     }
 }
 if (-not $p.HasExited) {
