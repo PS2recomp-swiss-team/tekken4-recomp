@@ -1142,6 +1142,17 @@ The user pre-authorized publishing every successful milestone on three channels:
   tools\perf_fight.ps1 -Src H:\tekken4-fork-ps2recomp_usa -Build runtime). US fight fps averages 60 but single
   seconds jump 44-75 (PAL holds 60). Next for US: port PAL's later fixes by hand (music 35/36/41, F2 37-40,
   closed-loop test fight).
+  - **tools/console-skill vendored (d260994 / us-iso 1dcd9aa, MIT, not yet run: external code needs the user's
+    permission).** Grok tool-scout (logs/grok/tool-scout-final.json, conf 0.84) + Claude merged: USE NOW pnach.py
+    (PCSX2 CRC matches 2251E14D; its toml lacks our switch= field, adapt); patches.zip also has SLUS-20328_833FE0A4.pnach
+    (US widescreen) and SCES-50878_F48F994A.pnach (other PAL CRC, widescreen + No-Interlacing: look at it for the
+    upscale bob). LATER tim2.py (265 valid TIM2 in DATA.BIN, needs the file table first), targets.py (packaging),
+    memcard.py (our own mc0 backup/sync). NO padmap.py (Pad.cpp already maps port 0 = keyboard + pad 0, port 1 = 2nd
+    gamepad, Kernel/Stubs/Pad.cpp:122-134; its install would replace ps2_pad.cpp), override.py, vag.py (0 VAGp: BGM is
+    headerless ADPCM), datascan.py (DATA.BIN is a table-in-ELF archive), tune.py, gspacket.py. TO BUILD: (1) DATA.BIN
+    extractor from the ELF file table (0x314360 PAL: sector, size, checksum, key; first 4 KB ~word+key), (2) PAL<->US
+    address/patch translator (generalise US map_pal_to_us.py / us_site.py: the super recompiler's core), (3) a netplay
+    state-hash / desync checker for both builds.
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
