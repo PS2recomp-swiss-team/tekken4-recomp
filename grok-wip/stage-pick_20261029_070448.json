@@ -1,0 +1,1 @@
+{"task":"stage-pick","mode":"work","answer":"","files_changed":["runtime/tekken4_frameshot_overrides.cpp","tools/run_capture.ps1","tools/run_fixed_fight.ps1","tools/stage_card.py"],"other_tree_changes":["runtime/tekken4_overrides.cpp"],"turns":{},"cost_usd":{},"seconds":2569,"session":{},"hung_exit":true}

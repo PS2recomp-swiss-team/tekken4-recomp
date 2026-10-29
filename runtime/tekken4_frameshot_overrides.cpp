@@ -5,12 +5,18 @@
 // TEKKEN4_FRAME_SHOTS=<s>[,<s>...]: seconds after the override is applied (program start) at which to save the latest
 // latched host presentation frame (GS::copyLatchedHostPresentationFrame, RGBA8, top-down) as a 32-bit BMP.
 // tools\run_capture.ps1 sets it to its -Shots list.
+//
+// TEKKEN4_FRAME_SHOT_POLL=1 (default off): also poll frame_req.id in the working directory about once per frame
+// from this thread (not from the present path: a disk stat there hitchs on the USB project disk). The file holds
+// "<id> <id>". When both numbers match and the id is new, write frame_req_<id>.bmp and then frame_req_<id>.ok.
+// Timed shots are unchanged. The host never deletes the files.
 #include "game_overrides.h"
 #include "ps2_log.h"
 #include "ps2_runtime.h"
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -57,34 +63,87 @@ namespace tekken4_frameshot
         return static_cast<bool>(f);
     }
 
+    // Serve one on-demand id. False = try the same id again (no frame yet, or the bmp did not land).
+    bool serveRequest(PS2Runtime *rt, uint32_t id)
+    {
+        std::vector<uint8_t> pixels;
+        uint32_t width = 0u, height = 0u;
+        if (!rt->gs().copyLatchedHostPresentationFrame(pixels, width, height) || !width || !height ||
+            pixels.size() < static_cast<size_t>(width) * height * 4u)
+            return false;
+        char bmpName[64];
+        char okName[64];
+        std::snprintf(bmpName, sizeof(bmpName), "frame_req_%08u.bmp", id);
+        std::snprintf(okName, sizeof(okName), "frame_req_%08u.ok", id);
+        if (!writeBmp(bmpName, pixels, width, height))
+            return false;
+        std::ofstream ok(okName, std::ios::binary);
+        if (!ok)
+            return false;
+        ok << "ok\n";
+        if (!ok)
+            return false;
+        RUNTIME_LOG("[frameshot] wrote " << bmpName << " " << width << "x" << height << "\n");
+        return true;
+    }
+
+    void pollRequests(PS2Runtime *rt)
+    {
+        uint32_t last = 0u;
+        RUNTIME_LOG("[frameshot] on-demand on (TEKKEN4_FRAME_SHOT_POLL), watching frame_req.id\n");
+        for (;;)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            std::ifstream in("frame_req.id");
+            if (!in)
+                continue;
+            std::string text;
+            std::getline(in, text);
+            in.close(); // drop the share before the bmp write; the host overwrites this file for the next id
+            unsigned a = 0u, b = 0u;
+            if (std::sscanf(text.c_str(), "%u %u", &a, &b) != 2 || a == 0u || a != b || a == last)
+                continue;
+            if (serveRequest(rt, a))
+                last = a;
+        }
+    }
+
     void apply(PS2Runtime &runtime)
     {
         const char *spec = std::getenv("TEKKEN4_FRAME_SHOTS");
-        if (!spec || !*spec)
-            return;
-        std::vector<double> seconds;
-        std::stringstream list(spec);
-        for (std::string item; std::getline(list, item, ',');)
-            if (!item.empty())
-                seconds.push_back(std::atof(item.c_str()));
-        RUNTIME_LOG("[frameshot] " << seconds.size() << " frame shots planned (TEKKEN4_FRAME_SHOTS)\n");
-        PS2Runtime *rt = &runtime;
-        std::thread([rt, seconds]() {
-            const auto start = std::chrono::steady_clock::now();
-            for (const double at : seconds)
-            {
-                std::this_thread::sleep_until(start + std::chrono::milliseconds(static_cast<int64_t>(at * 1000.0)));
-                std::vector<uint8_t> pixels;
-                uint32_t width = 0u, height = 0u;
-                std::ostringstream name;
-                name << "frame_" << static_cast<int>(at) << "s.bmp";
-                if (rt->gs().copyLatchedHostPresentationFrame(pixels, width, height) && width && height &&
-                    pixels.size() >= static_cast<size_t>(width) * height * 4u && writeBmp(name.str(), pixels, width, height))
-                    RUNTIME_LOG("[frameshot] wrote " << name.str() << " " << width << "x" << height << "\n");
-                else
-                    RUNTIME_LOG("[frameshot] no presented frame for " << name.str() << "\n");
-            }
-        }).detach();
+        if (spec && *spec)
+        {
+            std::vector<double> seconds;
+            std::stringstream list(spec);
+            for (std::string item; std::getline(list, item, ',');)
+                if (!item.empty())
+                    seconds.push_back(std::atof(item.c_str()));
+            RUNTIME_LOG("[frameshot] " << seconds.size() << " frame shots planned (TEKKEN4_FRAME_SHOTS)\n");
+            PS2Runtime *rt = &runtime;
+            std::thread([rt, seconds]() {
+                const auto start = std::chrono::steady_clock::now();
+                for (const double at : seconds)
+                {
+                    std::this_thread::sleep_until(start + std::chrono::milliseconds(static_cast<int64_t>(at * 1000.0)));
+                    std::vector<uint8_t> pixels;
+                    uint32_t width = 0u, height = 0u;
+                    std::ostringstream name;
+                    name << "frame_" << static_cast<int>(at) << "s.bmp";
+                    if (rt->gs().copyLatchedHostPresentationFrame(pixels, width, height) && width && height &&
+                        pixels.size() >= static_cast<size_t>(width) * height * 4u &&
+                        writeBmp(name.str(), pixels, width, height))
+                        RUNTIME_LOG("[frameshot] wrote " << name.str() << " " << width << "x" << height << "\n");
+                    else
+                        RUNTIME_LOG("[frameshot] no presented frame for " << name.str() << "\n");
+                }
+            }).detach();
+        }
+        const char *poll = std::getenv("TEKKEN4_FRAME_SHOT_POLL");
+        if (poll && std::strcmp(poll, "1") == 0)
+        {
+            PS2Runtime *rt = &runtime;
+            std::thread([rt]() { pollRequests(rt); }).detach();
+        }
     }
 }
 
