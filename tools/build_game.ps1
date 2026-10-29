@@ -58,7 +58,8 @@ if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path 
 $LogPath   = Join-Path $LogDir 'build_game.log'
 $StatePath = Join-Path $LogDir 'build_game_state.json'
 $GameDisc  = Join-Path $Root 'game\disc'
-$Tree = if ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC } else { Join-Path $Root '..\tekken4-fork-ps2recomp' }
+. (Join-Path $PSScriptRoot 'us_tree.ps1')
+$Tree = Resolve-UsTree $Root  # never the PAL cousin project's tree (tools\us_tree.ps1)
 $Tree = [IO.Path]::GetFullPath($Tree).TrimEnd('\')
 $BuildDirName = if ($env:TEKKEN4_BUILD_DIR) { $env:TEKKEN4_BUILD_DIR } else { 'runtime' }
 $RecompExe  = Join-Path $Tree 'out\tools\ps2xRecomp\ps2_recomp.exe'
@@ -471,7 +472,7 @@ Step 'stage' 'tools\stage_generated.cmd' {
 
 # ================================================================ runtime
 Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
-    $vu1 = Files (Join-Path $Root 'game\vu1\micro') '*.bin'
+    $vu1 = @(Files (Join-Path $Root 'game\vu1\micro') '*.bin')  # @(): none or one file is not an array (StrictMode .Count)
     $fp = Sha1Text ((Get-StateValue 'stage' 'fingerprint') + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'patches') '*.patch')) + '|' +
                     (Get-StatFingerprint $vu1) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead) + '|' + $BuildDirName)
     if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) { return 'up to date' }

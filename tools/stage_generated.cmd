@@ -6,7 +6,8 @@ rem This overwrites upstream's placeholder src\runner\register_functions.cpp (gi
 rem Our game overrides (runtime\*_overrides.cpp) are copied in too; /XF keeps the mirror from deleting them.
 setlocal
 set "GEN=%~dp0..\generated"
-if defined TEKKEN4_SRC (set "RT=%TEKKEN4_SRC%\ps2xRuntime") else set "RT=%~dp0..\..\tekken4-fork-ps2recomp\ps2xRuntime"
+call "%~dp0us_tree.cmd" || exit /b 1
+set "RT=%TEKKEN4_SRC%\ps2xRuntime"
 if not exist "%GEN%\register_functions.cpp" (echo generated\ is empty: run ps2_recomp first & exit /b 1)
 rem /E copies only and never purges (no tool in this project deletes: user rule 2026-10-27); stale files stay until the user removes them.
 robocopy "%GEN%" "%RT%\src\runner" *.cpp /E /XF *_overrides.cpp /NJH /NJS /NFL /NDL /NP

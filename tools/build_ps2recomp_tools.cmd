@@ -6,7 +6,8 @@ for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\
 if not defined VSDIR (echo MSVC not found & exit /b 1)
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 set "PATH=%ProgramFiles%\CMake\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
-if defined TEKKEN4_SRC (set "SRC=%TEKKEN4_SRC%") else set "SRC=%~dp0..\..\tekken4-fork-ps2recomp"
+call "%~dp0us_tree.cmd" || exit /b 1
+set "SRC=%TEKKEN4_SRC%"
 cmake -S "%SRC%" -B "%SRC%\out\tools" -G Ninja -DCMAKE_BUILD_TYPE=Release ^
   -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF || exit /b 1
 cmake --build "%SRC%\out\tools" || exit /b 1

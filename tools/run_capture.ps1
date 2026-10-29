@@ -48,7 +48,8 @@ New-Item -ItemType Directory -Force $RunDir | Out-Null
 . (Join-Path $PSScriptRoot "run_lock.ps1")
 Enter-RunLock $root "run_capture $RunDir"
 $buildDir = if ($env:TEKKEN4_BUILD_DIR) { $env:TEKKEN4_BUILD_DIR } else { "runtime" }  # Grok: out\grok
-$srcTree = if ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC } else { Join-Path (Split-Path -Parent $root) "tekken4-fork-ps2recomp" }  # see build_runtime.cmd
+. (Join-Path $PSScriptRoot "us_tree.ps1")
+$srcTree = Resolve-UsTree $root  # see tools\us_tree.ps1 (never the PAL cousin project's tree)
 $exe = Join-Path $srcTree "out\$buildDir\ps2xRuntime\ps2EntryRunner.exe"
 $elf = Join-Path $root "game\disc\SLUS_203.28"
 # GPU (OpenGL) GS renderer by default like tools\run_game.cmd (set PS2X_GS_BACKEND=cpu beforehand for the software one).

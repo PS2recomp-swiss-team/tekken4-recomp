@@ -11,7 +11,7 @@ set "GHIDRA=%ROOT%\external\ghidra_12.1.4_PUBLIC"
 for /d %%J in ("%ROOT%\external\jdk-21*") do set "JAVA_HOME=%%~fJ"
 if not defined JAVA_HOME (echo JDK 21 not found in external\ & exit /b 1)
 set "PATH=%JAVA_HOME%\bin;%PATH%"
-if not defined TEKKEN4_SRC set "TEKKEN4_SRC=%ROOT%\..\tekken4-fork-ps2recomp"
+call "%~dp0us_tree.cmd" || exit /b 1
 set "PROJECT=%~n1"
 call "%GHIDRA%\support\analyzeHeadless.bat" "%ROOT%\ghidra" "%PROJECT%" -import "%~f1" -overwrite ^
   -processor r5900:LE:32:default ^

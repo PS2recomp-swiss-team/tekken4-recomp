@@ -7,7 +7,8 @@ for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\
 if not defined VSDIR (echo MSVC not found & exit /b 1)
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 set "PATH=%ProgramFiles%\CMake\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
-if defined TEKKEN4_SRC (set "SRC=%TEKKEN4_SRC%") else set "SRC=%~dp0..\..\tekken4-fork-ps2recomp"
+call "%~dp0us_tree.cmd" || exit /b 1
+set "SRC=%TEKKEN4_SRC%"
 set "BUILD=%SRC%\out\iop-test"
 cmake -S "%SRC%\ps2xIOP" -B "%BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob1 /DNDEBUG" -DPS2X_IOP_BUILD_TESTS=ON || exit /b 1
 cmake --build "%BUILD%" --target ps2_iop_emulator_tests ps2_iop_import_tests ps2_iop_compatibility_tests || exit /b 1

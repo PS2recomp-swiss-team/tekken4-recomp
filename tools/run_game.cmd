@@ -5,7 +5,8 @@ rem The line to look at is usually the last "[guest-branch:...]" or crash line n
 setlocal
 set "ROOT=%~dp0.."
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=runtime"
-if defined TEKKEN4_SRC (set "TREE=%TEKKEN4_SRC%") else set "TREE=%ROOT%\..\tekken4-fork-ps2recomp"
+call "%~dp0us_tree.cmd" || exit /b 1
+set "TREE=%TEKKEN4_SRC%"
 set "EXE=%TREE%\out\%TEKKEN4_BUILD_DIR%\ps2xRuntime\ps2EntryRunner.exe"
 if not exist "%EXE%" (echo ps2EntryRunner.exe not built: run tools\build_runtime.cmd & exit /b 1)
 if not exist "%ROOT%\logs" mkdir "%ROOT%\logs"

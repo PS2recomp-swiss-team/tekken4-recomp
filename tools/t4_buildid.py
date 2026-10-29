@@ -27,6 +27,23 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def us_tree():
+    """tools/us_tree.ps1's rule: TEKKEN4_SRC, else ../tekken4-fork-ps2recomp_usa when it exists, else the plain sibling
+    when it is free or on branch t4-us, else ../tekken4-fork-ps2recomp_usa (the plain one is the PAL cousin project's)."""
+    if os.environ.get("TEKKEN4_SRC"):
+        return os.environ["TEKKEN4_SRC"]
+    parent = os.path.dirname(ROOT)
+    own = os.path.join(parent, "tekken4-fork-ps2recomp_usa")
+    plain = os.path.join(parent, "tekken4-fork-ps2recomp")
+    if os.path.isdir(own):
+        return own
+    if not os.path.isdir(os.path.join(plain, ".git")):
+        return plain
+    branch = subprocess.run(["git", "-C", plain, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
+                            text=True).stdout.strip()
+    return plain if branch == "t4-us" else own
+
+
 def sha1_file(path, chunk=1 << 20):
     h = hashlib.sha1()
     with open(path, "rb") as f:
@@ -67,7 +84,7 @@ def code_id(src):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default=os.path.join(os.path.dirname(ROOT), "tekken4-fork-ps2recomp"))
+    ap.add_argument("--src", default=us_tree())
     ap.add_argument("--out", help="directory for t4net_build.txt/.json (default: print only)")
     ap.add_argument("--elf", default=os.path.join(ROOT, "game", "disc", "SLUS_203.28"))
     a = ap.parse_args()
