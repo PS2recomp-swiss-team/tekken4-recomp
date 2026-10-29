@@ -3,6 +3,11 @@
 _Last updated: 2026-10-29 ~06:30 (US port + rollback night)_
 
 ## Resume here
+- **OPEN (user, 2026-10-30): intro movie audio is garbage** (choppy/broken, as on PAL: "super flickery"). Separate path from
+  the BGM fix: movie calls 0x3000/0x3100/0x3200 stay on the local HLE in runtime/tekken4_overrides.cpp, which decodes the
+  interleaved SPU ADPCM itself ("movie audio: unit N -> 3584 stereo frames"); suspects: PCM added after the SPU clamp,
+  unit pacing vs. 60 Hz, sample rate. Also open: upscale seams (64x32 page grid lines/steps), 480p mode (omode 0x50 path
+  exists in the US ELF at 0x22a5c0), soft HUD at high scale. Offline test build: dist\T4-Offline-Test-2026-10-30 (local).
 - **END OF THE US/ROLLBACK NIGHT (2026-10-29 ~06:30), RESTART HERE.** Main line = branch us-slus20328, patches 01-56
   (PS2Recomp branch t4-us in D:\tekken4-fork-ps2recomp = eb8688b + 01-56 as commits). All pushed. Done tonight:
   - QA (logs\qa\REPORT.md): Story, Arcade, Team, Survival, Practice, Training, Tekken Force, Options work; VS needs pad 2;
