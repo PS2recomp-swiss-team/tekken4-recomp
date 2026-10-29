@@ -1132,6 +1132,10 @@ The user pre-authorized publishing every successful milestone on three channels:
 - **Project repo since 2026-10-29: https://github.com/PS2recomp-swiss-team/tekken4-recomp** (private, organisation with
   Lautreck + TheWishin; `origin`, branch `master`; all branches copied from the old repo, which stays as remote `old`).
   Branch `us-iso` marks TheWishin's US-ISO line (PR #2 on the old repo, not merged, user: "do not merge").
+  **User 2026-10-29: PAL (master) and US (us-iso) are independent cousin projects, never merged; end goal one
+  'super recompiler' for both ISOs with online play on both.** US checkout: H:	ekken4-recomp_usa (branch us-iso,
+  US ISO there). Before any US build here: give it its own PS2Recomp tree (H:	ekken4-fork-ps2recomp_usa via
+  TEKKEN4_SRC): its scripts default to ..	ekken4-fork-ps2recomp = the PAL tree, and build_game.ps1 commits patches there.
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
