@@ -1129,7 +1129,10 @@ is not personal (never the disc files, ISO or BIOS). Heavy analysis / coding job
 
 ## Publishing (from 2026-10-21)
 The user pre-authorized publishing every successful milestone on three channels:
-- **Project repo (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp (`origin`, branch `master`). Commits use
+- **Project repo since 2026-10-29: https://github.com/PS2recomp-swiss-team/tekken4-recomp** (private, organisation with
+  Lautreck + TheWishin; `origin`, branch `master`; all branches copied from the old repo, which stays as remote `old`).
+  Branch `us-iso` marks TheWishin's US-ISO line (PR #2 on the old repo, not merged, user: "do not merge").
+- **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
 - **Upstream PRs:** fork https://github.com/Lautreck/PS2Recomp (remote `fork` in `external/PS2Recomp`).
