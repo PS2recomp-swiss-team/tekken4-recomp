@@ -1,0 +1,28 @@
+From 2f2c69c75682db25a22922d6c4e76f470279ac35 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 00:21:08 +0100
+Subject: [PATCH] Debug panel: PS2X_DEBUG_PANEL=0 starts with it hidden (F1
+ still toggles)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/ps2_debug_panel.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_debug_panel.cpp b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+index c9aa2c6..c31fc39 100644
+--- a/ps2xRuntime/src/lib/ps2_debug_panel.cpp
++++ b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+@@ -2183,6 +2183,9 @@ void PS2DebugPanel::initialize()
+     {
+         rlImGuiSetup(true);
+         m_initialized = true;
++        // PS2X_DEBUG_PANEL=0: start with the panel hidden (players' builds); F1 still toggles it.
++        if (const char *panel = std::getenv("PS2X_DEBUG_PANEL"); panel && panel[0] == '0')
++            m_visible = false;
+     }
+ #endif
+ }
+-- 
+2.55.0.windows.3
+
