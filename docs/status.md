@@ -1133,9 +1133,15 @@ The user pre-authorized publishing every successful milestone on three channels:
   Lautreck + TheWishin; `origin`, branch `master`; all branches copied from the old repo, which stays as remote `old`).
   Branch `us-iso` marks TheWishin's US-ISO line (PR #2 on the old repo, not merged, user: "do not merge").
   **User 2026-10-29: PAL (master) and US (us-iso) are independent cousin projects, never merged; end goal one
-  'super recompiler' for both ISOs with online play on both.** US checkout: H:	ekken4-recomp_usa (branch us-iso,
-  US ISO there). Before any US build here: give it its own PS2Recomp tree (H:	ekken4-fork-ps2recomp_usa via
-  TEKKEN4_SRC): its scripts default to ..	ekken4-fork-ps2recomp = the PAL tree, and build_game.ps1 commits patches there.
+  'super recompiler' for both ISOs with online play on both.** US checkout: H:\tekken4-recomp_usa (branch us-iso,
+  US ISO there), its own PS2Recomp tree H:\tekken4-fork-ps2recomp_usa (branch t4-us).
+  **Done (us-iso f05630e):** every US script resolves its tree via tools\us_tree.cmd / us_tree.ps1 and refuses a tree
+  not on t4-us (the plain ..\tekken4-fork-ps2recomp here is the PAL tree); US backup ~\tekken4-backup-us;
+  build_game.ps1 StrictMode fix. build_game.ps1 from the US ISO built the US tree (56 US patches) and the runtime;
+  US Practice fight Kazuya vs Yoshimitsu on airport with sound (H:\tekken4-recomp_usa\logs\us_fight1, via
+  tools\perf_fight.ps1 -Src H:\tekken4-fork-ps2recomp_usa -Build runtime). US fight fps averages 60 but single
+  seconds jump 44-75 (PAL holds 60). Next for US: port PAL's later fixes by hand (music 35/36/41, F2 37-40,
+  closed-loop test fight).
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
