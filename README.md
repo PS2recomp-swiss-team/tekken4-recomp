@@ -18,10 +18,11 @@ US build (SLUS-20328), 2026-10-29:
 | Function map (headless Ghidra, 4454 + 359 functions), 40 jump tables, recompiles with 0 errors | done |
 | Boot, Namco logo, intro movie, difficulty, mode select, character select, Story prologue | done |
 | A fight (Story Battle, Kazuya vs Paul), native VU1, OpenGL renderer, full speed (60 fps) | done |
-| Sound incl. background music (real Namco driver on the emulated IOP) | done (WAV-verified; to be confirmed by ear) |
-| Other modes, long sessions | done (QA: all modes, 7-min run) |
-| One-step build from the player's own ISO (no BIOS): `tools/build_game.ps1` | done (dry-run tested) |
-| Rollback netplay (GGPO-style, UDP, build id, hash checks) | works between two local instances, 0 desyncs; lobby integration next |
+| Sound incl. background music (real Namco driver on the emulated IOP) | done (confirmed by ear); intro movie music still rough |
+| Other modes, long sessions | done (QA: all modes, 7-min run); all fighters unlocked by default |
+| PC picture: progressive, resolution steps to 4K, FXAA, fullscreen; 60 fps on all stages; XInput pads | done |
+| One-step build from the player's own ISO (no BIOS): `tools/build_game.ps1` | done (run end to end; still needs VS Build Tools) |
+| Rollback netplay (GGPO-style, UDP, build id, hash checks) | works between two local instances, 0 desyncs; two-PC test and lobby server next |
 
 The PAL build (`master`) reached all of the above earlier; its log is in [docs/status.md](docs/status.md).
 
@@ -43,23 +44,22 @@ The day-to-day log, findings and next steps are in [docs/status.md](docs/status.
 | `patches/` | Changes to PS2Recomp itself (hardware behaviour), applied automatically by the build script |
 | `runtime/` | Game overrides for this ELF (`PS2_REGISTER_GAME_OVERRIDE`) |
 | `tools/` | Helper scripts: ELF inspection, Ghidra helpers, missing-function finder, build/run scripts, PCSX2 PINE reader |
+| `launcher/` | The launcher: Play, Build game, Settings, Controls |
+| `docs/PROJECT_MAP.md`, `docs/SESSIONS.md` | Where everything is, who works on what |
 | `docs/status.md` | Current state, findings, next steps |
 | `game/`, `ghidra/`, `generated/`, `external/` | Local only, gitignored |
 
 ## Building (Windows)
 
-You need Visual Studio 2022 Build Tools (C++), CMake, Ninja, Git and Python 3. Ghidra (with
-[ghidra-emotionengine-reloaded](https://github.com/chaoticgd/ghidra-emotionengine-reloaded)) is only needed to
-redo the function map.
+You need your own Tekken 4 USA ISO (SLUS-20328), Visual Studio 2022 Build Tools (C++), CMake, Ninja, Git and Python 3. No BIOS, no Ghidra.
+Unpack into a new, empty folder (the build uses the folder next to it for PS2Recomp), then:
 
-1. Clone PS2Recomp next to this folder as `../tekken4-fork-ps2recomp` (the default tree of every script; `TEKKEN4_SRC`
-   points them at another one) at the commit pinned in `docs/status.md`.
-2. Copy the files from your disc into `game/disc/` (the ELF is `SLUS_203.28`), and put the ISO itself in the repo root (sound and disc reads use it).
-3. `tools\build_ps2recomp_tools.cmd` builds the recompiler.
-4. `..\tekken4-fork-ps2recomp\out\tools\ps2xRecomp\ps2_recomp.exe config\ghidra_export.toml` writes `generated/`.
-5. `tools\stage_generated.cmd` copies the generated code and our overrides into the runtime.
-6. `tools\build_runtime.cmd` applies `patches\*.patch` and builds `ps2EntryRunner.exe`.
-7. `tools\run_game.cmd` runs it (F1 toggles the runtime's debug panel; the output goes to `logs\run.log`).
+```
+python launcher	4_launcher.pyw
+```
+
+or `powershell -ExecutionPolicy Bypass -File toolsuild_game.ps1 -Iso "C:\path\Tekken 4 (USA).iso"`, then set `TEKKEN4_ISO` and run `toolsun_game.cmd`.
+About 7-20 minutes and 6 GB. Details: `START_HIER.txt`, `docs/E2E_BUILD.md`. Project overview: `docs/PROJECT_MAP.md`.
 
 ## Thanks
 

@@ -3,6 +3,7 @@
 _Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
 
 ## Resume here
+- **Start with `docs/PROJECT_MAP.md` and `docs/SESSIONS.md` (2026-10-30).** Entries below are a log, newest first; older ones describe the PAL build and old paths (F:, H:).
 - **MINI RELEASE 2026-10-30 (dist\T4-Mini-Release-2026-10-30, local only):** Tekken4.cmd (resolution menu, fullscreen
   J/E/N) + Launcher.cmd + LIESMICH.txt, exe = patches 01-84 + unlock override (all fighters unlocked by default,
   runtime/tekken4_unlock_overrides.cpp: callback 0x1ec350 -> 1). Intro movie fixed at high resolution (patch 84:
