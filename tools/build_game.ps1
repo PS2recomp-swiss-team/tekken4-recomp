@@ -471,7 +471,7 @@ Step 'stage' 'tools\stage_generated.cmd' {
 
 # ================================================================ runtime
 Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
-    $vu1 = Files (Join-Path $Root 'game\vu1\micro') '*.bin'
+    $vu1 = @(Files (Join-Path $Root 'game\vu1\micro') '*.bin')   # @(): an empty result is $null and .Count then throws under StrictMode
     $fp = Sha1Text ((Get-StateValue 'stage' 'fingerprint') + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'patches') '*.patch')) + '|' +
                     (Get-StatFingerprint $vu1) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead) + '|' + $BuildDirName)
     if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) { return 'up to date' }
