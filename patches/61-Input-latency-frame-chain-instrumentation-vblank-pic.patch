@@ -1,0 +1,267 @@
+From 8a79c6de29e1580a84d1bee1cc92c1503befc940 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 02:29:52 +0100
+Subject: [PATCH 61/65] Input latency: frame-chain instrumentation (vblank
+ picture hash, present log, display copy)
+
+TEKKEN4_VBLANK_HASH=1: at every VBlankStart the game thread latches the shown
+picture and logs its exact hash, the port-0 buttons read in that frame and
+DISPFB1; two deterministic runs that differ in one press give the game's own
+frames of lag. TEKKEN4_PRESENT_LOG=1: per presented guest frame the host QPC
+of its VBlankStart, latch and swap (host-added time). [dispcopy]: when the
+game's full-screen copy into the display buffer is submitted.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../include/runtime/ps2_input_latency.h       | 15 ++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 20 +++++
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp      |  2 +-
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        |  3 +
+ ps2xRuntime/src/lib/ps2_input_latency.cpp     | 78 ++++++++++++++++++-
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  1 +
+ 6 files changed, 117 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_input_latency.h b/ps2xRuntime/include/runtime/ps2_input_latency.h
+index e0d0c2b..bcc449e 100644
+--- a/ps2xRuntime/include/runtime/ps2_input_latency.h
++++ b/ps2xRuntime/include/runtime/ps2_input_latency.h
+@@ -28,6 +28,21 @@ namespace ps2_input_latency
+     // Game thread, after scePadRead wrote the pad packet. pressedMask is active-high.
+     void notePad(uint16_t pressedMask, uint64_t vsyncTick);
+ 
++    // Frame-chain instrumentation (docs/INPUT.md of the Tekken 4 port):
++    // TEKKEN4_PRESENT_LOG=1: one [present] line per presented guest frame: the guest tick shown, host QPC of that
++    //   tick's VBlankStart, of the latch and of the swap return (host-added time = swap - vblank).
++    // TEKKEN4_VBLANK_HASH=1: at every VBlankStart the game thread latches the displayed picture and logs
++    //   [vblank] shown=<tick> hash=<exact pixel hash> pad=<port-0 buttons read during that tick>; two
++    //   deterministic runs that differ in one press give the game's own frames of lag.
++    bool presentLog();
++    bool vblankHash();
++    // Game thread, at VBlankStart before the tick advances (tick = the frame whose picture was just shown).
++    void noteVBlank(uint64_t newTick);
++    uint16_t padMaskOfTick(uint64_t tick);
++    uint64_t hashExact(const uint8_t *rgba, uint32_t width, uint32_t height);
++    // GS frontend (EE thread): the game's full-screen copy into the display buffer was submitted (frame complete).
++    void noteDisplayCopy(uint64_t tick, uint32_t destFbp);
++
+     // A scripted press (ps2_host_pad's TEKKEN4_PAD_TEST): t1 = now, timed like a key from here on.
+     void openTestPress(uint32_t tag, uint16_t bit);
+ 
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 522c5ab..b3e3122 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1,6 +1,8 @@
+ #include "runtime/ee_scheduler.h"
+ 
+ #include "ps2_log.h"
++#include "ps2_runtime.h"
++#include "runtime/ps2_input_latency.h"
+ #include "ps2_runtime_macros.h"
+ 
+ #include <algorithm>
+@@ -1995,6 +1997,21 @@ void EeScheduler::processEvent(const EeEvent &event)
+         requestStop();
+         break;
+     case EeEventType::VBlankStart:
++        if (ps2_input_latency::vblankHash())
++        {
++            // The picture scanned out during the frame that ends here (docs/INPUT.md: game frames of lag).
++            m_runtime.gs().latchHostPresentationFrame();
++            std::vector<uint8_t> px;
++            uint32_t w = 0u, h = 0u;
++            const uint64_t hash = m_runtime.gs().copyLatchedHostPresentationFrame(px, w, h)
++                                      ? ps2_input_latency::hashExact(px.data(), w, h)
++                                      : 0u;
++            std::fprintf(stderr, "[vblank] shown=%llu hash=%016llx pad=%04x dispfb1=%llx\n",
++                         static_cast<unsigned long long>(m_vsyncTick), static_cast<unsigned long long>(hash),
++                         ps2_input_latency::padMaskOfTick(m_vsyncTick),
++                         static_cast<unsigned long long>(m_runtime.memory().gs().dispfb1 & 0x1FFu));
++        }
++        ps2_input_latency::noteVBlank(m_vsyncTick + 1u);
+         ++m_vsyncTick;
+         m_vblankPending = static_cast<bool>(m_boundaryHook);
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+@@ -2035,6 +2052,9 @@ void EeScheduler::processEvent(const EeEvent &event)
+         completeExternalWait(event.id, event.value, KE_OK);
+         break;
+     case EeEventType::VBlankEnd:
++        if (ps2_input_latency::vblankHash())
++            std::fprintf(stderr, "[vblank-end] tick=%llu dispfb1=%llx\n", static_cast<unsigned long long>(m_vsyncTick),
++                         static_cast<unsigned long long>(m_runtime.memory().gs().dispfb1 & 0x1FFu));
+         dispatchIrq(false, 3u);
+         break;
+     case EeEventType::Dmac:
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index bd32ee0..a628552 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -728,7 +728,7 @@ namespace ps2_stubs
+             }
+         });
+ 
+-        if (ps2_input_latency::enabled())
++        if (ps2_input_latency::enabled() || ps2_input_latency::vblankHash())
+         {
+             const uint16_t activeLow = static_cast<uint16_t>(data[2] | (static_cast<uint16_t>(data[3]) << 8));
+             const uint64_t tick = runtime ? runtime->memory().gs().vsyncTick.load(std::memory_order_relaxed) : 0u;
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 218669b..9aa4597 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -7,6 +7,7 @@
+ #include "runtime/ps2_memory.h"
+ #include "runtime/ps2_rollback_cuts.h"
+ #include "runtime/ps2_perf_stats.h"
++#include "runtime/ps2_input_latency.h"
+ #include <atomic>
+ #include <algorithm>
+ #include <cmath>
+@@ -1800,5 +1801,7 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
+         m_preferredDisplaySourceFrame = {ctx.tex0.tbp0, ctx.tex0.tbw, ctx.tex0.psm, 0u};
+         m_preferredDisplayDestFbp = ctx.frame.fbp;
+         m_hasPreferredDisplaySource = true;
++        if (m_privRegs)
++            ps2_input_latency::noteDisplayCopy(m_privRegs->vsyncTick.load(std::memory_order_acquire), ctx.frame.fbp);
+     }
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+index 3484544..0d47901 100644
+--- a/ps2xRuntime/src/lib/ps2_input_latency.cpp
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -60,6 +60,14 @@ namespace
+     bool g_timerPeriod = false;
+     bool g_latched = false;
+ 
++    // Frame-chain instrumentation.
++    constexpr int kTickRing = 256;
++    std::atomic<uint64_t> g_vbQpc[kTickRing]{};
++    std::atomic<uint64_t> g_padTick{0};
++    std::atomic<uint16_t> g_padMask{0};
++    uint64_t g_latchTick = 0;
++    uint64_t g_latchQpc = 0;
++
+     std::mutex g_pressMu;
+     Press g_press[kSlots];
+     uint32_t g_seq = 0;
+@@ -376,6 +384,13 @@ namespace ps2_input_latency
+ 
+     void notePad(uint16_t pressedMask, uint64_t vsyncTick)
+     {
++        if (vblankHash())
++        {
++            if (g_padTick.load(std::memory_order_relaxed) != vsyncTick)
++                g_padMask.store(0, std::memory_order_relaxed);
++            g_padMask.fetch_or(pressedMask, std::memory_order_relaxed);
++            g_padTick.store(vsyncTick, std::memory_order_release);
++        }
+         if (!enabled())
+             return;
+         std::lock_guard<std::mutex> lock(g_pressMu);
+@@ -393,6 +408,52 @@ namespace ps2_input_latency
+         }
+     }
+ 
++    bool presentLog()
++    {
++        static const bool on = envIs1("TEKKEN4_PRESENT_LOG");
++        return on;
++    }
++
++    bool vblankHash()
++    {
++        static const bool on = envIs1("TEKKEN4_VBLANK_HASH");
++        return on;
++    }
++
++    void noteVBlank(uint64_t newTick)
++    {
++        g_vbQpc[newTick % kTickRing].store(qpc(), std::memory_order_release);
++    }
++
++    void noteDisplayCopy(uint64_t tick, uint32_t destFbp)
++    {
++        if (!vblankHash() && !presentLog())
++            return;
++        const uint64_t vb = g_vbQpc[tick % kTickRing].load(std::memory_order_acquire);
++        const uint64_t now = qpc();
++        const double ms = vb && now > vb ? static_cast<double>(now - vb) * 1000.0 / static_cast<double>(qpcFreq()) : -1.0;
++        std::fprintf(stderr, "[dispcopy] tick=%llu fbp=%x after_vblank_ms=%.2f\n", static_cast<unsigned long long>(tick),
++                     destFbp, ms);
++    }
++
++    uint16_t padMaskOfTick(uint64_t tick)
++    {
++        return g_padTick.load(std::memory_order_acquire) == tick ? g_padMask.load(std::memory_order_acquire) : 0;
++    }
++
++    uint64_t hashExact(const uint8_t *rgba, uint32_t width, uint32_t height)
++    {
++        uint64_t h = 14695981039346656037ull;
++        const size_t n = static_cast<size_t>(width) * height;
++        const uint32_t *px = reinterpret_cast<const uint32_t *>(rgba);
++        for (size_t i = 0; rgba && i < n; ++i)
++        {
++            h ^= px[i] & 0x00FFFFFFu; // alpha is not shown
++            h *= 1099511628211ull;
++        }
++        return h;
++    }
++
+     void openTestPress(uint32_t tag, uint16_t bit)
+     {
+         if (enabled())
+@@ -401,8 +462,9 @@ namespace ps2_input_latency
+ 
+     void onLatchBegin(uint64_t vsyncTick)
+     {
+-        (void)vsyncTick;
+         g_latched = true;
++        g_latchTick = vsyncTick;
++        g_latchQpc = qpc();
+         if (!enabled())
+             return;
+         std::lock_guard<std::mutex> lock(g_pressMu);
+@@ -426,6 +488,14 @@ namespace ps2_input_latency
+ 
+     void onSwapReturned()
+     {
++        if (presentLog() && g_latched)
++        {
++            const uint64_t now = qpc();
++            std::fprintf(stderr, "[present] tick=%llu vb=%llu latch=%llu swap=%llu\n",
++                         static_cast<unsigned long long>(g_latchTick),
++                         static_cast<unsigned long long>(g_vbQpc[g_latchTick % kTickRing].load(std::memory_order_acquire)),
++                         static_cast<unsigned long long>(g_latchQpc), static_cast<unsigned long long>(now));
++        }
+         if (!enabled())
+         {
+             g_latched = false;
+@@ -479,6 +549,12 @@ namespace ps2_input_latency
+     bool sampleKeyboard(uint16_t &) { return false; }
+     void notePad(uint16_t, uint64_t) {}
+     void openTestPress(uint32_t, uint16_t) {}
++    bool presentLog() { return false; }
++    bool vblankHash() { return false; }
++    void noteVBlank(uint64_t) {}
++    uint16_t padMaskOfTick(uint64_t) { return 0; }
++    uint64_t hashExact(const uint8_t *, uint32_t, uint32_t) { return 0; }
++    void noteDisplayCopy(uint64_t, uint32_t) {}
+     void onLatchBegin(uint64_t) {}
+     void onLatchPixels(const uint8_t *, uint32_t, uint32_t) {}
+     void onSwapReturned() {}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 187702d..3a33f7e 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -407,6 +407,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+         static uint64_t s_sharedSequence = 0;
+         if (needsLatch)
+         {
++            ps2_input_latency::onLatchBegin(currentTick);
+             rt->gs().latchHostPresentationFrame();
+             if (ps2_perf_stats::enabled())
+                 ps2_perf_stats::add(ps2_perf_stats::g_counters.latches);
+-- 
+2.55.0.windows.3
+

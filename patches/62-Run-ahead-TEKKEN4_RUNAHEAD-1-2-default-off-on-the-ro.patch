@@ -1,0 +1,469 @@
+From 22c4b520a2e42605654561194338d9c40711ac67 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:13:58 +0100
+Subject: [PATCH 62/65] Run-ahead (TEKKEN4_RUNAHEAD=1|2, default off) on the
+ rollback snapshots
+
+Per host frame the real frame runs hidden (no draw, no VU1, no present; IOP
+live), the machine is captured, N speculative frames run with the same input
+(IOP in the snapshot, muted; the last one draws), their picture is latched
+for the presenter and the machine is restored. Host deadlines move N frames
+earlier once, so the picture of frame k+N shows when frame k would have.
+The scheduler gets a boundary wrapper so the game's own boundary hook (the
+rollback driver) only sees real frames. Off in netplay and the rollback
+test/selfnet modes. Speculative pad reads do not consume latched taps.
+Checked: rollback-measure state hashes of 4377 real frames identical to a
+run without run-ahead (scripted Story fight with fuzz input).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/CMakeLists.txt                 |   1 +
+ ps2xRuntime/include/runtime/ee_scheduler.h |   5 +
+ ps2xRuntime/include/runtime/ps2_runahead.h |  31 +++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp |   5 +-
+ ps2xRuntime/src/lib/ps2_host_pad.cpp       |  17 +-
+ ps2xRuntime/src/lib/ps2_runahead.cpp       | 237 +++++++++++++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp        |  13 +-
+ 7 files changed, 302 insertions(+), 7 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/ps2_runahead.h
+ create mode 100644 ps2xRuntime/src/lib/ps2_runahead.cpp
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index f673595..a864bc6 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -385,6 +385,7 @@ add_library(ps2_runtime STATIC
+     src/lib/gs/gs_cpu_backend.cpp
+     src/lib/ps2_input_latency.cpp
+     src/lib/ps2_host_pad.cpp
++    src/lib/ps2_runahead.cpp
+     src/lib/ps2_iop_host.cpp
+     src/lib/ps2_memory.cpp
+     src/lib/ps2_pad.cpp
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 3c1e9cd..1e64c4e 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -380,6 +380,10 @@ public:
+     // the order of cycle-due events depend on EE cycles only (never on host pacing), see processDueDeadlines.
+     using BoundaryHook = std::function<void(const EeBoundaryInfo &)>;
+     void setBoundaryHook(BoundaryHook hook);
++    [[nodiscard]] bool hasBoundaryHook() const noexcept { return static_cast<bool>(m_boundaryHook); }
++    // Run-ahead (ps2_runahead): called instead of the hook at every boundary, with the hook to forward to.
++    using BoundaryWrapper = std::function<void(const EeBoundaryInfo &, const BoundaryHook &)>;
++    void setBoundaryWrapper(BoundaryWrapper wrapper) { m_boundaryWrapper = std::move(wrapper); }
+     // Idle loops (rollback modes): a backward-edge checkpoint at one of these guest pcs, where the loop only burns
+     // cycles until an event, accounts all iterations up to just before the next event (deadline, EE timer
+     // interrupt, slice end) in one step. The EE sees the same cycles and events; empty = off (default).
+@@ -523,6 +527,7 @@ private:
+     uint64_t m_snapshotSequence = 0;
+ 
+     BoundaryHook m_boundaryHook;
++    BoundaryWrapper m_boundaryWrapper;
+     bool m_cycleOrderedEvents = false;
+     uint64_t m_hostWaitNs = 0;
+     std::vector<uint32_t> m_idleLoopPcs;
+diff --git a/ps2xRuntime/include/runtime/ps2_runahead.h b/ps2xRuntime/include/runtime/ps2_runahead.h
+new file mode 100644
+index 0000000..388a00f
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_runahead.h
+@@ -0,0 +1,31 @@
++#pragma once
++
++#include <cstdint>
++
++class PS2Runtime;
++
++// Run-ahead (RetroArch style, single instance) on the rollback snapshot machinery (ps2_rollback):
++// every host frame the REAL frame runs hidden (cuts: no draw, no VU1, no present; IOP live, its sound is heard),
++// the machine is captured, N speculative frames run with the same input (IOP muted, the last one draws), their
++// picture is latched for the presenter, and the machine is restored. The host deadlines are moved N frames
++// earlier once, so the speculative picture of frame k+N is shown when frame k would have been: N frames of the
++// game's own input lag less. The real timeline (what the game state becomes) is unchanged; only the input of a
++// speculative frame may be one frame old.
++//
++// TEKKEN4_RUNAHEAD=0|1|2 (default 0 = off). Off in netplay / rollback test modes (TEKKEN4_NET, TEKKEN4_RB_MODE
++// other than measure). TEKKEN4_RUNAHEAD_START=<frame> (default 600): real frames before it run normally (boot).
++// TEKKEN4_RUNAHEAD_HIDDEN_CUTS: cuts of the hidden real frame (hex, default draw|vu1|present = 0x19).
++// TEKKEN4_RUNAHEAD_STATS=1: every 5 s one [runahead] line (frames, capture/restore/hidden/speculative ms, fps).
++// TEKKEN4_RUNAHEAD_IDLE=<hex pc,...>: idle loops the scheduler may skip (as the rollback driver does).
++namespace ps2_runahead
++{
++    int frames();
++    // PS2Runtime::run, before the game thread starts (after the game overrides installed their hooks).
++    void install(PS2Runtime &runtime);
++    // True while run-ahead owns the presentation latch (the presenter must not latch on vsync ticks).
++    bool active() noexcept;
++    // Bumped after every latch run-ahead made; the presenter copies the latched picture when it changes.
++    uint64_t latchSequence() noexcept;
++    // A speculative frame is running: pad reads must not consume latched taps.
++    bool speculative() noexcept;
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index b3e3122..9ee6175 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -181,7 +181,10 @@ void EeScheduler::run()
+             m_vblankPending = false;
+             info.vsyncTick = m_vsyncTick;
+             info.eeCycle = m_eeCycle;
+-            m_boundaryHook(info);
++            if (m_boundaryWrapper)
++                m_boundaryWrapper(info, m_boundaryHook);
++            else
++                m_boundaryHook(info);
+             continue;
+         }
+ 
+diff --git a/ps2xRuntime/src/lib/ps2_host_pad.cpp b/ps2xRuntime/src/lib/ps2_host_pad.cpp
+index b46ca3b..649e207 100644
+--- a/ps2xRuntime/src/lib/ps2_host_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_host_pad.cpp
+@@ -2,6 +2,7 @@
+ // ps2_pad.cpp reads raylib's gamepads on the window thread and hands them over with publishRaylib.
+ #include "runtime/ps2_host_pad.h"
+ #include "runtime/ps2_input_latency.h"
++#include "runtime/ps2_runahead.h"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -539,14 +540,17 @@ namespace
+         }
+         ps2_host_pad::State st = fromXInput(xs.Gamepad, x.gameDirs);
+         // A press that started and ended between two reads: held for exactly this one read.
+-        const uint16_t taps = static_cast<uint16_t>(x.rises.exchange(0, std::memory_order_acq_rel) & ~st.buttons &
+-                                                    ~x.lastReported);
++        // A speculative run-ahead frame only looks: the real frame after it consumes the taps.
++        const bool spec = ps2_runahead::speculative();
++        const uint16_t rises = spec ? x.rises.load(std::memory_order_acquire) : x.rises.exchange(0, std::memory_order_acq_rel);
++        const uint16_t taps = static_cast<uint16_t>(rises & ~st.buttons & ~x.lastReported);
+         if (taps)
+         {
+             ++g_st.taps;
+             st.buttons |= taps;
+         }
+-        x.lastReported = st.buttons;
++        if (!spec)
++            x.lastReported = st.buttons;
+         out = st;
+         return true;
+     }
+@@ -703,8 +707,11 @@ namespace ps2_host_pad
+                 ++g_st.taps;
+                 st.buttons |= taps;
+             }
+-            p->rises = 0;
+-            p->lastReported = st.buttons;
++            if (!ps2_runahead::speculative())
++            {
++                p->rises = 0;
++                p->lastReported = st.buttons;
++            }
+         }
+         const double age = usSince(p->qpc, now);
+         ++g_st.reads;
+diff --git a/ps2xRuntime/src/lib/ps2_runahead.cpp b/ps2xRuntime/src/lib/ps2_runahead.cpp
+new file mode 100644
+index 0000000..1013c11
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_runahead.cpp
+@@ -0,0 +1,237 @@
++// Run-ahead: see runtime/ps2_runahead.h.
++#include "runtime/ps2_runahead.h"
++
++#include "ps2_runtime.h"
++#include "runtime/ee_scheduler.h"
++#include "runtime/gs/gs_frontend.h"
++#include "runtime/ps2_rollback.h"
++#include "runtime/ps2_rollback_cuts.h"
++
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++
++namespace
++{
++    using Clock = std::chrono::steady_clock;
++
++    int g_frames = -1;
++    uint64_t g_start = 600;
++    uint32_t g_hiddenCuts = ps2_rollback::CutDraw | ps2_rollback::CutVu1 | ps2_rollback::CutPresent;
++    bool g_stats = false;
++    PS2Runtime *g_rt = nullptr;
++    std::atomic<bool> g_active{false};
++    std::atomic<bool> g_spec{false};
++    std::atomic<uint64_t> g_latchSeq{0};
++
++    ps2_rollback::Snapshot g_snap;
++    bool g_armed = false;
++    int g_specLeft = 0;
++    uint64_t g_realFrames = 0;
++    Clock::time_point g_phaseStart{};
++
++    struct Stats
++    {
++        Clock::time_point windowStart{};
++        uint64_t frames = 0;
++        double captureMs = 0, restoreMs = 0, hiddenMs = 0, specMs = 0, latchMs = 0;
++        double maxHostMs = 0;
++        Clock::time_point lastReal{};
++    } g_st;
++
++    double msSince(Clock::time_point t)
++    {
++        return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
++    }
++
++    uint32_t specCuts(int left)
++    {
++        // Every speculative frame keeps the presenter off; only the last one (left == 1) draws.
++        uint32_t cuts = ps2_rollback::CutPresent;
++        if (left > 1)
++            cuts |= ps2_rollback::CutDraw | ps2_rollback::CutVu1;
++        return cuts;
++    }
++
++    void printStats()
++    {
++        if (!g_stats)
++            return;
++        const auto now = Clock::now();
++        if (g_st.windowStart == Clock::time_point{})
++        {
++            g_st = Stats{};
++            g_st.windowStart = now;
++            return;
++        }
++        const double secs = std::chrono::duration<double>(now - g_st.windowStart).count();
++        if (secs < 5.0)
++            return;
++        const double n = g_st.frames ? static_cast<double>(g_st.frames) : 1.0;
++        std::fprintf(stderr,
++                     "[runahead] n=%d fps=%.1f capture=%.2f restore=%.2f hidden=%.2f spec=%.2f latch=%.2f ms (avg) "
++                     "host_frame_max=%.1f ms\n",
++                     g_frames, g_st.frames / secs, g_st.captureMs / n, g_st.restoreMs / n, g_st.hiddenMs / n,
++                     g_st.specMs / n, g_st.latchMs / n, g_st.maxHostMs);
++        std::fflush(stderr);
++        g_st = Stats{};
++        g_st.windowStart = now;
++    }
++
++    void wrapper(const EeBoundaryInfo &info, const EeScheduler::BoundaryHook &inner)
++    {
++        const bool spec = g_spec.load(std::memory_order_relaxed);
++        if (!info.vblank)
++        {
++            // Wake boundaries: only real frames reach the game's driver.
++            if (!spec && inner)
++                inner(info);
++            return;
++        }
++        if (!spec)
++        {
++            // A real frame ended.
++            if (g_armed)
++                g_st.hiddenMs += msSince(g_phaseStart);
++            if (inner)
++                inner(info);
++            ++g_realFrames;
++            if (!g_armed)
++            {
++                if (g_realFrames < g_start)
++                    return;
++                // Show the speculative frames when the real ones would have been shown: move every host deadline
++                // N frames earlier, once (the snapshots carry the moved deadlines from now on).
++                g_rt->eeScheduler().shiftHostDeadlines(-std::chrono::microseconds(16667) * g_frames);
++                g_armed = true;
++                g_active.store(true, std::memory_order_release);
++                std::fprintf(stderr, "[runahead] on at real frame %llu: %d frame(s), hidden cuts %x\n",
++                             static_cast<unsigned long long>(g_realFrames), g_frames, g_hiddenCuts);
++                std::fflush(stderr);
++            }
++            const auto now = Clock::now();
++            if (g_st.lastReal != Clock::time_point{})
++                g_st.maxHostMs = std::max(g_st.maxHostMs, std::chrono::duration<double, std::milli>(now - g_st.lastReal).count());
++            g_st.lastReal = now;
++            ++g_st.frames;
++            printStats();
++            const auto t0 = Clock::now();
++            ps2_rollback::capture(*g_rt, g_snap);
++            g_st.captureMs += msSince(t0);
++            g_specLeft = g_frames;
++            g_spec.store(true, std::memory_order_release);
++            ps2_rollback::setIopOutputMuted(true);
++            ps2_rollback::setActiveCuts(specCuts(g_specLeft));
++            g_phaseStart = Clock::now();
++            return;
++        }
++        // A speculative frame ended.
++        if (--g_specLeft > 0)
++        {
++            ps2_rollback::setActiveCuts(specCuts(g_specLeft));
++            return;
++        }
++        g_st.specMs += msSince(g_phaseStart);
++        // Its picture is what the presenter shows; then back to the real timeline.
++        auto t0 = Clock::now();
++        g_rt->gs().latchHostPresentationFrame();
++        g_latchSeq.fetch_add(1, std::memory_order_acq_rel);
++        g_st.latchMs += msSince(t0);
++        t0 = Clock::now();
++        ps2_rollback::restore(*g_rt, g_snap);
++        g_st.restoreMs += msSince(t0);
++        g_spec.store(false, std::memory_order_release);
++        ps2_rollback::setIopOutputMuted(false);
++        ps2_rollback::setActiveCuts(g_hiddenCuts);
++        g_phaseStart = Clock::now();
++    }
++
++    std::vector<uint32_t> parsePcs(const char *text)
++    {
++        std::vector<uint32_t> pcs;
++        std::string s(text ? text : "");
++        size_t pos = 0;
++        while (pos < s.size())
++        {
++            size_t e = s.find(',', pos);
++            if (e == std::string::npos)
++                e = s.size();
++            const std::string item = s.substr(pos, e - pos);
++            if (!item.empty())
++                pcs.push_back(static_cast<uint32_t>(std::strtoul(item.c_str(), nullptr, 16)));
++            pos = e + 1;
++        }
++        return pcs;
++    }
++}
++
++namespace ps2_runahead
++{
++    int frames()
++    {
++        if (g_frames < 0)
++        {
++            const char *v = std::getenv("TEKKEN4_RUNAHEAD");
++            g_frames = v ? std::atoi(v) : 0;
++            if (g_frames < 0)
++                g_frames = 0;
++            if (g_frames > 4)
++                g_frames = 4;
++        }
++        return g_frames;
++    }
++
++    void install(PS2Runtime &runtime)
++    {
++        if (frames() <= 0)
++            return;
++        const char *net = std::getenv("TEKKEN4_NET");
++        const char *rb = std::getenv("TEKKEN4_RB_MODE");
++        if ((net && *net) || (rb && *rb && std::strcmp(rb, "measure") != 0))
++        {
++            std::fprintf(stderr, "[runahead] off: netplay / rollback mode already re-simulates (TEKKEN4_RUNAHEAD ignored)\n");
++            g_frames = 0;
++            return;
++        }
++        if (const char *v = std::getenv("TEKKEN4_RUNAHEAD_START"))
++            g_start = std::strtoull(v, nullptr, 10);
++        if (const char *v = std::getenv("TEKKEN4_RUNAHEAD_HIDDEN_CUTS"))
++            g_hiddenCuts = static_cast<uint32_t>(std::strtoul(v, nullptr, 16)) | ps2_rollback::CutPresent;
++        if (const char *v = std::getenv("TEKKEN4_RUNAHEAD_STATS"))
++            g_stats = v[0] == '1';
++        g_rt = &runtime;
++#ifdef PS2X_ROLLBACK_IOP_STATE
++        // The IOP is part of the snapshot: speculative frames run it muted and are rolled back with it.
++        ps2_rollback::setIncludeIop(true);
++#endif
++        EeScheduler &sched = runtime.eeScheduler();
++        if (const char *idle = std::getenv("TEKKEN4_RUNAHEAD_IDLE"))
++            sched.setIdleLoopPcs(parsePcs(idle));
++        if (!sched.hasBoundaryHook())
++            sched.setBoundaryHook([](const EeBoundaryInfo &) {}); // boundaries only exist with a hook
++        sched.setBoundaryWrapper(wrapper);
++        std::fprintf(stderr, "[runahead] installed: %d frame(s) from real frame %llu\n", g_frames,
++                     static_cast<unsigned long long>(g_start));
++        std::fflush(stderr);
++    }
++
++    bool active() noexcept
++    {
++        return g_active.load(std::memory_order_acquire);
++    }
++
++    uint64_t latchSequence() noexcept
++    {
++        return g_latchSeq.load(std::memory_order_acquire);
++    }
++
++    bool speculative() noexcept
++    {
++        return g_spec.load(std::memory_order_acquire);
++    }
++}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 3a33f7e..e9e30e0 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -12,6 +12,7 @@
+ #include "Kernel/Stubs/MPEG.h"
+ #include "ps2_host_backend.h"
+ #include "runtime/ps2_input_latency.h"
++#include "runtime/ps2_runahead.h"
+ #include "ps2_iop_host.h"
+ #include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_rollback_cuts.h"
+@@ -392,6 +393,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     static bool s_hasUploadedFrame = false;
+     static std::vector<uint8_t> s_scratch;
+     static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
++    static uint64_t s_lastRunaheadLatch = 0; // run-ahead latches on the game thread; copy each new picture
+ 
+     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
+     // A re-simulated frame (rollback) is never shown: keep the last live frame until the live frames go on.
+@@ -414,6 +416,11 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+             s_lastPresentationTick = currentTick;
+             s_hasLatchedInitialFrame = true;
+         }
++        if (!needsLatch && s_lastRunaheadLatch != ps2_runahead::latchSequence())
++        {
++            ps2_input_latency::onLatchBegin(currentTick); // run-ahead latched a speculative picture
++            s_lastRunaheadLatch = ps2_runahead::latchSequence();
++        }
+         GSSharedPresent::Frame frame{};
+         bool have = GSSharedPresent::Acquire(frame);
+         if (needsLatch)
+@@ -459,13 +466,16 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+         s_lastPresentationTick = currentTick;
+         s_hasLatchedInitialFrame = true;
+     }
+-    else if (s_hasUploadedFrame)
++    else if (s_hasUploadedFrame && s_lastRunaheadLatch == ps2_runahead::latchSequence())
+     {
+         outWidth = (s_lastWidth != 0u) ? s_lastWidth : FB_WIDTH;
+         outHeight = (s_lastHeight != 0u) ? s_lastHeight : DEFAULT_DISPLAY_HEIGHT;
+         return;
+     }
+ 
++    if (!needsLatch && s_lastRunaheadLatch != ps2_runahead::latchSequence())
++        ps2_input_latency::onLatchBegin(currentTick); // the speculative picture counts as this tick's latch
++    s_lastRunaheadLatch = ps2_runahead::latchSequence();
+     s_scratch.clear();
+     uint32_t width = 0u;
+     uint32_t height = 0u;
+@@ -2482,6 +2492,7 @@ void PS2Runtime::run()
+     std::atomic<bool> gameThreadFinished{false};
+     ps2_perf_stats::start(*this);
+ 
++    ps2_runahead::install(*this); // after the game overrides installed their boundary hooks
+     std::thread gameThread([&]()
+                            {
+         ThreadNaming::SetCurrentThreadName("GameThread");
+-- 
+2.55.0.windows.3
+

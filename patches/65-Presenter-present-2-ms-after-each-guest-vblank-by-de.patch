@@ -1,0 +1,41 @@
+From 25265d7785d935cf6ee01e3603db304784173918 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:57:35 +0100
+Subject: [PATCH 65/65] Presenter: present 2 ms after each guest vblank by
+ default
+
+Measured (Practice fight, beach, GL shared presentation): vblank -> swap
+median 6.9 -> 5.4 ms, p95 16.7 -> 7.1 ms; guest frames never shown 1.9 % ->
+0.4 %; menu key -> first changed frame median 19.6 -> 14.9 ms, p95 39.0 ->
+21.0 ms. TEKKEN4_PRESENT_PHASE_MS=<ms> sets the phase, a negative value
+restores the free-running clock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 85f4eb5..706adbe 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2604,12 +2604,13 @@ void PS2Runtime::run()
+         {
+             const uint64_t guestTick = m_eeScheduler->currentVSyncTick();
+             const auto now = std::chrono::steady_clock::now();
+-            // TEKKEN4_PRESENT_PHASE_MS: the paced present moves to <phase> ms after each guest VBlankStart
+-            // (docs/INPUT.md: the 16.667 ms clock otherwise latches at a random phase, ~8 ms late on average).
++            // The paced present happens TEKKEN4_PRESENT_PHASE_MS (default 2) after each guest VBlankStart; a
++            // negative value keeps the free-running 16.667 ms clock, which latched at a random phase (docs/INPUT.md
++            // of the Tekken 4 port: vblank -> swap p95 16.7 -> 7.1 ms, dropped guest frames 1.9 -> 0.4 %).
+             static const double s_phaseMs = []
+             {
+                 const char *v = std::getenv("TEKKEN4_PRESENT_PHASE_MS");
+-                return (v && *v) ? std::atof(v) : -1.0;
++                return (v && *v) ? std::atof(v) : 2.0;
+             }();
+             static uint64_t s_phaseTick = std::numeric_limits<uint64_t>::max();
+             if (s_phaseMs >= 0.0 && guestTick != s_phaseTick)
+-- 
+2.55.0.windows.3
+
