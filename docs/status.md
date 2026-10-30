@@ -3,6 +3,10 @@
 _Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
 
 ## Resume here
+- **USER TEST 2026-10-30 morning:** "game runs much smoother", "in-game music/sound better"; fullscreen hid the other
+  monitor -> patch 83 (borderless = undecorated monitor-sized window like T5DR, F11 or Alt+Enter; checked: 2560x1440 on
+  DISPLAY1, DISPLAY2 free, not iconified). Open: "now and then a few micro stutters" (where/when not known yet:
+  ask; candidates: menus present 12-20 ms apart, rare 25 ms frame, windowed compositor).
 - **NIGHT 2026-10-30 (7 agents), RESTART HERE.** All commits LOCAL on us-slus20328 (push to the private Swiss repo is
   blocked by the auto-mode classifier: the user pushes by hand, `git -C D:\tekken4-us push swiss us-slus20328`; never
   push to the public Lautreck repo any more). Patches now 01-74 (PS2Recomp t4-us = the same as commits). Done:
