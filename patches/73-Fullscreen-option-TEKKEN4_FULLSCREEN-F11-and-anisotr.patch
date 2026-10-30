@@ -1,0 +1,80 @@
+From 1787831d87c95e26210a052f8ceb348ee9e6dbb5 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 04:50:06 +0100
+Subject: [PATCH 73/73] Fullscreen option (TEKKEN4_FULLSCREEN, F11) and
+ anisotropic default 4
+
+TEKKEN4_FULLSCREEN=1|borderless starts in borderless fullscreen on the window's monitor,
+=exclusive in exclusive fullscreen at the monitor's resolution (no compositor in between);
+F11 toggles (Alt+Enter is not used: Enter is the pad's Start).
+TEKKEN4_ANISO defaults to 4: 8 taps cost the 4K step on the Arena stage 3.4 fps (56.6 vs
+60.0 with 4 or off, Practice fight, RTX 3090).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp |  2 +-
+ ps2xRuntime/src/lib/ps2_runtime.cpp          | 35 ++++++++++++++++++++
+ 2 files changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index bf7d3d0..dd58fca 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -1269,7 +1269,7 @@ struct GSHwBackend::Impl
+         if (outScale * ssaa > 8.0f)
+             ssaa = 8.0f / outScale;
+         const std::string an = env("TEKKEN4_ANISO");
+-        aniso = an.empty() ? 8 : (an == "off" ? 1 : std::atoi(an.c_str()));
++        aniso = an.empty() ? 4 : (an == "off" ? 1 : std::atoi(an.c_str()));
+         aniso = std::min(16, std::max(1, aniso));
+         hudSharp = env("TEKKEN4_HUD") == "sharp";
+         regionLinear = env("PS2X_GL_REGION_LINEAR") != "0";
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index bcd6872..6b2b509 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2566,6 +2566,41 @@ void PS2Runtime::run()
+ 
+     auto presentHostFrame = [this, &frameTex]()
+     {
++        // Tekken 4 port (PC graphics options, docs/GRAPHICS.md): TEKKEN4_FULLSCREEN=1 (or borderless) starts in
++        // borderless fullscreen on the window's monitor, =exclusive in exclusive fullscreen at the monitor's
++        // resolution (no desktop compositor in between); F11 toggles in either mode (Alt+Enter is not used: Enter
++        // is the pad's Start).
++        {
++            static int s_fullscreenMode = -1; // 0 off, 1 borderless, 2 exclusive
++            const auto toggle = []()
++            {
++                if (s_fullscreenMode == 2)
++                {
++                    if (!IsWindowFullscreen())
++                    {
++                        const int monitor = GetCurrentMonitor();
++                        SetWindowSize(GetMonitorWidth(monitor), GetMonitorHeight(monitor));
++                    }
++                    ToggleFullscreen();
++                    if (!IsWindowFullscreen())
++                        SetWindowSize(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT);
++                }
++                else
++                    ToggleBorderlessWindowed();
++            };
++            if (s_fullscreenMode < 0)
++            {
++                const char *value = std::getenv("TEKKEN4_FULLSCREEN");
++                const std::string mode = value ? value : "";
++                s_fullscreenMode = mode == "exclusive" ? 2 : (mode == "1" || mode == "borderless" || mode == "on") ? 1 : 0;
++                if (s_fullscreenMode != 0)
++                    toggle();
++                else
++                    s_fullscreenMode = 1; // F11 then toggles borderless fullscreen
++            }
++            if (IsKeyPressed(KEY_F11))
++                toggle();
++        }
+         uint32_t presentWidth = FB_WIDTH;
+         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+         Texture2D drawTex = frameTex;
+-- 
+2.55.0.windows.3
+

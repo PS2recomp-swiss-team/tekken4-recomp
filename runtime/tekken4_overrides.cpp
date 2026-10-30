@@ -175,6 +175,115 @@ namespace tekken4
     // 16-byte left blocks interleaved with 16-byte right blocks (flag byte 0x02 on every block).
     int32_t g_movieHist[2][2] = {};
     uint32_t g_movieAudioUnits = 0u;
+    // The audio sectors are 44.1 kHz stereo: 3584 frames per unit = 81.3 ms, and the 1519 units that carry audio
+    // last 123.4 s against 122.6 s of video (3675 pictures at 29.97 fps). Played as 48 kHz (before 2026-10-30) the
+    // sound ran 8.8 % fast and high, and the queue ran dry before the next unit arrived (gaps every unit: the
+    // "choppy" intro). The runtime hands the 29.97 fps pictures out on its 60.000 Hz vsync, i.e. at 30.000 fps
+    // (measured: 3643 pictures in 121.40 s), so the sound is consumed 30/29.97 faster too (44144 Hz, +1.7 cents) or
+    // it would fall 0.1 % (120 ms over the intro) behind the picture. TEKKEN4_MOVIE_AUDIO_HZ=<rate> overrides the
+    // source rate (48000 = the old behaviour, 44100 = without the vsync correction).
+    double g_movieSourceHz = 44100.0 * 30.0 / 29.97;
+    // The first unit is read (and its sound was queued) ~80 ms before the decoder hands out the first picture; the
+    // sound is held until then so it starts with the picture.
+    std::vector<int16_t> g_movieHeldPcm;
+    uint32_t g_movieServedAtOpen = 0u;
+    bool g_movieAudioStarted = false;
+
+    void pushMoviePcm(const int16_t *frames, size_t count)
+    {
+        if (!g_movieAudioStarted && ps2_stubs::mpegPicturesServed() != g_movieServedAtOpen)
+        {
+            g_movieAudioStarted = true;
+            if (!g_movieHeldPcm.empty())
+                ps2PushMoviePcm(g_movieHeldPcm.data(), g_movieHeldPcm.size() / 2u);
+            g_movieHeldPcm.clear();
+        }
+        if (!g_movieAudioStarted)
+            g_movieHeldPcm.insert(g_movieHeldPcm.end(), frames, frames + count * 2u);
+        else if (count != 0u)
+            ps2PushMoviePcm(frames, count);
+    }
+    // Streaming 4-point (Catmull-Rom) resampler, source rate -> the mixer's 48 kHz, continuous across units.
+    std::vector<int16_t> g_movieCarry; // stereo source frames not consumed yet (the first is the cubic's x[-1])
+    double g_moviePos = 1.0;           // read position in g_movieCarry frames
+    // TEKKEN4_MOVIE_SYNC=1: once a second while a movie plays (from the per-frame sound call), pictures handed out
+    // vs audio played (A/V offset) and gaps; at the close, picture intervals (stutter) and the totals.
+    bool g_movieSyncLog = false;
+    std::chrono::steady_clock::time_point g_movieT0{}, g_movieNextLog{};
+
+    void resetMovieResampler()
+    {
+        g_movieCarry.clear();
+        g_moviePos = 1.0;
+    }
+
+    void resampleMovieAudio(const int16_t *frames, size_t count, std::vector<int16_t> &out)
+    {
+        const bool first = g_movieCarry.empty();
+        if (first) // x[-1] = x[0] for the very first output
+            g_movieCarry.insert(g_movieCarry.end(), frames, frames + 2u);
+        g_movieCarry.insert(g_movieCarry.end(), frames, frames + count * 2u);
+        const double step = g_movieSourceHz / 48000.0;
+        const size_t have = g_movieCarry.size() / 2u;
+        while (g_moviePos + 2.0 < static_cast<double>(have))
+        {
+            const size_t i = static_cast<size_t>(g_moviePos);
+            const double t = g_moviePos - static_cast<double>(i);
+            for (size_t c = 0; c < 2u; ++c)
+            {
+                const double p0 = g_movieCarry[(i - 1u) * 2u + c], p1 = g_movieCarry[i * 2u + c];
+                const double p2 = g_movieCarry[(i + 1u) * 2u + c], p3 = g_movieCarry[(i + 2u) * 2u + c];
+                const double v = p1 + 0.5 * t * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)));
+                out.push_back(static_cast<int16_t>(std::clamp(v, -32768.0, 32767.0)));
+            }
+            g_moviePos += step;
+        }
+        const size_t drop = static_cast<size_t>(g_moviePos) - 1u; // keep x[-1] of the next output
+        g_movieCarry.erase(g_movieCarry.begin(), g_movieCarry.begin() + static_cast<std::ptrdiff_t>(drop * 2u));
+        g_moviePos -= static_cast<double>(drop);
+    }
+
+    // TEKKEN4_MOVIE_SYNC: A/V offset = movie time of the sound played (48 kHz frames the mixer took from the movie
+    // queue, scaled back to the 44.1 kHz source) minus that of the pictures sceMpegGetPicture handed out (29.97 fps);
+    // > 0 = sound ahead of the picture.
+    void movieSyncTick()
+    {
+        if (!g_movieSyncLog || g_movieSize == 0u)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < g_movieNextLog)
+            return;
+        g_movieNextLog = now + std::chrono::seconds(1);
+        const Ps2MoviePcmStats a = ps2MoviePcmStats();
+        const ps2_stubs::MpegServeStats v = ps2_stubs::mpegServeStats();
+        // both in movie time: the sound's 44.1 kHz frames played, the pictures at their 29.97 fps
+        const double audioS = static_cast<double>(a.played) / 48000.0 * g_movieSourceHz / 44100.0;
+        const double videoS = static_cast<double>(v.count) / 29.97;
+        RUNTIME_LOG("[tekken4] movie sync t=" << std::fixed << std::setprecision(2)
+                                              << std::chrono::duration<double>(now - g_movieT0).count() << " s: pictures "
+                                              << v.count << " (" << videoS << " s), audio played " << audioS
+                                              << " s, A-V " << (audioS - videoS) * 1000.0 << " ms, gaps "
+                                              << static_cast<double>(a.missing) / 48.0 << " ms, queued "
+                                              << static_cast<double>(a.queued) / 48.0 << " ms, units " << g_movieAudioUnits
+                                              << std::defaultfloat << "\n");
+    }
+
+    void movieSyncSummary()
+    {
+        if (!g_movieSyncLog)
+            return;
+        const Ps2MoviePcmStats a = ps2MoviePcmStats();
+        const ps2_stubs::MpegServeStats v = ps2_stubs::mpegServeStats();
+        RUNTIME_LOG("[tekken4] movie summary: " << v.count << " pictures in " << v.spanMs / 1000.0 << " s ("
+                                                << (v.spanMs > 0.0 ? (v.count - 1u) * 1000.0 / v.spanMs : 0.0)
+                                                << " fps), intervals <20/20-28/28-38/38-45/45-60/>=60 ms: "
+                                                << v.intervals[0] << "/" << v.intervals[1] << "/" << v.intervals[2] << "/"
+                                                << v.intervals[3] << "/" << v.intervals[4] << "/" << v.intervals[5]
+                                                << ", max " << v.maxIntervalMs << " ms; audio played "
+                                                << static_cast<double>(a.played) / 48000.0 << " s, gaps "
+                                                << static_cast<double>(a.missing) / 48.0 << " ms, " << g_movieAudioUnits
+                                                << " units\n");
+    }
 
     void decodeMovieAdpcm(const uint8_t *block, int32_t &hist1, int32_t &hist2, int16_t *out)
     {
@@ -201,8 +310,8 @@ namespace tekken4
         }
     }
 
-    // One interleave unit is 74.7 ms of 48 kHz stereo (128 block pairs x 28 samples). Queued onto the mixer
-    // clock, so a read-ahead ring plays out in guest time instead of as a burst.
+    // One interleave unit is 81.3 ms of 44.1 kHz stereo (128 block pairs x 28 samples), resampled to 48 kHz and
+    // queued onto the mixer clock, so a read-ahead ring plays out in guest time instead of as a burst.
     void queueMovieAudio(uint32_t unit)
     {
         if (!g_realSound || !openDisc())
@@ -230,9 +339,13 @@ namespace tekken4
                 pcm[(block * 28u + i) * 2u + 1u] = right[i];
             }
         }
-        ps2PushMoviePcm(pcm.data(), kFrames);
+        std::vector<int16_t> out;
+        out.reserve((static_cast<size_t>(kFrames * 48000.0 / g_movieSourceHz) + 8u) * 2u);
+        resampleMovieAudio(pcm.data(), kFrames, out);
+        pushMoviePcm(out.data(), out.size() / 2u);
         if (g_movieAudioUnits++ == 0u)
-            RUNTIME_LOG("[tekken4] movie audio: unit " << unit << " -> " << kFrames << " stereo frames\n");
+            RUNTIME_LOG("[tekken4] movie audio: unit " << unit << " -> " << kFrames << " stereo frames at "
+                                                       << g_movieSourceHz << " Hz -> " << out.size() / 2u << " at 48000 Hz\n");
     }
 
     void movieOpen(uint8_t *rdram, uint32_t sendAddr)
@@ -247,6 +360,13 @@ namespace tekken4
         g_movieHist[0][0] = g_movieHist[0][1] = g_movieHist[1][0] = g_movieHist[1][1] = 0;
         g_movieAudioUnits = 0u;
         ps2ClearMoviePcm();
+        resetMovieResampler();
+        g_movieHeldPcm.clear();
+        g_movieAudioStarted = false;
+        g_movieServedAtOpen = ps2_stubs::mpegPicturesServed();
+        (void)ps2_stubs::mpegServeStats(true);
+        g_movieT0 = std::chrono::steady_clock::now();
+        g_movieNextLog = g_movieT0 + std::chrono::seconds(1);
         RUNTIME_LOG("[tekken4] movie open: file 0x" << std::hex << args[2] << " sector " << std::dec << args[0]
                                                    << " size " << args[1] << " mode " << args[3]
                                                    << (args[3] != 0u ? " (mode 1 layout unverified)" : "") << "\n");
@@ -703,6 +823,11 @@ namespace tekken4
                 ++done;
                 std::memcpy(rdram + kDiscReadDoneFlag, &done, 4);
             }
+            if (function == kSoundFrameCall && g_movieSize != 0u)
+            {
+                pushMoviePcm(nullptr, 0u); // starts the held sound once the first picture is out
+                movieSyncTick();
+            }
             if (function == kSoundFrameCall && g_movieSize != 0u && replySize >= 16u)
             {
                 if (uint8_t *dst = getMemPtr(rdram, reply))
@@ -763,12 +888,15 @@ namespace tekken4
         {
             if (g_movieAudioUnits != 0u)
                 RUNTIME_LOG("[tekken4] movie audio closed after " << g_movieAudioUnits << " units\n");
+            movieSyncSummary();
             g_movieSize = 0u;
             g_movieAudioUnits = 0u;
             ps2ClearMoviePcm();
         }
         else if (function == kSoundFrameCall && g_movieSize != 0u && replySize >= 16u)
         {
+            pushMoviePcm(nullptr, 0u);
+            movieSyncTick();
             const uint32_t status = kStatusMovieAudioReady | (g_movieEnded ? kStatusMovieEnded : 0u);
             if (uint8_t *dst = getMemPtr(rdram, reply))
                 std::memcpy(dst + kFrameReplyStatusWord * 4u, &status, 4);
@@ -1222,8 +1350,64 @@ namespace tekken4
                                                        << " buffered " << w(0x01ccac58u) << "\n");
     }
 
+    // Progressive scan (480p). The video-mode setup FUN_0022a598(keep, index) takes entry <index> of the 6-byte table at
+    // 0x31e970 (interlace flag, omode, double-buffer psm, display FBP): 1/2 = NTSC interlaced (CT24 640x224 field
+    // buffer at FBP 0xd2), 3/4 = PAL, 5 = DTV480P (omode 0x50, CT24 640x448 display buffer at FBP 0x8c), 6/7 = 480p
+    // with a CT16 display buffer. It calls sceGsResetGraph(0, inter, omode, FFMD 1), sets the 480p flag (0x1ccafb4) and
+    // picks the vsync copy packets per index (table 0x2ce550): index 1 copies the even or odd lines of the 640x448
+    // back buffer into the 224-line field buffer depending on CSR.FIELD, index 5 copies the whole 448-line frame with
+    // the same packet every vsync. The US game only ever asks for 1 (the PAL release has a "Progressive Scan" menu entry
+    // for 5..7). TEKKEN4_PROGRESSIVE=1 (default) maps the NTSC interlaced entries to 5: full frames, no fields, no line
+    // doubling; =0 keeps interlaced FRAME mode. Netplay always uses the default so both peers run the same mode (the mode
+    // index, its flag and the copy packets live in RDRAM, which the desync check hashes).
+    constexpr uint32_t kVideoModeSetup = 0x0022a598u;
+    constexpr uint32_t kVideoModeProgressive = 5u;
+    bool g_progressive = true;
+    void videoModeSetup(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t index = getRegU32(ctx, 5);
+        if (g_progressive && (index == 1u || index == 2u))
+        {
+            static bool logged = false;
+            if (!logged)
+                RUNTIME_LOG("[tekken4] video mode " << index << " (NTSC interlaced) -> " << kVideoModeProgressive
+                                                    << " (480p progressive, TEKKEN4_PROGRESSIVE)\n");
+            logged = true;
+            SET_GPR_U32(ctx, 5, kVideoModeProgressive);
+        }
+        FUN_0022a598_0x22a598(rdram, ctx, runtime);
+    }
+    // sceGsResetGraph is the runtime's stub, which sets the display registers but not libgraph's sceGsGParam
+    // (0x3018c0: interlace, omode, ffmode, version; read by the game through sceGsGetGParam 0x289f20, which is game
+    // code). The ELF's data holds NTSC interlaced (1, 2, 1), so in 480p FUN_0022a370 still took the interlaced
+    // double-buffer setup (SMODE2 3, DH 895). Mode 0 (reset) stores them here like the real function.
+    constexpr uint32_t kSceGsResetGraph = 0x00289d90u;
+    constexpr uint32_t kSceGsGParam = 0x003018c0u;
+    void gsResetGraph(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t mode = getRegU32(ctx, 4) & 0xFFFFu, interlace = getRegU32(ctx, 5), omode = getRegU32(ctx, 6),
+                       ffmode = getRegU32(ctx, 7);
+        ps2_stubs::sceGsResetGraph(rdram, ctx, runtime);
+        if (mode == 0u)
+        {
+            const uint16_t values[3] = {static_cast<uint16_t>(interlace & 1u), static_cast<uint16_t>(omode & 0xFFu),
+                                        static_cast<uint16_t>(ffmode & 1u)};
+            std::memcpy(rdram + kSceGsGParam, values, sizeof values);
+        }
+    }
+
     void apply(PS2Runtime &runtime)
     {
+        {
+            const char *progressive = std::getenv("TEKKEN4_PROGRESSIVE");
+            const char *net = std::getenv("TEKKEN4_NET");
+            if (progressive && *progressive && !(net && *net))
+                g_progressive = std::strcmp(progressive, "0") != 0;
+            runtime.registerFunction(kVideoModeSetup, videoModeSetup);
+            runtime.registerFunction(kSceGsResetGraph, gsResetGraph);
+            RUNTIME_LOG("[tekken4] display: " << (g_progressive ? "progressive 480p" : "interlaced (TEKKEN4_PROGRESSIVE=0)")
+                                              << "\n");
+        }
         if (const char *sound = std::getenv("TEKKEN4_SOUND"); sound && std::strcmp(sound, "1") == 0)
         {
             const std::filesystem::path iso = findIsoPath();
@@ -1303,6 +1487,9 @@ namespace tekken4
                 }
             }).detach();
         }
+        if (const char *hz = std::getenv("TEKKEN4_MOVIE_AUDIO_HZ"); hz && std::atof(hz) >= 8000.0)
+            g_movieSourceHz = std::atof(hz);
+        g_movieSyncLog = std::getenv("TEKKEN4_MOVIE_SYNC") != nullptr;
         if (const char *movieLog = std::getenv("TEKKEN4_MOVIE_LOG"))
         {
             g_movieLogLeft = std::atoi(movieLog);

@@ -1,0 +1,708 @@
+From fe0f543ec961704c75fdbe4ed610a3bcb0c7992f Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 02:22:38 +0100
+Subject: [PATCH 71/73] Graphics options: internal resolution steps, FXAA/SSAA,
+ anisotropic, sharp 2D, window filter
+
+- Internal resolution like T5DR: TEKKEN4_INTERNAL_RES=lowest|native|1080p|1440p|4k|auto (scale = step height /
+  448, fractional scales are exact thanks to the sprite snapping); auto = the window monitor's step, at most 1080p
+  on integrated graphics (GL renderer string). PS2X_GS_HW_SCALE=<number or step> stays the raw override.
+- TEKKEN4_AA=off|fxaa (default)|ssaa<f>|msaa<n>|smaa, '+' combines: FXAA 3.11 quality on the presented picture;
+  SSAA draws the targets at scale * f and averages down (msaa<n> = n samples per pixel as SSAA: real MSAA is not
+  usable with the GS emulation's feedback reads); smaa falls back to FXAA.
+- TEKKEN4_ANISO=1..16 (default 8): filtered taps along the footprint's long axis for filtered 3D draws (no mipmaps).
+- CLAMP region modes are now filtered bilinear like the GS (were point sampled; PS2X_GL_REGION_LINEAR=0: old).
+- TEKKEN4_HUD=sharp: sharp bilinear for magnified 2D sprites of game textures (soft = the GS's bilinear).
+- Window: TEKKEN4_WINDOW_FILTER=area (default: area average when the picture is larger than the window, bilinear
+  when smaller)|sharp|bilinear|nearest; the shared picture was drawn nearest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../include/runtime/gs/gs_shared_present.h    |   2 +
+ ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp          |  20 +
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp  | 449 ++++++++++++++++--
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  68 +++
+ 4 files changed, 488 insertions(+), 51 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_shared_present.h b/ps2xRuntime/include/runtime/gs/gs_shared_present.h
+index 12aba1d..7637af5 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_shared_present.h
++++ b/ps2xRuntime/include/runtime/gs/gs_shared_present.h
+@@ -30,4 +30,6 @@ namespace GSSharedPresent
+     bool Active();
+     bool Acquire(Frame &frame);
+     void ShutdownHost();
++    // Tekken 4 port: desktop size of the monitor that shows the game window (else the primary one); false if unknown.
++    bool HostMonitorSize(uint32_t &width, uint32_t &height);
+ }
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+index 6396a9b..387febe 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+@@ -180,6 +180,25 @@ namespace GSSharedPresent
+         return true;
+     }
+ 
++    bool HostMonitorSize(uint32_t &width, uint32_t &height)
++    {
++        HWND window = nullptr;
++        {
++            std::lock_guard<std::mutex> lock(s_sharedMutex);
++            if (s_hostDc)
++                window = WindowFromDC(s_hostDc);
++        }
++        const HMONITOR monitor = window ? MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY)
++                                        : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
++        MONITORINFO info{};
++        info.cbSize = sizeof(info);
++        if (!monitor || !GetMonitorInfoA(monitor, &info))
++            return false;
++        width = static_cast<uint32_t>(info.rcMonitor.right - info.rcMonitor.left);
++        height = static_cast<uint32_t>(info.rcMonitor.bottom - info.rcMonitor.top);
++        return width != 0u && height != 0u;
++    }
++
+     void ShutdownHost()
+     {
+         std::lock_guard<std::mutex> lock(s_sharedMutex);
+@@ -648,5 +667,6 @@ namespace GSSharedPresent
+     bool Active() { return false; }
+     bool Acquire(Frame &) { return false; }
+     void ShutdownHost() {}
++    bool HostMonitorSize(uint32_t &, uint32_t &) { return false; }
+ }
+ #endif
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index 203d0c6..61105cb 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -202,9 +202,83 @@ uniform int uAte, uAtst, uAref;
+ uniform int uFailTint; // debug: GOW_GS_HW_FAILTINT paints alpha-test failing fragments magenta
+ uniform int uPass; // 0 = no alpha test, 1 = keep passing fragments, 2 = keep failing fragments
+ uniform float uBlendScale; // 1/128 style: alpha factor = min(a * scale, 1)
++// Tekken 4 port (PC graphics options, docs/GRAPHICS.md): uAnisoN = anisotropic taps (1 = off) for filtered 3D draws,
++// uSharp = sharp bilinear for 2D sprites of game textures magnified at the internal resolution, uRegionLinear = bilinear
++// filtering for the CLAMP region modes (the GS filters them; they were point sampled).
++uniform int uAnisoN, uSharp, uRegionLinear;
+ 
+ float clamp255(float v) { return clamp(floor(v), 0.0, 255.0); }
+ 
++// the host texel holding the centre of texel c (render targets are scaled): never on a texel edge
++vec4 hostTexel(vec2 c)
++{
++    vec2 host = vec2(textureSize(uTex, 0));
++    return textureLod(uTex, (floor(c * host / uTexSize + 0.001) + 0.5) / host, 0.0);
++}
++
++// one texture lookup at texel coordinate uv (0..255 per channel, not rounded); no implicit derivatives, so it can be
++// called in loops (anisotropic taps)
++vec4 fetchTexel(vec2 uv)
++{
++    vec4 t;
++    if (uReinterp != 0)
++    {
++        ivec2 ip = ivec2(floor(uv));
++        ip = ivec2(clamp(ip.x, 0, uTex0.z - 1), clamp(ip.y, 0, uTex0.w - 1));
++        t = reinterpretTexel(ip) * 255.0;
++    }
++    else if (uIndexed != 0)
++    {
++        if (uLinear != 0)
++        {
++            vec2 f = uv - 0.5;
++            ivec2 i0 = ivec2(floor(f));
++            vec2 w = f - floor(f);
++            t = mix(mix(indexedTexel(i0), indexedTexel(i0 + ivec2(1, 0)), w.x),
++                    mix(indexedTexel(i0 + ivec2(0, 1)), indexedTexel(i0 + ivec2(1, 1)), w.x), w.y) * 255.0;
++        }
++        else
++            t = indexedTexel(ivec2(floor(uv))) * 255.0;
++    }
++    else if (uZTex != 0)
++    {
++        vec2 zhost = vec2(textureSize(uTex, 0)); // depth is always point sampled: the host texel's centre
++        float zf = textureLod(uTex, (floor(uv * zhost / uTexSize + 0.001) + 0.5) / zhost, 0.0).r;
++        uint zi = uint(clamp(zf, 0.0, 1.0) * uZMax + 0.5);
++        if (uZTex == 16)
++        {
++            vec3 rgb = vec3(float(zi & 31u), float((zi >> 5) & 31u), float((zi >> 10) & 31u)) * 8.0;
++            t = vec4(rgb, ((zi & 0x8000u) != 0u) ? 128.0 : 0.0);
++        }
++        else
++            t = vec4(float(zi & 255u), float((zi >> 8) & 255u), float((zi >> 16) & 255u), 128.0);
++    }
++    else if (uLinear == 0 || uWrap.x >= 2 || uWrap.y >= 2)
++    {
++        bool region = uWrap.x >= 2 || uWrap.y >= 2;
++        ivec2 size = max(ivec2(uTexDim), ivec2(1));
++        if (region && uLinear != 0 && uRegionLinear != 0)
++        {
++            // bilinear like the GS: the region wrap applies to each of the four texels
++            vec2 f = uv - 0.5;
++            ivec2 i0 = ivec2(floor(f));
++            vec2 w = f - floor(f);
++            t = mix(mix(hostTexel(vec2(regionTexel(i0, size)) + 0.5), hostTexel(vec2(regionTexel(i0 + ivec2(1, 0), size)) + 0.5), w.x),
++                    mix(hostTexel(vec2(regionTexel(i0 + ivec2(0, 1), size)) + 0.5), hostTexel(vec2(regionTexel(i0 + ivec2(1, 1), size)) + 0.5), w.x), w.y) * 255.0;
++        }
++        else
++        {
++            // Tekken 4 port: region clamp/repeat picks the texel in the shader (point sampled)
++            if (region)
++                uv = vec2(regionTexel(ivec2(floor(uv)), size)) + 0.5;
++            t = hostTexel(uv) * 255.0;
++        }
++    }
++    else
++        t = textureLod(uTex, uv / uTexSize, 0.0) * 255.0;
++    return t;
++}
++
+ bool alphaPasses(float a)
+ {
+     int ai = int(a);
+@@ -247,6 +321,16 @@ void main()
+         // U = S/Q with the sign of Q: a negative Q flips both coordinates (the menu Kratos has one)
+         float q = (abs(vSTQ.z) < 1e-30) ? 1e-30 : vSTQ.z;
+         vec2 uv = (uFst != 0) ? vUV : (vSTQ.xy / q) * uTexDim;
++        // texel footprint of this host pixel (uniform control flow: uTme is a uniform)
++        vec2 duvx = dFdx(uv), duvy = dFdy(uv);
++        if (uSharp != 0)
++        {
++            // sharp bilinear: inside a magnified texel its own colour, a one host pixel wide blend at its edges
++            vec2 ppt = 1.0 / max(abs(duvx) + abs(duvy), vec2(1e-5)); // host pixels per texel
++            vec2 f = uv - 0.5;
++            vec2 fl = floor(f);
++            uv = fl + clamp((f - fl - 0.5) * max(ppt, vec2(1.0)) + 0.5, 0.0, 1.0) + 0.5;
++        }
+         // at the internal scale a pixel samples between the GS's sample points: keep it inside the range the GS samples
+         // (sprites), so filtering never reaches the texel beyond the primitive's last one
+         uv = clamp(uv, vUVClamp.xy, vUVClamp.zw);
+@@ -255,49 +339,20 @@ void main()
+         if (uLinear == 0)
+             uv = floor(uv * 16.0 + 0.015625) / 16.0;
+         vec4 t;
+-        if (uReinterp != 0)
+-        {
+-            ivec2 ip = ivec2(floor(uv));
+-            ip = ivec2(clamp(ip.x, 0, uTex0.z - 1), clamp(ip.y, 0, uTex0.w - 1));
+-            t = reinterpretTexel(ip) * 255.0;
+-        }
+-        else if (uIndexed != 0)
+-        {
+-            if (uLinear != 0)
+-            {
+-                vec2 f = uv - 0.5;
+-                ivec2 i0 = ivec2(floor(f));
+-                vec2 w = f - floor(f);
+-                t = mix(mix(indexedTexel(i0), indexedTexel(i0 + ivec2(1, 0)), w.x),
+-                        mix(indexedTexel(i0 + ivec2(0, 1)), indexedTexel(i0 + ivec2(1, 1)), w.x), w.y) * 255.0;
+-            }
+-            else
+-                t = indexedTexel(ivec2(floor(uv))) * 255.0;
+-        }
+-        else if (uZTex != 0)
+-        {
+-            vec2 zhost = vec2(textureSize(uTex, 0)); // depth is always point sampled: the host texel's centre
+-            float zf = texture(uTex, (floor(uv * zhost / uTexSize + 0.001) + 0.5) / zhost).r;
+-            uint zi = uint(clamp(zf, 0.0, 1.0) * uZMax + 0.5);
+-            if (uZTex == 16)
+-            {
+-                vec3 rgb = vec3(float(zi & 31u), float((zi >> 5) & 31u), float((zi >> 10) & 31u)) * 8.0;
+-                t = vec4(rgb, ((zi & 0x8000u) != 0u) ? 128.0 : 0.0);
+-            }
+-            else
+-                t = vec4(float(zi & 255u), float((zi >> 8) & 255u), float((zi >> 16) & 255u), 128.0);
+-        }
+-        else if (uLinear == 0 || uWrap.x >= 2 || uWrap.y >= 2)
+-        {
+-            // Tekken 4 port: region clamp/repeat picks the texel in the shader (point sampled, also when filtering is on)
+-            if (uWrap.x >= 2 || uWrap.y >= 2)
+-                uv = vec2(regionTexel(ivec2(floor(uv)), max(ivec2(uTexDim), ivec2(1)))) + 0.5;
+-            // the centre of the host texel (render targets are scaled) inside texel floor(u): never on a texel edge
+-            vec2 host = vec2(textureSize(uTex, 0));
+-            t = texture(uTex, (floor(uv * host / uTexSize + 0.001) + 0.5) / host) * 255.0;
++        float lx = length(duvx), ly = length(duvy);
++        if (uAnisoN > 1 && max(lx, ly) > 1.0)
++        {
++            // anisotropic filtering without mipmaps: up to uAnisoN filtered taps along the footprint's long axis
++            vec2 major = lx >= ly ? duvx : duvy;
++            int n = int(clamp(ceil(max(lx, ly) / max(min(lx, ly), 1e-4)), 1.0, float(uAnisoN)));
++            n = min(n, int(ceil(max(lx, ly))) + 1);
++            t = vec4(0.0);
++            for (int i = 0; i < n; ++i)
++                t += fetchTexel(clamp(uv + major * ((float(i) + 0.5) / float(n) - 0.5), vUVClamp.xy, vUVClamp.zw));
++            t /= float(n);
+         }
+         else
+-            t = texture(uTex, uv / uTexSize) * 255.0;
++            t = fetchTexel(uv);
+         t = floor(t + 0.5);
+         if (uRtTex24 == 1)
+             t.a = (uAem != 0 && t.r + t.g + t.b == 0.0) ? 0.0 : uTa0;
+@@ -426,6 +481,88 @@ void main()
+     float a = (uSrcOffset.z != 0) ? 128.0 / 255.0 : c.a;
+     oColor = vec4(c.rgb, (uSrcOffset.w != 0) ? min(1.0, a * 2.0) : a);
+ }
++)";
++
++    // Tekken 4 port (PC graphics options): post passes on the presented picture. Area resample (SSAA resolve, the
++    // internal picture rendered larger and averaged down) and FXAA 3.11 (quality preset, after Timothy Lottes).
++    const char *kAreaFs = R"(#version 430 core
++out vec4 oColor;
++uniform sampler2D uSrc;
++uniform vec2 uRatio; // source pixels per output pixel
++void main()
++{
++    vec2 size = vec2(textureSize(uSrc, 0));
++    vec2 lo = floor(gl_FragCoord.xy) * uRatio;
++    ivec2 n = ivec2(clamp(ceil(uRatio) + 1.0, 1.0, 8.0));
++    vec4 sum = vec4(0.0);
++    for (int y = 0; y < n.y; ++y)
++        for (int x = 0; x < n.x; ++x)
++            sum += textureLod(uSrc, (lo + (vec2(x, y) + 0.5) * uRatio / vec2(n)) / size, 0.0);
++    oColor = vec4(sum.rgb / float(n.x * n.y), 1.0);
++}
++)";
++    const char *kFxaaFs = R"(#version 430 core
++out vec4 oColor;
++uniform sampler2D uSrc;
++uniform float uSubpix;
++float luma(vec3 c) { return sqrt(dot(c, vec3(0.299, 0.587, 0.114))); }
++float lumaAt(vec2 uv) { return luma(textureLod(uSrc, uv, 0.0).rgb); }
++const float kQuality[12] = float[](1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0);
++void main()
++{
++    vec2 inv = 1.0 / vec2(textureSize(uSrc, 0));
++    vec2 uv = gl_FragCoord.xy * inv;
++    vec3 cC = textureLod(uSrc, uv, 0.0).rgb;
++    float lC = luma(cC);
++    float lD = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(0, -1)).rgb), lU = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(0, 1)).rgb);
++    float lL = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(-1, 0)).rgb), lR = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(1, 0)).rgb);
++    float lMin = min(lC, min(min(lD, lU), min(lL, lR))), lMax = max(lC, max(max(lD, lU), max(lL, lR)));
++    float range = lMax - lMin;
++    if (range < max(0.0312, lMax * 0.125)) { oColor = vec4(cC, 1.0); return; }
++    float lDL = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(-1, -1)).rgb), lUR = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(1, 1)).rgb);
++    float lUL = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(-1, 1)).rgb), lDR = luma(textureLodOffset(uSrc, uv, 0.0, ivec2(1, -1)).rgb);
++    float lDU = lD + lU, lLR = lL + lR, lLc = lDL + lUL, lDc = lDL + lDR, lRc = lDR + lUR, lUc = lUR + lUL;
++    float edgeH = abs(-2.0 * lL + lLc) + abs(-2.0 * lC + lDU) * 2.0 + abs(-2.0 * lR + lRc);
++    float edgeV = abs(-2.0 * lU + lUc) + abs(-2.0 * lC + lLR) * 2.0 + abs(-2.0 * lD + lDc);
++    bool horz = edgeH >= edgeV;
++    float l1 = horz ? lD : lL, l2 = horz ? lU : lR;
++    float g1 = l1 - lC, g2 = l2 - lC;
++    bool steep1 = abs(g1) >= abs(g2);
++    float gScaled = 0.25 * max(abs(g1), abs(g2));
++    float stepLen = horz ? inv.y : inv.x;
++    float lLocal;
++    if (steep1) { stepLen = -stepLen; lLocal = 0.5 * (l1 + lC); } else lLocal = 0.5 * (l2 + lC);
++    vec2 cuv = uv;
++    if (horz) cuv.y += stepLen * 0.5; else cuv.x += stepLen * 0.5;
++    vec2 off = horz ? vec2(inv.x, 0.0) : vec2(0.0, inv.y);
++    vec2 uv1 = cuv - off, uv2 = cuv + off;
++    float e1 = lumaAt(uv1) - lLocal, e2 = lumaAt(uv2) - lLocal;
++    bool r1 = abs(e1) >= gScaled, r2 = abs(e2) >= gScaled;
++    if (!r1) uv1 -= off;
++    if (!r2) uv2 += off;
++    for (int i = 2; i < 12 && !(r1 && r2); ++i)
++    {
++        if (!r1) e1 = lumaAt(uv1) - lLocal;
++        if (!r2) e2 = lumaAt(uv2) - lLocal;
++        r1 = abs(e1) >= gScaled;
++        r2 = abs(e2) >= gScaled;
++        if (!r1) uv1 -= off * kQuality[i];
++        if (!r2) uv2 += off * kQuality[i];
++    }
++    float d1 = horz ? uv.x - uv1.x : uv.y - uv1.y, d2 = horz ? uv2.x - uv.x : uv2.y - uv.y;
++    bool dir1 = d1 < d2;
++    float edgeLen = d1 + d2;
++    float pixOff = -min(d1, d2) / edgeLen + 0.5;
++    bool correct = ((dir1 ? e1 : e2) < 0.0) != (lC < lLocal);
++    float finalOff = correct ? pixOff : 0.0;
++    float lAvg = (1.0 / 12.0) * (2.0 * (lDU + lLR) + lLc + lRc);
++    float s1 = clamp(abs(lAvg - lC) / range, 0.0, 1.0);
++    float s2 = (-2.0 * s1 + 3.0) * s1 * s1;
++    finalOff = max(finalOff, s2 * s2 * uSubpix);
++    vec2 fuv = uv;
++    if (horz) fuv.y += finalOff * stepLen; else fuv.x += finalOff * stepLen;
++    oColor = vec4(textureLod(uSrc, fuv, 0.0).rgb, 1.0);
++}
+ )";
+ 
+     // CLUT fetch: output pixel i is the raw word of CLUT source pixel i (its x, y in uCoords) as the game's GS memory holds
+@@ -541,6 +678,19 @@ struct GSHwBackend::Impl
+ 
+     GLuint tableTex = 0, paletteTex = 0;
+     GLuint presentProgram = 0, presentVao = 0, presentFbo = 0, presentTex = 0;
++    // Tekken 4 port (PC graphics options, docs/GRAPHICS.md)
++    float outScale = 1.0f;      // the presented picture's scale (internal resolution step)
++    float ssaa = 1.0f;          // supersampling: targets drawn at outScale * ssaa, averaged down when presented
++    bool fxaa = false;          // FXAA on the presented picture
++    float fxaaSubpix = 0.5f;
++    int aniso = 1;              // anisotropic taps for filtered 3D draws
++    bool hudSharp = false;      // sharp bilinear for magnified 2D sprites
++    bool regionLinear = true;   // bilinear for the CLAMP region modes
++    GLuint areaProgram = 0, fxaaProgram = 0;
++    GLint locAreaSrc = -1, locAreaRatio = -1, locFxaaSrc = -1, locFxaaSubpix = -1;
++    GLint locAnisoN = -1, locSharp = -1, locRegionLinear = -1;
++    GLuint postFbo[2] = {}, postTex[2] = {};
++    uint32_t postW[2] = {}, postH[2] = {};
+     GLint locPresentSrc = -1, locPresentOffset = -1, locPresentEdge = -1, locPresentLineRep = -1;
+     uint32_t presentW = 0, presentH = 0;
+     GLuint shuffleProgram = 0, shuffleVao = 0, shuffleVbo = 0;
+@@ -923,6 +1073,7 @@ struct GSHwBackend::Impl
+         locReinterp = loc("uReinterp"); locDate = loc("uDate"); locDatm = loc("uDatm"); locDest = loc("uDest"); locZTex = loc("uZTex"); locZMax = loc("uZMax"); locTables = loc("uTables"); locRtColor = loc("uRtColor"); locPalette = loc("uPalette");
+         locTexFmt = loc("uTexFmt"); locTexFmt2 = loc("uTexFmt2"); locRtFmt = loc("uRtFmt"); locRtFmt2 = loc("uRtFmt2");
+         locTex0 = loc("uTex0"); locRtPx = loc("uRtPx");
++        locAnisoN = loc("uAnisoN"); locSharp = loc("uSharp"); locRegionLinear = loc("uRegionLinear");
+         locIndexed = loc("uIndexed"); locLinear = loc("uLinear"); locWrap = loc("uWrap"); locRegion = loc("uRegion"); locIdxPalette = loc("uIdxPalette");
+         locSwBlend = loc("uSwBlend"); locColClamp = loc("uColClamp"); locAbcd = loc("uAbcd"); locFix = loc("uFix");
+         locZAlias = loc("uZAlias"); locZAliasWrite = loc("uZAliasWrite"); locZAliasMax = loc("uZAliasMax");
+@@ -982,14 +1133,150 @@ struct GSHwBackend::Impl
+                 g.BindVertexArray(vao);
+             }
+         }
+-        if (const char *s = std::getenv("PS2X_GS_HW_SCALE"))
+-            scale = std::max(1.0f, static_cast<float>(std::atof(s)));
+-        std::fprintf(stderr, "[gs-hw] render-target renderer ready, scale %.2f (%s)\n", scale,
+-                     reinterpret_cast<const char *>(g.GetString(kRenderer)));
++        {
++            const GLuint pv = compile(GSGL::kVertexShader, kPresentVs);
++            const auto link = [&](const char *fs, GLuint &program)
++            {
++                const GLuint f = compile(GSGL::kFragmentShader, fs);
++                if (!pv || !f)
++                    return;
++                program = g.CreateProgram();
++                g.AttachShader(program, pv);
++                g.AttachShader(program, f);
++                g.LinkProgram(program);
++            };
++            link(kAreaFs, areaProgram);
++            link(kFxaaFs, fxaaProgram);
++            if (areaProgram)
++                locAreaSrc = g.GetUniformLocation(areaProgram, "uSrc"), locAreaRatio = g.GetUniformLocation(areaProgram, "uRatio");
++            if (fxaaProgram)
++                locFxaaSrc = g.GetUniformLocation(fxaaProgram, "uSrc"), locFxaaSubpix = g.GetUniformLocation(fxaaProgram, "uSubpix");
++        }
++        const char *renderer = reinterpret_cast<const char *>(g.GetString(kRenderer));
++        readGraphicsSettings(renderer ? renderer : "");
++        std::fprintf(stderr, "[gs-hw] render-target renderer ready, scale %.3f (%s)\n", scale, renderer ? renderer : "?");
+         initialized = true;
+         return true;
+     }
+ 
++    // Tekken 4 port: integrated graphics (they share the processor's memory and power): Auto stays at 1080p there
++    static bool integratedGpu(const std::string &renderer)
++    {
++        std::string r = renderer;
++        for (char &c : r)
++            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++        if (r.find("intel") != std::string::npos)
++            return r.find("arc(tm) a") == std::string::npos && r.find("arc a") == std::string::npos &&
++                   r.find("arc(tm) b") == std::string::npos && r.find("arc b") == std::string::npos;
++        if (r.find("radeon") != std::string::npos)
++            return r.find(" rx ") == std::string::npos && r.find("pro ") == std::string::npos &&
++                   (r.find("radeon(tm) graphics") != std::string::npos || r.find("radeon graphics") != std::string::npos ||
++                    r.find("vega") != std::string::npos || r.find("m graphics") != std::string::npos);
++        return r.find("llvmpipe") != std::string::npos || r.find("gdi generic") != std::string::npos ||
++               r.find("microsoft basic") != std::string::npos;
++    }
++
++    // Tekken 4 port: the PC graphics options (docs/GRAPHICS.md). Internal resolution (T5DR's steps): the render
++    // targets are drawn at the scale that gives the step's picture height for the game's 448-line picture
++    // (TEKKEN4_INTERNAL_RES=lowest|native|1080p|1440p|4k|auto; PS2X_GS_HW_SCALE=<number or step> overrides it).
++    // Fractional scales are exact: sprites are snapped to the PS2 pixels they cover, so strips stay seamless.
++    void readGraphicsSettings(const std::string &renderer)
++    {
++        const auto env = [](const char *name) -> std::string
++        {
++            const char *v = std::getenv(name);
++            std::string s = v ? v : "";
++            for (char &c : s)
++                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++            return s;
++        };
++        const char *linesEnv = std::getenv("PS2X_GS_NATIVE_LINES");
++        const float lines = linesEnv ? std::max(1.0f, static_cast<float>(std::atof(linesEnv))) : 448.0f;
++        std::string spec = env("PS2X_GS_HW_SCALE");
++        if (spec.empty())
++            spec = env("TEKKEN4_INTERNAL_RES");
++        if (spec.empty())
++            spec = "native";
++        const bool integrated = integratedGpu(renderer);
++        std::string step = spec;
++        float value = 1.0f;
++        char *end = nullptr;
++        const double number = std::strtod(spec.c_str(), &end);
++        if (end && end != spec.c_str() && (*end == '\0' || *end == 'x'))
++            value = static_cast<float>(number), step = "custom";
++        else if (spec == "lowest")
++            value = 0.5f;
++        else if (spec == "lower")
++            value = 0.75f;
++        else if (spec == "native")
++            value = 1.0f;
++        else if (spec == "720p")
++            value = 720.0f / lines;
++        else if (spec == "1080p")
++            value = 1080.0f / lines;
++        else if (spec == "1440p")
++            value = 1440.0f / lines;
++        else if (spec == "4k" || spec == "2160p")
++            value = 2160.0f / lines;
++        else if (spec == "auto")
++        {
++            // the step that fits the screen of the game window: the largest of 1080p/1440p/4K not taller than the
++            // monitor's desktop, else Native; at most 1080p on integrated graphics
++            uint32_t mw = 0, mh = 0;
++            if (!GSSharedPresent::HostMonitorSize(mw, mh))
++                mh = 1080;
++            uint32_t pick = mh >= 2160u ? 2160u : mh >= 1440u ? 1440u : mh >= 1080u ? 1080u : 0u;
++            if (integrated && pick > 1080u)
++                pick = 1080u;
++            value = pick ? static_cast<float>(pick) / lines : 1.0f;
++            step = pick == 2160u ? "auto (4k)" : pick ? "auto (" + std::to_string(pick) + "p)" : "auto (native)";
++            std::fprintf(stderr, "[gs-hw] internal resolution auto: monitor %ux%u, %s graphics\n", mw, mh,
++                         integrated ? "integrated" : "discrete");
++        }
++        else
++            std::fprintf(stderr, "[gs-hw] unknown internal resolution '%s', native\n", spec.c_str());
++        outScale = std::min(8.0f, std::max(0.5f, value));
++        // anti-aliasing: off | fxaa | ssaa<f> | msaa<n> (n samples per pixel = SSAA at sqrt(n) per axis: true MSAA
++        // cannot be used with the GS emulation, see docs/GRAPHICS.md) | smaa (FXAA here); '+' combines, e.g. ssaa2+fxaa
++        std::string aa = env("TEKKEN4_AA");
++        if (aa.empty())
++            aa = "fxaa";
++        fxaa = false;
++        ssaa = 1.0f;
++        size_t pos = 0;
++        while (pos <= aa.size())
++        {
++            const size_t plus = aa.find('+', pos);
++            const std::string tok = aa.substr(pos, plus == std::string::npos ? std::string::npos : plus - pos);
++            if (tok == "fxaa" || tok == "smaa")
++                fxaa = true;
++            else if (tok.rfind("ssaa", 0) == 0)
++                ssaa = static_cast<float>(std::atof(tok.c_str() + 4));
++            else if (tok.rfind("msaa", 0) == 0)
++                ssaa = std::sqrt(static_cast<float>(std::atof(tok.c_str() + 4)));
++            else if (tok != "off" && tok != "none" && !tok.empty())
++                std::fprintf(stderr, "[gs-hw] unknown anti-aliasing '%s'\n", tok.c_str());
++            if (plus == std::string::npos)
++                break;
++            pos = plus + 1;
++        }
++        ssaa = std::min(4.0f, std::max(1.0f, ssaa));
++        if (const char *sub = std::getenv("TEKKEN4_FXAA_SUBPIX"))
++            fxaaSubpix = std::min(1.0f, std::max(0.0f, static_cast<float>(std::atof(sub))));
++        if (outScale * ssaa > 8.0f)
++            ssaa = 8.0f / outScale;
++        const std::string an = env("TEKKEN4_ANISO");
++        aniso = an.empty() ? 8 : (an == "off" ? 1 : std::atoi(an.c_str()));
++        aniso = std::min(16, std::max(1, aniso));
++        hudSharp = env("TEKKEN4_HUD") == "sharp";
++        regionLinear = env("PS2X_GL_REGION_LINEAR") != "0";
++        scale = outScale * ssaa;
++        std::fprintf(stderr, "[gs-hw] graphics: internal resolution %s (scale %.3f), anti-aliasing %s%s (ssaa %.2f), "
++                             "anisotropic %dx, HUD %s, region filtering %s\n",
++                     step.c_str(), outScale, fxaa ? "fxaa" : "", ssaa > 1.0f ? (fxaa ? "+ssaa" : "ssaa") : (fxaa ? "" : "off"),
++                     ssaa, aniso, hudSharp ? "sharp" : "soft", regionLinear ? "bilinear" : "point");
++    }
++
+     // forward page tables of every texture format + inverse tables (in-page pixel index -> in-page x/y) of the render-target
+     // formats, in one R16UI texture (2048 entries per row)
+     void buildTables()
+@@ -2872,6 +3159,15 @@ struct GSHwBackend::Impl
+             Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s, needX0, needX1, needLo, needHi) : textureFor(s);
+             g.Uniform1i(locIndexed, indexed ? 1 : 0);
+             g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
++            {
++                // Tekken 4 port (PC options): anisotropic taps for filtered 3D draws; sharp 2D for sprites of game
++                // textures (not render targets: the full-screen copies stay 1:1)
++                const bool tri3d = s.prim.type == GS_PRIM_TRIANGLE || s.prim.type == GS_PRIM_TRISTRIP || s.prim.type == GS_PRIM_TRIFAN;
++                const bool gameTexture = !src && !rsrc && !zsrc;
++                g.Uniform1i(locAnisoN, (tri3d && s.linearFilter && gameTexture) ? aniso : 1);
++                g.Uniform1i(locSharp, (hudSharp && s.prim.type == GS_PRIM_SPRITE && s.linearFilter && gameTexture && scale > 1.0f) ? 1 : 0);
++                g.Uniform1i(locRegionLinear, regionLinear ? 1 : 0);
++            }
+             // Tekken 4 port: the CLAMP modes as they are (region modes for every texture source but depth/reinterpret)
+             const bool regionOk = !zsrc && !rsrc;
+             const GLint wms = static_cast<GLint>(c.clamp & 3u), wmt = static_cast<GLint>((c.clamp >> 2) & 3u);
+@@ -3471,10 +3767,9 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+             }
+     }
+     const uint32_t outW = static_cast<uint32_t>(std::ceil(w * d.scale)), outH = static_cast<uint32_t>(std::ceil(h * d.scale));
+-    frame.width = outW;
+-    frame.height = outH;
+-    if (!shared)
+-        frame.pixels.assign(static_cast<size_t>(outW) * outH * 4u, 0u);
++    // Tekken 4 port: the picture handed to the window is at the internal resolution step (outScale); with SSAA the
++    // targets are drawn larger (scale = outScale * ssaa) and averaged down here
++    const uint32_t finalW = static_cast<uint32_t>(std::ceil(w * d.outScale)), finalH = static_cast<uint32_t>(std::ceil(h * d.outScale));
+     const Api &g = d.gl();
+     g.PixelStorei(kPackAlignment, 1);
+     static const int depthDumpAt = std::getenv("GOW_GS_HW_DEPTHDUMP") ? std::atoi(std::getenv("GOW_GS_HW_DEPTHDUMP")) : -1;
+@@ -3537,6 +3832,8 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+         // complete without mipmaps (glCopyImageSubData refuses incomplete textures)
+         g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
+         g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
++        g.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
++        g.TexParameteri(kTexture2D, kTextureWrapT, kClampToEdge);
+         g.BindFramebuffer(kFramebuffer, d.presentFbo);
+         g.FramebufferTexture2D(kFramebuffer, kColorAttachment0, kTexture2D, d.presentTex, 0);
+         d.presentW = outW;
+@@ -3613,13 +3910,63 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+     g.ClearColor(0.f, 0.f, 0.f, 1.f);
+     g.Clear(kColorBufferBit);
+     g.ColorMask(kTrue, kTrue, kTrue, kTrue);
++    // Tekken 4 port (PC graphics options): FXAA on the composed picture, then the SSAA resolve to the output size
++    GLuint finalTex = d.presentTex, finalFbo = d.presentFbo;
++    uint32_t curW = outW, curH = outH;
++    const auto postPass = [&](int slot, uint32_t pw, uint32_t ph, GLuint program, const std::function<void()> &uniforms)
++    {
++        if (!d.postFbo[slot])
++            g.GenFramebuffers(1, &d.postFbo[slot]);
++        if (!d.postTex[slot] || d.postW[slot] != pw || d.postH[slot] != ph)
++        {
++            if (d.postTex[slot])
++                g.DeleteTextures(1, &d.postTex[slot]);
++            g.GenTextures(1, &d.postTex[slot]);
++            g.BindTexture(kTexture2D, d.postTex[slot]);
++            g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), pw, ph, 0, kRgba, kUnsignedByte, nullptr);
++            g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
++            g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
++            g.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
++            g.TexParameteri(kTexture2D, kTextureWrapT, kClampToEdge);
++            g.BindFramebuffer(kFramebuffer, d.postFbo[slot]);
++            g.FramebufferTexture2D(kFramebuffer, kColorAttachment0, kTexture2D, d.postTex[slot], 0);
++            d.postW[slot] = pw;
++            d.postH[slot] = ph;
++        }
++        g.BindFramebuffer(kFramebuffer, d.postFbo[slot]);
++        g.Viewport(0, 0, pw, ph);
++        g.Disable(kBlend);
++        g.UseProgram(program);
++        g.BindVertexArray(d.presentVao);
++        g.ActiveTexture(kTexture0);
++        g.BindTexture(kTexture2D, finalTex);
++        uniforms();
++        g.DrawArrays(kTriangles, 0, 3);
++        finalTex = d.postTex[slot];
++        finalFbo = d.postFbo[slot];
++        curW = pw;
++        curH = ph;
++    };
++    if (d.fxaa && d.fxaaProgram)
++        postPass(0, curW, curH, d.fxaaProgram, [&] { g.Uniform1i(d.locFxaaSrc, 0); g.Uniform1f(d.locFxaaSubpix, d.fxaaSubpix); });
++    if ((finalW != curW || finalH != curH) && d.areaProgram)
++    {
++        const float rx = static_cast<float>(curW) / static_cast<float>(finalW), ry = static_cast<float>(curH) / static_cast<float>(finalH);
++        postPass(1, finalW, finalH, d.areaProgram, [&] { g.Uniform1i(d.locAreaSrc, 0); g.Uniform2f(d.locAreaRatio, rx, ry); });
++    }
++    g.BindVertexArray(d.vao);
++    g.UseProgram(d.program);
++    frame.width = curW;
++    frame.height = curH;
+     if (shared)
+     {
+         // GOW-Port: zero-copy presentation: GPU copy into a texture shared with the host window, no pixels returned.
+-        GSGL::PublishSharedTexture(g, d.presentTex, outW, outH, d.presentCount, fbp, fbp, request.vsyncTick);
++        GSGL::PublishSharedTexture(g, finalTex, curW, curH, d.presentCount, fbp, fbp, request.vsyncTick);
+         return PresentationFrame{};
+     }
+-    g.ReadPixels(0, 0, outW, outH, kRgba, kUnsignedByte, frame.pixels.data());
++    frame.pixels.assign(static_cast<size_t>(curW) * curH * 4u, 0u);
++    g.BindFramebuffer(kFramebuffer, finalFbo);
++    g.ReadPixels(0, 0, curW, curH, kRgba, kUnsignedByte, frame.pixels.data());
+     // the frontend packs presentation rows with a fixed 640 pixel stride
+     if (frame.width < 640u)
+     {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 706adbe..bcd6872 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -381,6 +381,48 @@ namespace
+     }
+ }
+ 
++// Tekken 4 port (PC graphics options, docs/GRAPHICS.md): how the presented picture is scaled to the window.
++// TEKKEN4_WINDOW_FILTER=area (default: area average when the picture is larger than the window, i.e. supersampling at
++// a high internal resolution; bilinear when it is smaller) | sharp (sharp bilinear when enlarging: crisp pixels, smooth
++// steps) | bilinear | nearest. A plain bilinear/nearest shrink of a 4K picture into a smaller window aliases and shimmers.
++static const char *kWindowFilterFs = R"(#version 330
++in vec2 fragTexCoord;
++in vec4 fragColor;
++uniform sampler2D texture0;
++uniform vec2 srcSize;
++uniform vec2 dstSize;
++uniform int mode; // 0 area/bilinear, 1 sharp, 2 bilinear, 3 nearest
++out vec4 finalColor;
++void main()
++{
++    vec2 ratio = srcSize / dstSize; // picture pixels per window pixel
++    vec2 p = fragTexCoord * srcSize;
++    if (mode == 3)
++    {
++        finalColor = texelFetch(texture0, ivec2(clamp(floor(p), vec2(0.0), srcSize - 1.0)), 0);
++        return;
++    }
++    if (mode == 0 && (ratio.x > 1.0 || ratio.y > 1.0))
++    {
++        ivec2 n = ivec2(clamp(ceil(ratio) + 1.0, 1.0, 8.0));
++        vec2 lo = p - 0.5 * ratio;
++        vec4 sum = vec4(0.0);
++        for (int y = 0; y < n.y; ++y)
++            for (int x = 0; x < n.x; ++x)
++                sum += texture(texture0, (lo + (vec2(x, y) + 0.5) * ratio / vec2(n)) / srcSize);
++        finalColor = vec4(sum.rgb / float(n.x * n.y), 1.0);
++        return;
++    }
++    if (mode == 1)
++    {
++        vec2 f = p - 0.5;
++        vec2 fl = floor(f);
++        p = fl + clamp((f - fl - 0.5) * max(1.0 / ratio, vec2(1.0)) + 0.5, 0.0, 1.0) + 0.5;
++    }
++    finalColor = texture(texture0, p / srcSize);
++}
++)";
++
+ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight, Texture2D *drawTex = nullptr)
+ {
+     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
+@@ -2552,7 +2594,33 @@ void PS2Runtime::run()
+             dstWidth,
+             dstHeight};
+         if (drawTex.id != 0u)
++        {
++            static Shader s_filter{};
++            static int s_filterMode = -1, s_locSrc = -1, s_locDst = -1, s_locMode = -1;
++            if (s_filterMode < 0)
++            {
++                const char *value = std::getenv("TEKKEN4_WINDOW_FILTER");
++                const std::string name = value ? value : "area";
++                s_filterMode = name == "sharp" ? 1 : name == "bilinear" ? 2 : name == "nearest" ? 3 : 0;
++                s_filter = LoadShaderFromMemory(nullptr, kWindowFilterFs);
++                s_locSrc = GetShaderLocation(s_filter, "srcSize");
++                s_locDst = GetShaderLocation(s_filter, "dstSize");
++                s_locMode = GetShaderLocation(s_filter, "mode");
++            }
++            SetTextureFilter(drawTex, TEXTURE_FILTER_BILINEAR);
++            const bool useFilter = s_filter.id != 0u && IsShaderValid(s_filter);
++            if (useFilter)
++            {
++                const float src[2] = {srcWidth, srcHeight}, dst[2] = {dstWidth, dstHeight};
++                SetShaderValue(s_filter, s_locSrc, src, SHADER_UNIFORM_VEC2);
++                SetShaderValue(s_filter, s_locDst, dst, SHADER_UNIFORM_VEC2);
++                SetShaderValue(s_filter, s_locMode, &s_filterMode, SHADER_UNIFORM_INT);
++                BeginShaderMode(s_filter);
++            }
+             DrawTexturePro(drawTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
++            if (useFilter)
++                EndShaderMode();
++        }
+         if (m_debugUiInitialized && m_debugUiDrawCallback)
+         {
+             m_debugUiDrawCallback(*this, m_debugUiUserData);
+-- 
+2.55.0.windows.3
+

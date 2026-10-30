@@ -1,0 +1,112 @@
+From 7bc5e78be5f4d67a500553caf5e81979bacb6420 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 02:06:40 +0100
+Subject: [PATCH 70/73] GL backend: sprites cover exactly the GS's pixels at
+ any scale (no upscale seams)
+
+Sprite quads are snapped to the PS2 pixels the GS covers, [ceil(x0), ceil(x1)), with the
+texture coordinates continued linearly to those edges (same sampling function, 1x unchanged:
+static menu frames identical). Tekken 4's full-screen copy draws 64 px columns from 64k to
+64k + 63.5; at scale n the host pixels of [63.5, 64) stayed unpainted: a black line every 64
+PS2 pixels through the whole picture and HUD at 3x..5x. Shared strip sides are now looked up
+among the last 48 sprites of the batch (a copy drawn as columns of bands has its left
+neighbour several sprites back), so the clamp opens on interior seams.
+PS2X_GL_SPRITE_SNAP=0: old path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 56 ++++++++++++++++++--
+ 1 file changed, 53 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index cc42f67..203d0c6 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -569,6 +569,20 @@ struct GSHwBackend::Impl
+         uint64_t batch = ~0ull;   // batchSerial when it was added
+     } lastSprite;
+     uint64_t batchSerial = 0; // counts flushes of the pending batch
++    // Tekken 4 port: the last sprites of the pending batch (shared strip sides, see the sprite path in draw)
++    static constexpr size_t kRecentSprites = 48;
++    std::vector<LastSprite> recentSprites;
++    uint64_t recentBatch = ~0ull;
++    // PS2X_GL_SPRITE_SNAP=0: sprites keep their fractional edges and only the previous sprite's side opens (old path)
++    static bool spriteSnap()
++    {
++        static const bool on = []
++        {
++            const char *value = std::getenv("PS2X_GL_SPRITE_SNAP");
++            return !(value && *value == '0');
++        }();
++        return on;
++    }
+ 
+     // Opens the clamp on the side two consecutive sprites share when the texture continues across it: same extent and
+     // texel range along the seam, touching screen edges, equal texel coordinate at the seam.
+@@ -2351,8 +2365,8 @@ struct GSHwBackend::Impl
+             GSDrawState sp = s; // sprites carry texel UVs, never STQ
+             (void)sp;
+             GSVertex corner[4] = {a, a, a, a};
+-            const float xs[2] = {a.x, c.x}, ys[2] = {a.y, c.y};
+-            const float us[2] = {u0, u1}, vs[2] = {v0, v1};
++            float xs[2] = {a.x, c.x}, ys[2] = {a.y, c.y};
++            float us[2] = {u0, u1}, vs[2] = {v0, v1};
+             // the texel coordinates of the first and last pixel the GS covers (pixel n is covered when lo <= n < hi);
+             // a sprite covering no pixel on the GS keeps its whole range
+             const auto sampled = [](float p0, float p1, float t0, float t1, float &lo, float &hi)
+@@ -2373,8 +2387,41 @@ struct GSHwBackend::Impl
+             // would repeat the last sampled texel for the host pixels between the two strips' GS sample points (a step at
+             // every seam). The side a sprite shares with the previous sprite of the batch, with the texture continuing
+             // across it, is left open on both sprites; outer edges stay clamped.
++            // Tekken 4 port (upscaling): the quad covers exactly the PS2 pixels the GS covers, [ceil(x0), ceil(x1)), with
++            // the texture coordinates continued linearly to those edges (the same sampling function, so 1x is unchanged).
++            // The game's full-screen copy draws 64 px columns from X 64k to 64k + 63.5: the GS covers 64k .. 64k + 63 and
++            // the next column starts at 64k + 64, but at scale n the host pixels of [63.5, 64) of every column stayed
++            // unpainted (the black line every 64 PS2 pixels at 3x..5x). Like PCSX2's "align sprite" at native pixel edges.
++            if (spriteSnap())
++            {
++                const auto snap = [](float p[2], float t[2], float offset)
++                {
++                    const float q0 = std::ceil(p[0] - offset) + offset, q1 = std::ceil(p[1] - offset) + offset;
++                    if (p[1] != p[0])
++                    {
++                        const float k = (t[1] - t[0]) / (p[1] - p[0]);
++                        const float t0 = t[0] + (q0 - p[0]) * k, t1 = t[0] + (q1 - p[0]) * k;
++                        t[0] = t0;
++                        t[1] = t1;
++                    }
++                    p[0] = q0;
++                    p[1] = q1;
++                };
++                snap(xs, us, s.context.xyoffset.ofx / 16.0f);
++                snap(ys, vs, s.context.xyoffset.ofy / 16.0f);
++            }
+             SpriteEdges cur{{xs[0], xs[1]}, {ys[0], ys[1]}, {us[0], us[1]}, {vs[0], vs[1]}};
+-            if (lastSprite.batch == batchSerial && lastSprite.end == pending.size() && lastSprite.end >= 6)
++            // The sides shared with an earlier sprite of the batch (not only the previous one: a copy drawn as columns of
++            // bands has its left neighbour several sprites back) are opened on both.
++            if (recentBatch != batchSerial)
++                recentSprites.clear(), recentBatch = batchSerial;
++            if (spriteSnap())
++            {
++                for (size_t i = recentSprites.size(); i-- > 0;)
++                    if (recentSprites[i].end >= 6 && recentSprites[i].end <= pending.size())
++                        openSharedSide(recentSprites[i].edges, cur, &pending[recentSprites[i].end - 6], cu0, cu1, cv0, cv1);
++            }
++            else if (lastSprite.batch == batchSerial && lastSprite.end == pending.size() && lastSprite.end >= 6)
+                 openSharedSide(lastSprite.edges, cur, &pending[lastSprite.end - 6], cu0, cu1, cv0, cv1);
+             const int order[6][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 0}, {1, 1}, {0, 1}};
+             for (const auto &o : order)
+@@ -2392,6 +2439,9 @@ struct GSHwBackend::Impl
+                 pending.back().cv1 = cv1;
+             }
+             lastSprite = {cur, pending.size(), batchSerial};
++            if (recentSprites.size() >= kRecentSprites)
++                recentSprites.erase(recentSprites.begin());
++            recentSprites.push_back(lastSprite);
+             (void)corner;
+         }
+         ++stats.draws, PS2_PERF_COUNT(glDraws);
+-- 
+2.55.0.windows.3
+

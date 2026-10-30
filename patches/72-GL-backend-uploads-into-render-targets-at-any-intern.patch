@@ -1,0 +1,114 @@
+From 513f69756457114edb25850dbce3e9d43ec55b06 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 02:43:09 +0100
+Subject: [PATCH 72/73] GL backend: uploads into render targets at any internal
+ scale (intro movie above native)
+
+Host->local transfers into a render target were only written into the target at scale 1, so the
+intro movie (its pictures are uploaded straight into the back buffer) stayed black above native.
+At other scales the upload goes into a native-size staging texture of the target and the region,
+widened by one texel up and left (the movie arrives as 16 px columns), is blitted filtered into
+the scaled target. TEKKEN4_AA also accepts 1/on (fxaa) and 0 (off) for the launcher.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 50 +++++++++++++++++---
+ 1 file changed, 44 insertions(+), 6 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index 61105cb..bf7d3d0 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -637,6 +637,9 @@ void main()
+         // log forgets: Tekken's stage textures are uploaded once into a 640x448 target of the menus (fbp 290) and the
+         // per-frame character uploads pushed them out of the log, so the fight sampled the stage from that old picture.
+         std::vector<uint64_t> blockUploadSeq;
++        // Tekken 4 port: at an internal scale other than 1, uploads into the target go through a native-size staging
++        // texture and are blitted (filtered) into the scaled target (the intro movie uploads its pictures this way)
++        GLuint stageTex = 0, stageFbo = 0;
+     };
+ 
+     uint32_t pageRowsFor(uint32_t psm)
+@@ -1248,13 +1251,13 @@ struct GSHwBackend::Impl
+         {
+             const size_t plus = aa.find('+', pos);
+             const std::string tok = aa.substr(pos, plus == std::string::npos ? std::string::npos : plus - pos);
+-            if (tok == "fxaa" || tok == "smaa")
++            if (tok == "fxaa" || tok == "smaa" || tok == "1" || tok == "on")
+                 fxaa = true;
+             else if (tok.rfind("ssaa", 0) == 0)
+                 ssaa = static_cast<float>(std::atof(tok.c_str() + 4));
+             else if (tok.rfind("msaa", 0) == 0)
+                 ssaa = std::sqrt(static_cast<float>(std::atof(tok.c_str() + 4)));
+-            else if (tok != "off" && tok != "none" && !tok.empty())
++            else if (tok != "off" && tok != "none" && tok != "0" && !tok.empty())
+                 std::fprintf(stderr, "[gs-hw] unknown anti-aliasing '%s'\n", tok.c_str());
+             if (plus == std::string::npos)
+                 break;
+@@ -1343,6 +1346,8 @@ struct GSHwBackend::Impl
+     {
+         const Api &g = gl();
+         if (t.fbo) g.DeleteFramebuffers(1, &t.fbo);
++        if (t.stageFbo) g.DeleteFramebuffers(1, &t.stageFbo);
++        if (t.stageTex) g.DeleteTextures(1, &t.stageTex);
+         if (t.color) g.DeleteTextures(1, &t.color);
+         if (t.depth) g.DeleteTextures(1, &t.depth);
+         t = {};
+@@ -2036,7 +2041,7 @@ struct GSHwBackend::Impl
+         // pixel (x, y) maps to target pixel (x, y) for any width up to the target's, like draws (target())
+         if (!t || t->psm != dpsm || t->fbw < c.bitbltbuf.dbw)
+             return nullptr;
+-        if (c.trxpos.dsax + c.trxreg.rrw > t->pxW || c.trxpos.dsay + c.trxreg.rrh > t->pxH || scale != 1.0f)
++        if (c.trxpos.dsax + c.trxreg.rrw > t->pxW || c.trxpos.dsay + c.trxreg.rrh > t->pxH)
+             return nullptr;
+         return t;
+     }
+@@ -2064,9 +2069,42 @@ struct GSHwBackend::Impl
+                     line[x] = GSCpuInternal::Rgba5551ToRgba8888(static_cast<uint16_t>(line[x]));
+         }
+         const Api &g = gl();
+-        g.BindTexture(kTexture2D, t->color);
+-        g.PixelStorei(kUnpackAlignment, 4);
+-        g.TexSubImage2D(kTexture2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), w, h, kRgba, kUnsignedByte, pixels.data());
++        if (scale == 1.0f)
++        {
++            g.BindTexture(kTexture2D, t->color);
++            g.PixelStorei(kUnpackAlignment, 4);
++            g.TexSubImage2D(kTexture2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), w, h, kRgba, kUnsignedByte, pixels.data());
++        }
++        else
++        {
++            // Tekken 4 port (internal resolution): into the native-size staging copy, then a filtered blit of the region
++            // into the scaled target. The region is widened by one texel up and left so the previous strip's last
++            // texels are filtered against the new neighbours (the movie arrives as 16 px wide columns).
++            if (!t->stageTex)
++            {
++                g.GenTextures(1, &t->stageTex);
++                g.BindTexture(kTexture2D, t->stageTex);
++                g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), t->pxW, t->pxH, 0, kRgba, kUnsignedByte, nullptr);
++                g.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
++                g.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
++                g.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
++                g.TexParameteri(kTexture2D, kTextureWrapT, kClampToEdge);
++                g.GenFramebuffers(1, &t->stageFbo);
++                g.BindFramebuffer(kFramebuffer, t->stageFbo);
++                g.FramebufferTexture2D(kFramebuffer, kColorAttachment0, kTexture2D, t->stageTex, 0);
++            }
++            g.BindTexture(kTexture2D, t->stageTex);
++            g.PixelStorei(kUnpackAlignment, 4);
++            g.TexSubImage2D(kTexture2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), w, h, kRgba, kUnsignedByte, pixels.data());
++            const uint32_t sx0 = x0 ? x0 - 1u : 0u, sy0 = y0 ? y0 - 1u : 0u;
++            const auto host = [&](uint32_t v) { return static_cast<GLint>(std::lround(static_cast<double>(v) * scale)); };
++            g.BindFramebuffer(0x8CA8 /*READ_FRAMEBUFFER*/, t->stageFbo);
++            g.BindFramebuffer(0x8CA9 /*DRAW_FRAMEBUFFER*/, t->fbo);
++            g.Disable(kScissorTest);
++            g.BlitFramebuffer(static_cast<GLint>(sx0), static_cast<GLint>(sy0), static_cast<GLint>(x0 + w), static_cast<GLint>(y0 + h),
++                              host(sx0), host(sy0), host(x0 + w), host(y0 + h), kColorBufferBit, scale > 1.0f ? kLinear : kNearest);
++            g.BindFramebuffer(kFramebuffer, t->fbo);
++        }
+         t->usedW = std::max(t->usedW, x0 + w);
+         t->usedH = std::max(t->usedH, y0 + h);
+         ++t->version;
+-- 
+2.55.0.windows.3
+
