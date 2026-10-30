@@ -102,6 +102,9 @@ namespace t4net
     struct Stats
     {
         uint64_t packetsOut = 0, packetsIn = 0, simDropped = 0, bytesOut = 0, resends = 0;
+        // UDP payload bytes for the counted packets, including tags, excluding IP/UDP headers.
+        // Out counts sendTo attempts before simulated loss; in follows packetsIn (no HELLO/REJECT).
+        uint64_t bytesIn = 0;
     };
     Stats stats();
 

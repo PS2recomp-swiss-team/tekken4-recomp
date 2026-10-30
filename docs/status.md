@@ -3,6 +3,10 @@
 _Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps the US line)_
 
 ## Resume here
+- **NETSUMMARY payload bytes (2026-10-30, source copy only):** expose the existing sent-byte count and add received bytes
+  for the counted packets, including authentication tags, excluding IP/UDP headers. Sends count before simulated loss;
+  receives follow packetsIn (HELLO/REJECT excluded). Wire format, protocol version, scheduling and state hashes unchanged.
+  Neither compiled nor run. A real build and game run must verify the summaries; rollback self-test must still pass with 0 mismatches.
 - **Start with `docs/PROJECT_MAP.md` and `docs/SESSIONS.md` (2026-10-30).** Entries below are a log, newest first; older ones describe the PAL build and old paths (F:, H:).
 - **PABLO'S WORK REVIEWED 2026-10-30 (Lautreck/PS2Recomp `ebae275`, swiss `us-iso`).** His patches 33-44 are not our 33-44: only 01-32
   are shared. Taken: **patch 87** (from his 44: readback fallback after 90 latches without a picture; a short forced readback fails) and

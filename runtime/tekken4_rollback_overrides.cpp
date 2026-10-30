@@ -1517,7 +1517,8 @@ namespace tekken4_rollback
                      "; rollback ms (restore+resim) p50 %.2f p90 %.2f max %.2f; stalls %" PRIu64 " (%.0f ms); time sync %" PRIu64
                      " (%.0f ms); rebases %" PRIu64 " (%.0f ms); displayed frame ms p50 %.1f p90 %.1f p99 %.1f; rtt %d ms (%d)"
                      " delay %d; hashes compared %u mismatches %u; packets out %" PRIu64 " in %" PRIu64 " sim-dropped %" PRIu64
-                     " resends %" PRIu64 "; capture avg %.2f restore avg %.2f hash avg %.2f ms; peer %s"
+                     " resends %" PRIu64 "; payload bytes out %" PRIu64 " in %" PRIu64
+                     "; capture avg %.2f restore avg %.2f hash avg %.2f ms; peer %s"
                      "; lockstep waits %" PRIu64 " (%.0f ms) lock delay %d; early rollbacks %" PRIu64 " (wait for the vblank %.0f ms)"
                      "; lazy captures skipped %" PRIu64 "; frames > 20 ms %" PRIu64 " > 34 ms %" PRIu64 " of %" PRIu64
                      "; rdram pages per capture %.0f per restore %.0f%s\n",
@@ -1527,7 +1528,8 @@ namespace tekken4_rollback
                      g_np.stallMs, g_np.corrections, g_np.correctionMs, g_np.rebases, g_np.rebaseMs,
                      percentile(g_np.frameTimes, 0.5), percentile(g_np.frameTimes, 0.9), percentile(g_np.frameTimes, 0.99), rtt,
                      samples, g_np.delay, t4net::hashesCompared(), t4net::hashMismatches(), st.packetsOut, st.packetsIn,
-                     st.simDropped, st.resends, g_np.captures ? g_np.captureMs / static_cast<double>(g_np.captures) : 0.0,
+                     st.simDropped, st.resends, st.bytesOut, st.bytesIn,
+                     g_np.captures ? g_np.captureMs / static_cast<double>(g_np.captures) : 0.0,
                      g_np.rollbacks ? g_np.restoreMs / static_cast<double>(g_np.rollbacks) : 0.0,
                      g_np.hashes ? g_np.hashMs / static_cast<double>(g_np.hashes) : 0.0,
                      t4net::peerLost() ? (t4net::lostReason() ? t4net::lostReason() : "lost") : "ok",

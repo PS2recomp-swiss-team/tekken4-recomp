@@ -480,6 +480,7 @@ namespace t4net
             std::memcpy(&h, p, sizeof h);
             if (h.magic != kMagic)
                 return;
+            const int payloadBytes = n; // keep the authentication tag in the byte count
             std::lock_guard<std::mutex> lk(s.mu);
             if (h.ver != kNetVersion)
             {
@@ -611,6 +612,7 @@ namespace t4net
                 s.peer = from;
             }
             s.st.packetsIn++;
+            s.st.bytesIn += static_cast<uint64_t>(payloadBytes);
             s.lastRxMs = nowMs();
             if (h.type == PKT_BYE)
             {
