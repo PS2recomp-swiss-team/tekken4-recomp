@@ -1,9 +1,24 @@
 # Status
 
-_Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
+_Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps the US line)_
 
 ## Resume here
 - **Start with `docs/PROJECT_MAP.md` and `docs/SESSIONS.md` (2026-10-30).** Entries below are a log, newest first; older ones describe the PAL build and old paths (F:, H:).
+- **PABLO'S WORK REVIEWED 2026-10-30 (Lautreck/PS2Recomp `ebae275`, swiss `us-iso`).** His patches 33-44 are not our 33-44: only 01-32
+  are shared. Taken: **patch 87** (from his 44: readback fallback after 90 latches without a picture; a short forced readback fails) and
+  netplay in one-step builds (from `us-iso` `aff2a4c`: `stage_generated.cmd` stages `tekken4_net*`, `build_game.ps1` writes
+  `t4net_build.txt`). Before this, one-step builds and the mini releases built from them had no netplay. **Build id fix:** `t4_buildid.py`
+  hashed the tree's commit (different on every PC, because `build_game.ps1` commits the patches at build time) and raw bytes (checkout
+  CRLF vs zip); it now hashes the tree id and normalises line endings. Not taken: his no-interlace (PAL addresses, CT16 row 6; ours is
+  `TEKKEN4_PROGRESSIVE`, CT24 row 5), the rest of 44 (our patch 49 does it). Later, if 16:9 is wanted: his patch 39 + the emitter part of 43.
+  Open: compiler version and flags are still not in the build id (his finding; players compile locally, so this can desync).
+  Evidence: ps2x_tests 482/482; rollback self-test 202 rollbacks, 447 frames, 0 mismatches (`logs\perf\rb\fb_p2c`); fallback forced with a
+  temporary hook: message once, picture back (`logs\perf\rb\fb_noshared`); one-step build from a clean export (`D:\t4-net87`, 362 s) and
+  `D:\tekken4-fork-fb` give the same id `f86af146de8e9636` with different commits; pair from that build at RTT 150, 3 % loss, 6000 frames:
+  199 hashes, 0 mismatches, fps window 59.3/59.7 (`logs\net\n87`). Still one PC. `out\runtime` of the default tree was not rebuilt.
+- **`swiss` IS PUBLIC (checked 2026-10-30 without login: `visibility=public`), although `CLAUDE.md` calls it private.** Its `us-slus20328`
+  holds T5DR-derived code (`runtime/tekken4_net.*`, `launcher/COPIED_FROM_T5DR.txt`). `lobby/` is not there. Owner decision pending;
+  do not put `lobby/` there until it is private.
 - **MINI RELEASE 2026-10-30 (dist\T4-Mini-Release-2026-10-30, local only):** Tekken4.cmd (resolution menu, fullscreen
   J/E/N) + Launcher.cmd + LIESMICH.txt, exe = patches 01-84 + unlock override (all fighters unlocked by default,
   runtime/tekken4_unlock_overrides.cpp: callback 0x1ec350 -> 1). Intro movie fixed at high resolution (patch 84:

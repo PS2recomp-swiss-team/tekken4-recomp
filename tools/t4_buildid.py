@@ -39,6 +39,12 @@ def sha1_file(path, chunk=1 << 20):
     return h.hexdigest()
 
 
+def sha1_text(path):
+    """Line endings do not change the code: a git checkout (autocrlf) and a release zip must give the same id."""
+    with open(path, "rb") as f:
+        return hashlib.sha1(f.read().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def net_version():
     text = open(os.path.join(ROOT, "runtime", "tekken4_net.h"), encoding="utf-8").read()
     m = re.search(r"kNetVersion\s*=\s*(\d+)", text)
@@ -55,14 +61,14 @@ def code_id(src):
     # uncommitted edits of the tree, without the staged generated code / game modules (hashed below)
     h.update(b"diff:" + git(src, "diff", "HEAD", "--", ".", ":(exclude)ps2xRuntime/src/runner"))
     for path in sorted(glob.glob(os.path.join(ROOT, "patches", "*.patch"))):
-        h.update(b"patch:" + os.path.basename(path).encode() + b":" + sha1_file(path).encode())
+        h.update(b"patch:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     for pattern in ("*.toml", "*.csv"):
         for path in sorted(glob.glob(os.path.join(ROOT, "config", pattern))):
-            h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_file(path).encode())
+            h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     runner = os.path.join(src, "ps2xRuntime", "src", "runner")
     for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h"):
         for path in sorted(glob.glob(os.path.join(runner, pattern))):
-            h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_file(path).encode())
+            h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     return h.hexdigest()
 
 

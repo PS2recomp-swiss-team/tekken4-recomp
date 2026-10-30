@@ -20,7 +20,7 @@ and future games**.
 |---|---|
 | `D:\tekken4-us` | **The US project: work here.** Worktree of branch `us-slus20328`, with `game\`, `external\`, `ghidra\`, `logs\`, `generated\`, the ISO |
 | `D:\tekken4-recomp` | main checkout on `master` (PAL), no game data; leave it alone |
-| `D:\tekken4-fork-ps2recomp` | PS2Recomp, branch `t4-us` = `eb8688b` + the 77 patches in `patches\` (01-86 with gaps) as commits; the default build tree (`out\runtime`) |
+| `D:\tekken4-fork-ps2recomp` | PS2Recomp, branch `t4-us` = `eb8688b` + the 78 patches in `patches\` (01-87 with gaps) as commits; the default build tree (`out\runtime`) |
 | `D:\tekken4-fork-{gfx,input,movie,music,net,net2,perf,rb,smooth,unlock}` | finished agents' worktrees, all merged into `t4-us`, safe to remove (user decides). `net2` has the current netplay build (`out\net`) |
 | `D:\t4-e2e`, `D:\t4-kollege-test`, `D:\t4-stackcheck*` | test folders of the player build (5.4 GB each for the first two), safe to remove (user decides) |
 | `dist\T4-Mini-Release-2026-10-30` | the user's local test build (Tekken4.cmd, Launcher.cmd). Contains the recompiled exe: **never share or commit** |

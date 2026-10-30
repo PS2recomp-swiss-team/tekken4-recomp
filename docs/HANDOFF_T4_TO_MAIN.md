@@ -17,7 +17,7 @@ user can paste it into a new session. `docs/SESSIONS.md` already has the split a
 
 ## Where things are
 - Work in `D:\tekken4-us` (git worktree, branch `us-slus20328`). `D:\tekken4-recomp` = `master`, the colleague's PAL line: leave it.
-- PS2Recomp: `D:\tekken4-fork-ps2recomp`, branch `t4-us` = upstream `eb8688b` + the 77 patches in `patches\`. Verified: applying
+- PS2Recomp: `D:\tekken4-fork-ps2recomp`, branch `t4-us` = upstream `eb8688b` + the 78 patches in `patches\`. Verified: applying
   them to a clean clone gives exactly this tree.
 - Remotes: `swiss` = PS2recomp-swiss-team/tekken4-recomp (**private**, new work goes here); `origin` = Lautreck/tekken4-recomp (**PUBLIC**).
 - Pushes to `swiss` were blocked by the auto-mode classifier: the user pushes by hand. 3+ local commits are not pushed yet.
