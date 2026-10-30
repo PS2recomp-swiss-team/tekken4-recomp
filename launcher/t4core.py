@@ -42,24 +42,24 @@ STEPS = [  # (script step name, short label shown in the Build tab)
 ]
 
 # ------------------------------------------------------------------ settings
-RESOLUTIONS = [  # key, label, PS2X_GS_HW_SCALE (None = decided from the screen)
-    ("native", "Native (640x448)", 1),
-    ("2x", "2x (1280x896, about 1080p)", 2),
-    ("3x", "3x (1920x1344, about 1440p)", 3),
-    ("4x", "4x (2560x1792)", 4),
-    ("5x", "5x (3200x2240, 4K+)", 5),
-    ("auto", "Auto (from your screen, at most 3x)", None),
+RESOLUTIONS = [  # key = TEKKEN4_INTERNAL_RES value (docs/GRAPHICS.md), label; the same steps as T5DR's launcher
+    ("lowest", "Lowest (0.5x, weak graphics)", None),
+    ("native", "Native (640x448)", None),
+    ("1080p", "1080p", None),
+    ("1440p", "1440p", None),
+    ("4k", "4K", None),
+    ("auto", "Auto (your screen's step, at most 1080p on integrated graphics)", None),
 ]
 RES_LABEL = {k: l for k, l, _ in RESOLUTIONS}
 
 DEFAULTS = {
     "iso": "",                 # path of the player's Tekken 4 (USA) image
-    "resolution": "native",    # experimental above native (thin lines at 64x32 pixel borders)
+    "resolution": "auto",      # TEKKEN4_INTERNAL_RES
     "fullscreen": False,       # needs a runtime that knows TEKKEN4_FULLSCREEN (checked in the exe)
     "sound": True,             # TEKKEN4_SOUND
     "debug_panel": False,      # PS2X_DEBUG_PANEL (F1 in the game)
-    "aa": False,               # TEKKEN4_AA       - another agent adds it; TODO values once docs/GRAPHICS.md exists
-    "progressive": False,      # TEKKEN4_PROGRESSIVE - same
+    "aa": True,                # TEKKEN4_AA: on = fxaa (the runtime's default), off = off
+    "progressive": True,       # TEKKEN4_PROGRESSIVE: the game's own 480p mode (no interlace lines)
     "runtime_exe": "",         # optional: use this ps2EntryRunner.exe instead of the one the build made
     "last_run": None,          # {"time":..., "seconds":..., "exit":..., "ok":bool, "log":path, "note":...}
     "last_build": None,        # {"time":..., "ok":bool, "dry_run":bool, "log":path}
@@ -107,17 +107,9 @@ def screen_height():
         return 1080
 
 
-def auto_scale(height=None):
-    """Largest scale whose picture (448 x scale) fits the screen, at most 3 (higher is more experimental)."""
-    h = height or screen_height()
-    return max(1, min(3, h // 448))
-
-
-def hw_scale(s):
-    for k, _, sc in RESOLUTIONS:
-        if k == s["resolution"]:
-            return sc if sc is not None else auto_scale()
-    return 1
+def internal_res(s):
+    """TEKKEN4_INTERNAL_RES value; the runtime picks the scale (auto = the screen's step, see docs/GRAPHICS.md)."""
+    return s["resolution"] if s.get("resolution") in RES_LABEL else "native"
 
 
 # ------------------------------------------------------------------ finding things
@@ -480,7 +472,8 @@ def game_env(s, exe=None):
     env["PS2X_GS_THREADS"] = "auto"
     env["PS2X_DEBUG_PANEL"] = "1" if s.get("debug_panel") else "0"
     env["TEKKEN4_SOUND"] = "1" if s.get("sound") else "0"
-    env["PS2X_GS_HW_SCALE"] = str(hw_scale(s))
+    env["TEKKEN4_INTERNAL_RES"] = internal_res(s)
+    env.pop("PS2X_GS_HW_SCALE", None)    # the raw override would win over the step
     iso = effective_iso(s)
     if iso:
         env["TEKKEN4_ISO"] = iso
@@ -488,10 +481,10 @@ def game_env(s, exe=None):
     names, sup = graphics_env_names(), graphics_support(exe)
     if sup["fullscreen"] and s.get("fullscreen"):
         env[names["fullscreen"]] = "1"
-    if sup["aa"] and s.get("aa"):
-        env[names["aa"]] = "1"            # TODO: values/levels once docs/GRAPHICS.md exists
-    if sup["progressive"] and s.get("progressive"):
-        env[names["progressive"]] = "1"
+    if sup["aa"]:
+        env[names["aa"]] = "fxaa" if s.get("aa") else "off"
+    if sup["progressive"]:
+        env[names["progressive"]] = "1" if s.get("progressive") else "0"
     return env
 
 
@@ -538,9 +531,10 @@ class GameRun:
         os.makedirs(LAUNCHER_LOG_DIR, exist_ok=True)
         env = game_env(self.s, self.exe)
         self.log = open(LAST_RUN_LOG, "wb")
-        head = ("T4 launcher start %s\nexe: %s (%s)\ncwd: %s\nargs: %s\nscale %s sound %s debug %s iso %s\n----\n"
+        head = ("T4 launcher start %s\nexe: %s (%s)\ncwd: %s\nargs: %s\nres %s sound %s debug %s iso %s\n----\n"
                 % (time.strftime("%Y-%m-%d %H:%M:%S"), self.exe, self.exe_why, SAVE_DIR, GAME_ELF,
-                   env["PS2X_GS_HW_SCALE"], env["TEKKEN4_SOUND"], env["PS2X_DEBUG_PANEL"], env.get("TEKKEN4_ISO", "-")))
+                   env["TEKKEN4_INTERNAL_RES"], env["TEKKEN4_SOUND"], env["PS2X_DEBUG_PANEL"],
+                   env.get("TEKKEN4_ISO", "-")))
         self.log.write(head.encode("utf-8", "replace"))
         self.log.flush()
         self.started = time.time()

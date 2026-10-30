@@ -618,9 +618,8 @@ class App(tk.Tk):
         exe, why = core.find_runtime(s)
         sup = core.graphics_support(exe)
         names = core.graphics_env_names()
-        scale = core.hw_scale(s)
-        self.lbl_res.config(text=("-> scale %d (%dx%d)" % (scale, 640 * scale, 448 * scale)) +
-                            (" chosen for your %dp screen" % core.screen_height() if s["resolution"] == "auto" else ""))
+        self.lbl_res.config(text="-> TEKKEN4_INTERNAL_RES=%s" % core.internal_res(s) +
+                            (" (your screen: %dp)" % core.screen_height() if s["resolution"] == "auto" else ""))
         for key, flag in (("full", "fullscreen"), ("aa", "aa"), ("prog", "progressive")):
             c, n = self.chk[key]
             if sup[flag]:
@@ -704,7 +703,7 @@ def selftest():
     for res, _, _ in core.RESOLUTIONS:
         s2 = dict(s, resolution=res)
         e = core.game_env(s2, exe)
-        print(" %-6s scale=%s sound=%s debug=%s" % (res, e["PS2X_GS_HW_SCALE"], e["TEKKEN4_SOUND"], e["PS2X_DEBUG_PANEL"]))
+        print(" %-6s res=%s sound=%s debug=%s" % (res, e["TEKKEN4_INTERNAL_RES"], e["TEKKEN4_SOUND"], e["PS2X_DEBUG_PANEL"]))
     for it in core.check_prereqs():
         print(" prereq", "ok " if it["ok"] else "MISSING", it["name"], "-", it["detail"])
     print("build command", core.build_command(s.get("iso", ""), True))
