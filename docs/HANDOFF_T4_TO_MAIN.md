@@ -1,15 +1,18 @@
-# Handoff to the Main session: Tekken 4 port (2026-10-30)
+# Handoff from the Tekken 4 session to the Main session (2026-10-30)
 
-From the session that built the US port. You are the **Main session** (launcher + coordination). Your first job: read this,
-then write one brief per working session (`docs/sessions/launcher.md`, `game.md`, `netplay.md`, `release.md`) that the user can
-paste into new sessions. `docs/SESSIONS.md` already has the split and start prompts; turn them into full briefs and keep them current.
+**This comes from the Tekken 4 (T4) session**, the one that built the T4 US port, its netplay and the T4 launcher. It covers **T4 only**.
+T5DR Online is a separate project with its own sessions and coordinator (`C:\T5DROnline`); nothing here describes its state.
+
+You are the **Main session** (launcher + coordination). Your first job for T4: read this, then write one brief per T4 working session
+(`D:\tekken4-us\docs\sessions\launcher.md`, `game.md`, `netplay.md`, `release.md`), each saying at the top that it is about T4, so the
+user can paste it into a new session. `docs/SESSIONS.md` already has the split and start prompts; turn them into full briefs and keep them current.
 
 ## Goal (user)
 - A native PC port of Tekken 4 anyone can play: download, point at your own ISO, BUILD GAME, play. No BIOS, no game data shipped.
 - Online with rollback as good as the user's T5DR Online.
 - **One launcher for T5DR, T4 and future games.**
 
-## Read these
+## Read these (all in `D:\tekken4-us`)
 `CLAUDE.md` (rules), `docs/PROJECT_MAP.md` (where everything is), `docs/SESSIONS.md` (ownership), top of `docs/status.md` (log).
 
 ## Where things are
