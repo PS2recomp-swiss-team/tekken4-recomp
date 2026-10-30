@@ -4,8 +4,13 @@ Start here, then `docs/SESSIONS.md` (who works on what). Current state and log: 
 
 ## Goal
 A native PC port of Tekken 4 (US, SLUS-20328) that anyone can play: download, point it at your own ISO, build, play,
-then online with rollback as good as T5DR Online. No BIOS, no game data shipped. Long term: **one launcher for T5DR, T4
-and future games**.
+then online with rollback as good as T5DR Online. No BIOS, no game data shipped. The owner chose
+**OpenRecomp-FGC as the one launcher for T5DR, T4 and future games**: a separate project, PySide6 + QML, controller first.
+
+One T4 session covers game, netplay + online and release packaging. Launcher work is outside T4. One coordinating Main
+session outside this project alone merges into `t4-us` and `patches\` and cuts releases. The owner pushes to the private
+remote by hand. An outside coding agent may work on a clean source copy without game data, but never commits or pushes;
+Claude reviews, tests, carries the change over and commits.
 
 ## Repositories
 | Repo | Visibility | Use |
@@ -13,6 +18,7 @@ and future games**.
 | `PS2recomp-swiss-team/tekken4-recomp` (remote `swiss`) | **private** | where new work goes, branch `us-slus20328` |
 | `Lautreck/tekken4-recomp` (remote `origin`) | **PUBLIC** | the colleague's PAL line (`master`). Do not push new work; **never T5DR-derived code** |
 | `ran-j/PS2Recomp` | public upstream | pinned at `eb8688b`; our changes are `patches/*.patch`, not pushed anywhere |
+| [TheWishin/OpenRecomp-FGC](https://github.com/TheWishin/OpenRecomp-FGC) | not recorded here | separate project; the one launcher; loads `launcher\t4core.py` from a T4 install at run time |
 | `TheWishin/T5DROnline-Source` (local `C:\T5DROnline`) | private | the T5DR project: read-only reference from T4 sessions |
 
 ## Folders on the user's PC
@@ -30,7 +36,7 @@ and future games**.
 ## In the repo (D:\tekken4-us)
 | Path | Area | What |
 |---|---|---|
-| `launcher\` | Launcher | `t4_launcher.pyw` (Tk UI), `t4core.py` (settings, env, build, run). Written new, no T5DR code |
+| `launcher\` | T4 interface + existing launcher | `t4_launcher.pyw` (Tk UI) stays until each part has moved to OpenRecomp-FGC; `t4core.py` (settings, env, build, run) is the interface loaded at run time. Written new, no T5DR code |
 | `lobby\` (git-excluded, local only) | Online | copy of the private T5DR lobby adapted to T4 (`t4lobby`, `t4game.py`). May go to the Swiss repo on its own branch; never to `origin` |
 | `tools\build_game.ps1`, `iso_extract.py`, `vu1_micro_from_elf.py` | Build | ISO -> runnable game in one step |
 | `tools\*_portable*`, `toolchain_env.cmd`, `t4_toolchain_clangcl.cmake` | Release | prototype: build without Visual Studio |
@@ -39,6 +45,10 @@ and future games**.
 | `patches\NN-*.patch` | Game | changes to PS2Recomp, applied in **name order** |
 | `tools\run_capture.ps1`, `perf_*`, `gfx_*`, `pad_lag.ps1`, `net_pair.ps1`, `net_play.ps1`, `us_site.py`, `ghidra_*` | Dev | test, measure, reverse-engineer |
 | `tools\grok_*`, `docs\ai\`, `pcsx2_*`, `tools\ai\` | Legacy | the colleague's Grok/PCSX2 workflow on his PC, not set up here |
+
+`launcher\t4core.py` is an interface: changing its functions breaks OpenRecomp-FGC's `adapters/t4.py`, so announce changes
+first. For a new game option, the T4 session adds and documents the switch in `docs/GRAPHICS.md`, then the launcher session
+adds the control.
 
 ## Docs
 | Doc | Topic |
@@ -50,7 +60,7 @@ and future games**.
 | `docs/PERF.md` | stage table, smoothness |
 | `docs/MUSIC_FIX.md` | BGM, voices, intro movie audio |
 | `docs/ROLLBACK_PLAN.md`, `ROLLBACK_PHASE01.md`, `PHASE2.md`, `PHASE3.md`, `PHASE3B.md` | rollback + netplay |
-| `docs/LOBBY.md`, `SERVER_HANDOFF_T4.md` | lobby integration, handoff to the T5DR coordinator |
+| `docs/LOBBY.md`, `SERVER_HANDOFF_T4.md` | lobby integration, existing handoff to the Server session; it prepares the T4 lobby instance, which goes live only when T4 plays online |
 | `docs/RELEASE_PLAN_T4.md`, `E2E_BUILD.md`, `START_HIER.txt` | release options, player build test, tester guide |
 
 ## Runtime switches (env)
