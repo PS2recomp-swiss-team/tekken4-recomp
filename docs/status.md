@@ -26,8 +26,11 @@ _Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
   - Test builds: dist\T4-Offline-Test-2026-10-30b (progressive, FXAA, resolution menu; not smoke-tested because a
     perf run held the run lock) and dist\T4-Offline-Test-2026-10-30 (older). Lobby code (T5DR copy) stays in the
     untracked lobby\ folder; the user allowed it into the private Swiss repo on its own branch (not done yet).
-  Open: Building stage ~56.5 fps + frame-pacing smoothness (perf agent, see docs/PERF.md), real controller test by the
-  user, fullscreen check, two-PC netplay, lobby on the coordinator's server, release packaging (no VS).
+  - Smoothness (patches 80-82 + runtime/tekken4_perf2_overrides.cpp, docs/PERF.md): all 10 stages 60.0 fps incl.
+    Building, fight present p99 16.9-17.2 ms, 0 repeated/skipped frames. Final build (01-82) checked at 1440p
+    (logs/final_check): fight renders clean; a few bright speckles on the beach sand remain (look later).
+    dist/T4-Offline-Test-2026-10-30b/bin has this final exe. Menus: presents 12-20 ms apart (open).
+  Open: real controller test by the user, fullscreen check, two-PC netplay, lobby on the coordinator's server, release packaging (no VS).
 - **OPEN (user, 2026-10-30): intro movie audio is garbage** (choppy/broken, as on PAL: "super flickery"). Separate path from
   the BGM fix: movie calls 0x3000/0x3100/0x3200 stay on the local HLE in runtime/tekken4_overrides.cpp, which decodes the
   interleaved SPU ADPCM itself ("movie audio: unit N -> 3584 stereo frames"); suspects: PCM added after the SPU clamp,
