@@ -6,7 +6,8 @@ Rollback netplay only works when both PCs run identical game code. Like T5DR Onl
     code_id   SHA-1 over the PS2Recomp tree's content (tree id, not the commit: build_game.ps1 commits the patches at
               build time, so every player's commit differs) and uncommitted diff, our patches/*.patch, config/*.toml,
               config/*.csv (function maps: what the recompiler generated), the game modules staged into the
-              runner (src/runner/*_overrides.cpp, tekken4_net*.cpp/.h), and the toolchain of the CMake build: compiler
+              runner (src/runner/*_overrides.cpp, tekken4_net*.cpp/.h, tekken4_state_probe.h,
+              tekken4_online_result.h), and the toolchain of the CMake build: compiler
               id and exact version, build type, flags, PS2X_* options (players compile locally: another compiler
               version can round floats differently and desync). No paths, they differ per PC.
     net       the netplay protocol version (runtime/tekken4_net.h kNetVersion)
@@ -104,7 +105,8 @@ def code_id(src, tool_lines):
         for path in sorted(glob.glob(os.path.join(ROOT, "config", pattern))):
             h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     runner = os.path.join(src, "ps2xRuntime", "src", "runner")
-    for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h"):
+    for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h",
+                    "tekken4_state_probe.h", "tekken4_online_result.h"):
         for path in sorted(glob.glob(os.path.join(runner, pattern))):
             h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     return h.hexdigest()

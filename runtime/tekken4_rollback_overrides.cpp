@@ -94,8 +94,10 @@
 #include "runtime/ps2_rollback_cuts.h"
 #include "Stubs/Pad.h"
 #include "Stubs/SIF.h"
+#include "tekken4_state_probe.h"
 #if __has_include("tekken4_net.h") && defined(PS2X_ROLLBACK_IOP_STATE)
 #include "tekken4_net.h"
+#include "tekken4_online_result.h"
 #define TEKKEN4_NETPLAY 1
 #include <cmath>
 #include <condition_variable>
@@ -1195,6 +1197,7 @@ namespace tekken4_rollback
         double winFps = 0;
         uint32_t sessionSeed = 0;
         uint64_t lastSummary = ~0ull;
+        bool resultFinished = false; // host-only; never restore or write a report from a repeated frame
     };
     NetplayState g_np;
 
@@ -1327,6 +1330,7 @@ namespace tekken4_rollback
             g_np.hashMs += job.ms;
             ++g_np.hashes;
             t4net::pushHash(static_cast<uint32_t>(job.frame), job.h.total);
+            tekken4_online_result::confirmedHash(job.frame, job.h.total, g_cfg.iopState);
             std::fprintf(g_log, "NETHASH f=%" PRIu64 " h=%016" PRIx64 " ram=%016" PRIx64 " iop=%016" PRIx64 " cyc=%" PRIu64 "\n",
                          job.frame, job.h.total, job.h.ram, job.h.iop, job.h.cycle);
             if (g_np.dump)
@@ -1342,6 +1346,27 @@ namespace tekken4_rollback
     {
         *liveFrame = g_np.liveFrame;
         return g_np.resim;
+    }
+
+    void npFinishResult(const char *reason, uint64_t frame, const char *detail = nullptr)
+    {
+        if (!tekken4_online_result::enabled() || g_np.resultFinished)
+            return;
+        g_np.resultFinished = true;
+        // Only already-submitted, input-confirmed jobs. Do not hash a speculative live state or wait for the
+        // peer here. A timeout leaves the latest completed sample, with its own frame, in the report.
+        {
+            std::unique_lock<std::mutex> lk(g_hw.mu);
+            g_hw.doneCv.wait_for(lk, std::chrono::milliseconds(250), []
+                                { return g_hw.todo.empty() && g_hw.busySlot < 0; });
+        }
+        hashCollect();
+        if (g_np.started)
+        {
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_np.runT0).count();
+            tekken4_online_result::liveFrame(frame, seconds > 0.0 ? static_cast<double>(g_np.runFrames) / seconds : 0.0);
+        }
+        tekken4_online_result::finish(reason, frame, detail);
     }
 
     // Both ports during a netplay frame: the inputs decided at its boundary (npDecideInputs).
@@ -1727,6 +1752,7 @@ namespace tekken4_rollback
         {
             std::fprintf(g_log, "NET no session (%s): the game runs offline\n", t4net::failure() ? t4net::failure() : "?");
             g_np.failed = true;
+            npFinishResult("handshake_failed", g_frame, t4net::failure());
             return;
         }
         g_np.delay = t4net::agreeDelay(1500);
@@ -1798,6 +1824,11 @@ namespace tekken4_rollback
         if (g_np.frameTimes.size() > 20000u)
             g_np.frameTimes.erase(g_np.frameTimes.begin(), g_np.frameTimes.begin() + 10000);
         g_np.lastLive = now;
+        if (tekken4_online_result::enabled())
+        {
+            const double seconds = msSince(g_np.runT0) / 1000.0;
+            tekken4_online_result::liveFrame(g_frame, seconds > 0.0 ? static_cast<double>(g_np.runFrames) / seconds : 0.0);
+        }
         if (g_np.winFrames >= 300u)
         {
             g_np.winFps = static_cast<double>(g_np.winFrames) * 1000.0 / std::max(1.0, msSince(g_np.winT0));
@@ -1972,6 +2003,7 @@ namespace tekken4_rollback
                     std::ofstream out("net_desync_f" + std::to_string(badFrame) + ".bin", std::ios::binary);
                     out.write(reinterpret_cast<const char *>(k.ram.data()), static_cast<std::streamsize>(k.ram.size()));
                 }
+            npFinishResult("desync", f);
         }
 
         npDecideInputs(f);
@@ -1988,6 +2020,7 @@ namespace tekken4_rollback
             npSummary("NETSUMMARY final");
             std::fprintf(g_log, "NETEND f=%" PRIu64 "\n", f);
             t4net::note("NETEND at frame %llu", static_cast<unsigned long long>(f));
+            npFinishResult("frame_limit", f);
         }
     }
 
@@ -2133,6 +2166,10 @@ namespace tekken4_rollback
         const uint32_t executedCuts = g_frameCuts; // cuts the frame that just ended ran with
         ++g_frame;
         ++g_wallFrames;
+        // Inspect the state of the pass that just ended BEFORE a handler restores the timeline or clears
+        // its resim flag. Drawn tails and frames without render cuts are still repeated simulation.
+        if (!frameIsResimulating() && tekken4_state_probe::enabled())
+            tekken4_state_probe::sample(g_frame, g_runtime->memory().getRDRAM(), false);
         std::vector<uint64_t> pages;
         const ps2_rollback::StateHash hash =
             g_cfg.frameHash ? ps2_rollback::hashState(*g_runtime, g_cfg.masks, &pages) : ps2_rollback::StateHash{};
@@ -2472,10 +2509,18 @@ namespace tekken4_rollback
         if (const char *trace = std::getenv("TEKKEN4_RB_SNDTRACE"))
             g_cfg.sndTrace = parseNumber(trace) != 0;
 
+#ifdef TEKKEN4_NETPLAY
+        if (g_cfg.mode == Mode::Net)
+            tekken4_online_result::configure(-1);
+#endif
         g_log = std::fopen("rb_frames.log", "w");
         if (!g_log)
         {
             RUNTIME_LOG("[rollback] cannot open rb_frames.log, rollback off\n");
+#ifdef TEKKEN4_NETPLAY
+            if (g_cfg.mode == Mode::Net)
+                tekken4_online_result::finish("rollback_log_failed", g_frame);
+#endif
             return;
         }
         if (g_cfg.sndTrace)
@@ -2494,6 +2539,7 @@ namespace tekken4_rollback
         {
             std::fprintf(g_log, "NET not started (TEKKEN4_NET missing or invalid, or the socket failed): netplay off\n");
             g_np.failed = true;
+            npFinishResult("configure_failed", g_frame);
         }
 #endif
         std::fprintf(g_log, "CONFIG mode=%s cuts=%x tail=%" PRIu64 " snd=%s pad2=%d net=start:%" PRIu64 ",delay:%" PRIu64
