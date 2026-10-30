@@ -1,0 +1,70 @@
+From 0ac6edc235d876db7560a4bb9f28dd5eff245cf0 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 12:45:24 +0100
+Subject: [PATCH] Audio: 64 ms device buffer by default (was 43 ms),
+ TEKKEN4_AUDIO_BUFFER_MS overrides it
+
+A game-thread hitch longer than the buffer was audible as a gap. Host side only, no guest state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/ps2_audio.cpp | 24 ++++++++++++++++++------
+ 1 file changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_audio.cpp b/ps2xRuntime/src/lib/ps2_audio.cpp
+index 0a05fe1..7abe27c 100644
+--- a/ps2xRuntime/src/lib/ps2_audio.cpp
++++ b/ps2xRuntime/src/lib/ps2_audio.cpp
+@@ -366,7 +366,19 @@ namespace
+     class DeviceQueue
+     {
+     public:
+-        static constexpr size_t kTargetFrames = 2048u; // ~43 ms buffered ahead of the device
++        // Frames buffered ahead of the device: 64 ms by default (a game-thread hitch up to that long is inaudible),
++        // TEKKEN4_AUDIO_BUFFER_MS overrides it (20..150). Host side only, no guest state.
++        static size_t targetFrames()
++        {
++            static const size_t frames = []() -> size_t {
++                int ms = 64;
++                if (const char *env = std::getenv("TEKKEN4_AUDIO_BUFFER_MS"))
++                    ms = std::atoi(env);
++                ms = ms < 20 ? 20 : (ms > 150 ? 150 : ms);
++                return static_cast<size_t>(ms) * 48u;
++            }();
++            return frames;
++        }
+         static constexpr size_t kMaxFrames = 9600u;    // 200 ms: after a stall, cut back to the target
+ 
+         void push(const int16_t *pcm, size_t frames)
+@@ -381,8 +393,8 @@ namespace
+             const size_t level = levelLocked();
+             if (level > kMaxFrames)
+             {
+-                m_read += (level - kTargetFrames) * 2u;
+-                m_dropped += level - kTargetFrames;
++                m_read += (level - targetFrames()) * 2u;
++                m_dropped += level - targetFrames();
+                 m_phase = 0.0;
+             }
+         }
+@@ -394,14 +406,14 @@ namespace
+         {
+             std::lock_guard<std::mutex> lock(m_mutex);
+             const size_t level = levelLocked();
+-            if (!m_primed && level >= kTargetFrames)
++            if (!m_primed && level >= targetFrames())
+                 m_primed = true;
+             size_t written = 0u;
+             double rate = 1.0;
+             if (m_primed)
+             {
+-                const double over = (static_cast<double>(level) - static_cast<double>(kTargetFrames)) /
+-                                    static_cast<double>(kTargetFrames);
++                const double over = (static_cast<double>(level) - static_cast<double>(targetFrames())) /
++                                    static_cast<double>(targetFrames());
+                 rate = 1.0 + std::clamp(over * 0.1, -0.05, 0.05);
+                 const int16_t *in = m_samples.data() + m_read;
+                 double position = m_phase;
+-- 
+2.55.0.windows.3
+
