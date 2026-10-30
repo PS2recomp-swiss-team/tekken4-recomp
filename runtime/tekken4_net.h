@@ -135,6 +135,8 @@ namespace t4net
         // UDP payload bytes for the counted packets, including tags, excluding IP/UDP headers.
         // Out counts sendTo attempts before simulated loss; in follows packetsIn (no HELLO/REJECT).
         uint64_t bytesIn = 0;
+        // TEKKEN4_NET_COALESCE=1: identical boundary INPUT calls not sent (not send attempts, not in packetsOut).
+        uint64_t coalesced = 0;
     };
     Stats stats();
 

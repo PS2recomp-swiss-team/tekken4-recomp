@@ -213,8 +213,6 @@ namespace t4net
             sockaddr_in lastInputPeer{};
             uint32_t lastInputPeerNonce = 0;
             uint64_t lastInputMs = 0;
-            uint64_t coalesced = 0;
-            bool coalesceReported = false;
             uint32_t base = 0;         // frames < base are neutral (both sides)
             Ring local, remote;
             uint32_t localMax = 0, remoteContig = 0, peerAck = 0;
@@ -440,8 +438,7 @@ namespace t4net
                 s.lastInputPeerNonce == s.peerNonce && sameAddr(s.lastInputPeer, s.peer) &&
                 std::memcmp(s.lastInput.data(), buf, bytes) == 0 && nowMs() - s.lastInputMs < 15)
             {
-                if (s.coalesced < UINT64_MAX)
-                    ++s.coalesced;
+                ++s.st.coalesced;
                 return; // keep the resend deadline: a skipped call is not a send attempt
             }
             sendTo(buf, static_cast<int>(bytes));
@@ -1005,8 +1002,6 @@ namespace t4net
         const char *simSafeWait = std::getenv("TEKKEN4_NET_SIM_SAFE_WAIT");
         s.simSafeWait = simSafeWait && std::strcmp(simSafeWait, "1") == 0;
         s.lastInputBytes = 0;
-        s.coalesced = 0;
-        s.coalesceReported = false;
         s.startMs = nowMs();
         s.log = std::fopen(config.logPath.c_str(), "w");
         // Two games on one PC (tests, a local session): Windows 11 runs a process without the foreground window with
@@ -1465,12 +1460,6 @@ namespace t4net
         if (!s.on)
             return;
         std::lock_guard<std::mutex> lk(s.mu);
-        if (s.coalesce && !s.coalesceReported)
-        {
-            note("NETCOALESCE skipped=%llu (identical boundary INPUT calls; not send attempts)",
-                 static_cast<unsigned long long>(s.coalesced));
-            s.coalesceReported = true;
-        }
         if (!s.connected || s.sock == INVALID_SOCKET)
             return;
         const Hdr h = makeHdr(PKT_BYE);
