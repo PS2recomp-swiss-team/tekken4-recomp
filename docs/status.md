@@ -1168,6 +1168,10 @@ The user pre-authorized publishing every successful milestone on three channels:
     docs/HANDOFF_WISHIN.md (same file on master and us-iso 770c647). Grok idle, nothing running. Next session: read
     TheWishin's answers to its 4 questions; port PAL features to US by hand (patch 39 first for widescreen) with
     tools/pal_us_map.py; user play-test of F2 graphics + Controls; console-skill tools need the user's permission to run.
+  - **Grok queue started 2026-10-30 09:06 while Claude is stopped (weekly limit 97%):** super-recomp-design
+    (docs/SUPER_RECOMPILER.md) then us-netcheck (logs/grok/us-netcheck-report.md); no-interlace (tree
+    external/wt-no-interlace) then zero-copy (external/wt-zero-copy). The user lets Grok run tools/console-skill (not
+    their delete paths). NEXT SESSION: review all four (prompts in docs/ai/prompts/), port reviewed work as patches 43+.
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
