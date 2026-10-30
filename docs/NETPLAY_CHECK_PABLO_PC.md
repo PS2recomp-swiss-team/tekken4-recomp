@@ -97,3 +97,23 @@ Controls (not a patch file yet; PAL fork ps2xRuntime\src\lib\ps2_pad.cpp:78-92 a
 ## 6. What was not done
 
 No rebuild, no file copied into either US tree, no 12000-frame pair, no ndesync dumps, no lobby process, no second PC. Probe logs left at H:\tekken4-recomp_usa\logs\net\grok-us-probe.
+
+## 7. Update 2026-10-30 (Claude): netplay builds from build_game.ps1, pair passes
+
+Fixed in tools\stage_generated.cmd: it now also copies runtime\tekken4_net*.cpp/.h into src\runner (as
+docs\rollback\net_build.cmd does) and, when that copy is new, updates the timestamp of
+src\runner\tekken4_rollback_overrides.cpp. That file tests __has_include("tekken4_net.h") inside a unity batch whose
+Ninja dependency list never had the header, so without the touch the old object (netplay off) was reused and
+TEKKEN4_NET was still refused. tools\build_game.ps1 now writes t4net_build.txt (t4_buildid.py) next to the exe.
+Build id here: 40f7094523f87dd6.
+
+Pair `pablo-n150b` (net_pair.ps1 -Rtt 150 -Jitter 5 -Loss 3 -End 12000, PHASE3 inputs/fuzz, desync dumps on,
+-Src H:\tekken4-fork-ps2recomp_usa -BuildDir runtime): both sides NETEND at 238 s, 12000 live frames.
+
+| side | fps window / run | rollbacks | resim | max depth | rollback ms p50/p90/max | stalls | displayed ms p50/p90/p99 | rtt / delay | hashes | mismatches |
+|---|---|---|---|---|---|---|---|---|---|---|
+| host | 58.3 / 51.2 | 2019 | 3861 | 5 | 17.0 / 27.2 / 91.6 | 410 (3742 ms) | 16.4 / 32.9 / 75.6 | 152 / 3 | 399 | 0 |
+| join | 59.0 / 51.2 | 2044 | 4079 | 5 | 17.6 / 26.8 / 86.8 | 426 (3670 ms) | 16.1 / 33.5 / 76.9 | 152 / 3 | 399 | 0 |
+
+NETDESYNC lines 0 on both sides. Logs: logs\net\pablo-n150b\{host,join}. The forced-desync run (TEKKEN4_RAND_SEED=2 on
+the joiner) was not repeated here.
