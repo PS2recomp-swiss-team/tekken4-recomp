@@ -1,0 +1,77 @@
+From 6b683045e7b4b93fd7820c77f5bb0f1db7216481 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 15:50:52 +0100
+Subject: [PATCH] Shared presentation: readback fallback when no picture ever
+ arrives, short forced readback fails
+
+From Pablo's patch 44 (Lautreck/PS2Recomp ebae275). A driver's shared context can fail without an
+error and the window then stayed black for good: after 90 latches without a picture (about 1.5 s) the
+presenter uses the readback path for the rest of the run. A blank frame (PMODE off) is not a miss.
+A forced readback shorter than the frame returned true with the uncovered rows still holding the
+previous call's pixels; it now fails.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp |  5 ++++-
+ ps2xRuntime/src/lib/ps2_runtime.cpp    | 15 ++++++++++++++-
+ 2 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 9aa4597..23efdce 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -632,8 +632,11 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+             return false;
+         const size_t stride = static_cast<size_t>(std::max<uint32_t>(frame.width, 640u)) * 4u;
+         const size_t row = static_cast<size_t>(frame.width) * 4u;
++        // A short readback fails: the rows it does not cover would keep the previous call's pixels.
++        if (frame.height == 0u || (frame.height - 1u) * stride + row > frame.pixels.size())
++            return false;
+         outPixels.resize(row * frame.height);
+-        for (uint32_t y = 0; y < frame.height && y * stride + row <= frame.pixels.size(); ++y)
++        for (uint32_t y = 0; y < frame.height; ++y)
+             std::memcpy(outPixels.data() + y * row, frame.pixels.data() + y * stride, row);
+         outWidth = frame.width;
+         outHeight = frame.height;
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 216a24b..7d87f9b 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -448,7 +448,10 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     // Shared presentation (GL backend, context shared with the window): the GS worker copies the displayed picture into a
+     // shared texture; draw that texture. After a latch, wait (at most ~12 ms) until the worker has published it, so the
+     // picture is as recent as with the readback. The input-latency probe needs pixels: it keeps the readback path.
+-    if (drawTex && rt->gs().usesSharedPresentation() && GSSharedPresent::Active() && !ps2_input_latency::enabled())
++    // No picture for 90 latches (about 1.5 s; a driver's shared context can fail without an error): readback for good.
++    static int s_sharedMisses = 0;
++    static bool s_sharedGaveUp = false;
++    if (drawTex && !s_sharedGaveUp && rt->gs().usesSharedPresentation() && GSSharedPresent::Active() && !ps2_input_latency::enabled())
+     {
+         static uint64_t s_sharedSequence = 0;
+         if (needsLatch)
+@@ -492,12 +495,22 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+             outHeight = frame.height;
+             s_lastWidth = outWidth;
+             s_lastHeight = outHeight;
++            s_sharedMisses = 0;
+         }
+         else
+         {
+             drawTex->id = 0; // blank (PMODE off) or nothing published yet: black
+             outWidth = s_lastWidth ? s_lastWidth : FB_WIDTH;
+             outHeight = s_lastHeight ? s_lastHeight : DEFAULT_DISPLAY_HEIGHT;
++            if (have && frame.blank)
++            {
++                s_sharedMisses = 0;
++            }
++            else if (needsLatch && ++s_sharedMisses >= 90)
++            {
++                s_sharedGaveUp = true;
++                std::cerr << "[present] shared presentation produced no picture; falling back to readback" << std::endl;
++            }
+         }
+         return;
+     }
+-- 
+2.55.0.windows.3
+

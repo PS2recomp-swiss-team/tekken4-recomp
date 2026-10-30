@@ -3,7 +3,8 @@
 Rollback netplay only works when both PCs run identical game code. Like T5DR Online's lobby/t5lobby/buildid.py:
 
     elf_sha1  SHA-1 of game/disc/SLUS_203.28 (the game itself: a4b7dde2... for SLUS-20328 v1.00)
-    code_id   SHA-1 over the PS2Recomp tree's commit and uncommitted diff, our patches/*.patch, config/*.toml,
+    code_id   SHA-1 over the PS2Recomp tree's content (tree id, not the commit: build_game.ps1 commits the patches at
+              build time, so every player's commit differs) and uncommitted diff, our patches/*.patch, config/*.toml,
               config/*.csv (function maps: what the recompiler generated), and the game modules staged into the
               runner (src/runner/*_overrides.cpp, tekken4_net*.cpp/.h)
     net       the netplay protocol version (runtime/tekken4_net.h kNetVersion)
@@ -50,7 +51,7 @@ def git(src, *args):
 
 def code_id(src):
     h = hashlib.sha1()
-    h.update(b"commit:" + git(src, "rev-parse", "HEAD").strip())
+    h.update(b"tree:" + git(src, "rev-parse", "HEAD^{tree}").strip())
     # uncommitted edits of the tree, without the staged generated code / game modules (hashed below)
     h.update(b"diff:" + git(src, "diff", "HEAD", "--", ".", ":(exclude)ps2xRuntime/src/runner"))
     for path in sorted(glob.glob(os.path.join(ROOT, "patches", "*.patch"))):

@@ -1,9 +1,8 @@
 @echo off
 rem Rollback phase 3 (netplay) build: PS2Recomp worktree D:\tekken4-fork-net (branch t4-net), output out\net.
 rem Stages the generated code, the COMMITTED shared overrides (HEAD of D:\tekken4-us, so other agents'
-rem uncommitted edits stay out), the working copy of the rollback/netplay driver and the netplay transport
-rem (runtime\tekken4_net*.cpp/.h: not *_overrides.cpp, so tools\stage_generated.cmd does not copy them into
-rem other trees), then builds with tools\build_runtime.cmd.
+rem uncommitted edits stay out) and the working copy of the rollback/netplay driver and the netplay transport,
+rem then builds with tools\build_runtime.cmd.
 setlocal
 set TEKKEN4_SRC=D:\tekken4-fork-net
 set TEKKEN4_BUILD_DIR=net
