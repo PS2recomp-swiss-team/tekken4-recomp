@@ -1,0 +1,307 @@
+From a38525b06b35eda6b412f997395efd8c30d4335c Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 10:37:19 +0100
+Subject: [PATCH] Intro movie at high internal resolution: device-side movie
+ sound, bicubic picture upscale
+
+Sound: the movie's PCM was mixed in the mixer tick and reached the device through the 43 ms DeviceQueue that
+the game thread refills once per frame, so any game-thread stall over ~40 ms (more frequent at 1440p / 4K)
+left the device with silence mid-movie although seconds of the movie were queued (the WAV capture and the
+"gaps" counter, which sit before that queue, never showed it). The device callback now mixes the movie from
+its own copy of the PCM (ps2PushMoviePcm / ps2ClearMoviePcm fill and clear both); the producer-side copy
+stays for the WAV and the played/missing accounting. TEKKEN4_AUDIO_STATS lines gain movie-missing=.
+
+Picture: at an internal scale above 1 the movie's uploads into the target are scaled with a Catmull-Rom
+bicubic pass (clamped to the 2x2 nearest texels, no halos) from the native-size staging copy instead of a
+bilinear blit, redrawing the previous strip's last 2 texels with their real neighbours. Only while a movie
+hands out pictures; the game's own uploads keep the filtered blit.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 101 +++++++++++++++++--
+ ps2xRuntime/src/lib/ps2_audio.cpp            |  61 +++++++++--
+ 2 files changed, 148 insertions(+), 14 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index dd58fca..ae1ff7d 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -9,6 +9,7 @@
+ #include "runtime/ps2_perf_stats.h"
+ 
+ #include <map>
++namespace ps2_stubs { uint32_t mpegPicturesServed() noexcept; } // Kernel/Stubs/MPEG.cpp
+ #include <algorithm>
+ #include <chrono>
+ #include <cmath>
+@@ -500,6 +501,38 @@ void main()
+             sum += textureLod(uSrc, (lo + (vec2(x, y) + 0.5) * uRatio / vec2(n)) / size, 0.0);
+     oColor = vec4(sum.rgb / float(n.x * n.y), 1.0);
+ }
++)";
++    // Tekken 4 port: smooth upscale of a picture uploaded into a render target at an internal scale above 1 (the intro
++    // movie). Catmull-Rom bicubic from the native-size staging copy, clamped to the 2x2 nearest texels (no halos): bilinear
++    // at 3x and more shows the source pixel grid as blocks. Taps outside uBounds repeat the border texel.
++    const char *kMovieScaleFs = R"(#version 430 core
++out vec4 oColor;
++uniform sampler2D uSrc;
++uniform vec2 uScale;    // output pixels per source pixel
++uniform ivec4 uBounds;  // first / last source texel (x0, y0, x1, y1) that may be read
++vec4 tap(ivec2 p) { return texelFetch(uSrc, clamp(p, uBounds.xy, uBounds.zw), 0); }
++vec4 weights(float t)
++{
++    float t2 = t * t, t3 = t2 * t;
++    return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
++}
++void main()
++{
++    vec2 p = gl_FragCoord.xy / uScale - 0.5;
++    ivec2 i = ivec2(floor(p));
++    vec2 f = p - vec2(i);
++    vec4 wx = weights(f.x), wy = weights(f.y);
++    vec4 sum = vec4(0.0);
++    for (int y = 0; y < 4; ++y)
++    {
++        vec4 row = vec4(0.0);
++        for (int x = 0; x < 4; ++x)
++            row += wx[x] * tap(i + ivec2(x - 1, y - 1));
++        sum += wy[y] * row;
++    }
++    vec4 a = tap(i), b = tap(i + ivec2(1, 0)), c = tap(i + ivec2(0, 1)), d = tap(i + ivec2(1, 1));
++    oColor = clamp(sum, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
++}
+ )";
+     const char *kFxaaFs = R"(#version 430 core
+ out vec4 oColor;
+@@ -689,7 +722,8 @@ struct GSHwBackend::Impl
+     int aniso = 1;              // anisotropic taps for filtered 3D draws
+     bool hudSharp = false;      // sharp bilinear for magnified 2D sprites
+     bool regionLinear = true;   // bilinear for the CLAMP region modes
+-    GLuint areaProgram = 0, fxaaProgram = 0;
++    GLuint areaProgram = 0, fxaaProgram = 0, movieScaleProgram = 0;
++    GLint locMsSrc = -1, locMsScale = -1, locMsBounds = -1;
+     GLint locAreaSrc = -1, locAreaRatio = -1, locFxaaSrc = -1, locFxaaSubpix = -1;
+     GLint locAnisoN = -1, locSharp = -1, locRegionLinear = -1;
+     GLuint postFbo[2] = {}, postTex[2] = {};
+@@ -1150,6 +1184,10 @@ struct GSHwBackend::Impl
+             };
+             link(kAreaFs, areaProgram);
+             link(kFxaaFs, fxaaProgram);
++            link(kMovieScaleFs, movieScaleProgram);
++            if (movieScaleProgram)
++                locMsSrc = g.GetUniformLocation(movieScaleProgram, "uSrc"), locMsScale = g.GetUniformLocation(movieScaleProgram, "uScale"),
++                locMsBounds = g.GetUniformLocation(movieScaleProgram, "uBounds");
+             if (areaProgram)
+                 locAreaSrc = g.GetUniformLocation(areaProgram, "uSrc"), locAreaRatio = g.GetUniformLocation(areaProgram, "uRatio");
+             if (fxaaProgram)
+@@ -2046,6 +2084,22 @@ struct GSHwBackend::Impl
+         return t;
+     }
+ 
++    // Tekken 4 port: true while a movie hands out pictures (one in the last 0.5 s). Only its uploads get the smooth
++    // upscale; the game's own uploads into targets keep the filtered blit.
++    uint32_t movieSeenPictures = 0u;
++    std::chrono::steady_clock::time_point movieSeenAt{};
++    bool movieActive()
++    {
++        const uint32_t n = ps2_stubs::mpegPicturesServed();
++        const auto now = std::chrono::steady_clock::now();
++        if (n != movieSeenPictures)
++        {
++            movieSeenPictures = n;
++            movieSeenAt = now;
++        }
++        return n != 0u && now - movieSeenAt < std::chrono::milliseconds(500);
++    }
++
+     void applyRtUpload()
+     {
+         if (!rtUploadPending)
+@@ -2096,14 +2150,45 @@ struct GSHwBackend::Impl
+             g.BindTexture(kTexture2D, t->stageTex);
+             g.PixelStorei(kUnpackAlignment, 4);
+             g.TexSubImage2D(kTexture2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), w, h, kRgba, kUnsignedByte, pixels.data());
+-            const uint32_t sx0 = x0 ? x0 - 1u : 0u, sy0 = y0 ? y0 - 1u : 0u;
+             const auto host = [&](uint32_t v) { return static_cast<GLint>(std::lround(static_cast<double>(v) * scale)); };
+-            g.BindFramebuffer(0x8CA8 /*READ_FRAMEBUFFER*/, t->stageFbo);
+-            g.BindFramebuffer(0x8CA9 /*DRAW_FRAMEBUFFER*/, t->fbo);
+-            g.Disable(kScissorTest);
+-            g.BlitFramebuffer(static_cast<GLint>(sx0), static_cast<GLint>(sy0), static_cast<GLint>(x0 + w), static_cast<GLint>(y0 + h),
+-                              host(sx0), host(sy0), host(x0 + w), host(y0 + h), kColorBufferBit, scale > 1.0f ? kLinear : kNearest);
+-            g.BindFramebuffer(kFramebuffer, t->fbo);
++            if (scale > 1.0f && movieScaleProgram && movieActive())
++            {
++                // Bicubic pass over the strip and 2 texels left / up of it: the bicubic reaches 2 texels to the right and below,
++                // so the previous strip's last columns (drawn with this strip's border repeated) are redrawn with their
++                // true neighbours; the last strip of the picture needs no neighbours to its right.
++                const uint32_t sx0 = x0 >= 2u ? x0 - 2u : 0u, sy0 = y0 >= 2u ? y0 - 2u : 0u;
++                g.BindFramebuffer(kFramebuffer, t->fbo);
++                g.Viewport(0, 0, t->glW, t->glH);
++                g.Enable(kScissorTest);
++                g.Scissor(host(sx0), host(sy0), host(x0 + w) - host(sx0), host(y0 + h) - host(sy0));
++                g.Disable(kBlend);
++                g.Disable(kDepthTest);
++                g.Disable(kCullFace);
++                g.DepthMask(kFalse);
++                g.ColorMask(kTrue, kTrue, kTrue, kTrue);
++                g.UseProgram(movieScaleProgram);
++                g.ActiveTexture(kTexture0);
++                g.BindTexture(kTexture2D, t->stageTex);
++                g.Uniform1i(locMsSrc, 0);
++                g.Uniform2f(locMsScale, scale, scale);
++                g.Uniform4i(locMsBounds, 0, 0, static_cast<GLint>(x0 + w) - 1, static_cast<GLint>(y0 + h) - 1);
++                g.BindVertexArray(presentVao);
++                g.DrawArrays(kTriangles, 0, 3);
++                g.BindVertexArray(vao);
++                g.UseProgram(program);
++                g.BindBuffer(kArrayBuffer, vbo);
++                g.Disable(kScissorTest);
++            }
++            else
++            {
++                const uint32_t sx0 = x0 ? x0 - 1u : 0u, sy0 = y0 ? y0 - 1u : 0u;
++                g.BindFramebuffer(0x8CA8 /*READ_FRAMEBUFFER*/, t->stageFbo);
++                g.BindFramebuffer(0x8CA9 /*DRAW_FRAMEBUFFER*/, t->fbo);
++                g.Disable(kScissorTest);
++                g.BlitFramebuffer(static_cast<GLint>(sx0), static_cast<GLint>(sy0), static_cast<GLint>(x0 + w), static_cast<GLint>(y0 + h),
++                                  host(sx0), host(sy0), host(x0 + w), host(y0 + h), kColorBufferBit, scale > 1.0f ? kLinear : kNearest);
++                g.BindFramebuffer(kFramebuffer, t->fbo);
++            }
+         }
+         t->usedW = std::max(t->usedW, x0 + w);
+         t->usedH = std::max(t->usedH, y0 + h);
+diff --git a/ps2xRuntime/src/lib/ps2_audio.cpp b/ps2xRuntime/src/lib/ps2_audio.cpp
+index 675109e..0a05fe1 100644
+--- a/ps2xRuntime/src/lib/ps2_audio.cpp
++++ b/ps2xRuntime/src/lib/ps2_audio.cpp
+@@ -3,6 +3,7 @@
+ #include "ps2_host_backend.h"
+ #include "ps2x/iop/iop_host.h"
+ #include <algorithm>
++#include <atomic>
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
+@@ -343,6 +344,16 @@ std::vector<int16_t> g_moviePcm;
+ bool g_movieStarted = false;
+ uint64_t g_moviePlayedFrames = 0u;
+ uint64_t g_movieMissingFrames = 0u;
++// Tekken 4 port: the audio device plays the movie's sound from its own copy of the PCM, pulled by the device callback,
++// not through the mixer tick -> DeviceQueue path (a 43 ms buffer that the game thread refills once per frame): any
++// game-thread stall over ~40 ms (at 1440p / 4K the frame work is heavier and the host is busier) left the device
++// with silence in the middle of the movie's music although seconds of it were queued. g_moviePcm stays the
++// producer-side copy (mixer tick: WAV capture, played / missing accounting); both are filled and cleared together.
++std::mutex g_movieDevMutex;
++std::vector<int16_t> g_movieDevPcm;
++size_t g_movieDevRead = 0u;      // samples already played from the front of g_movieDevPcm
++bool g_movieDevStarted = false;
++std::atomic<uint64_t> g_movieDevMissing{0u}; // device frames asked for after the first push that found the copy empty
+ 
+ namespace
+ {
+@@ -437,9 +448,9 @@ namespace
+             m_statMaxRate = std::max(m_statMaxRate, rate);
+             if (m_statPulled < 240000u)
+                 return;
+-            std::fprintf(stderr, "[audio-device] pulled=%zu missing=%zu dropped=%zu level=%zu-%zu rate=%.3f-%.3f\n",
++            std::fprintf(stderr, "[audio-device] pulled=%zu missing=%zu dropped=%zu level=%zu-%zu rate=%.3f-%.3f movie-missing=%llu\n",
+                          m_statPulled, m_missing, m_dropped, m_statMinLevel, m_statMaxLevel, m_statMinRate,
+-                         m_statMaxRate);
++                         m_statMaxRate, static_cast<unsigned long long>(g_movieDevMissing.exchange(0u)));
+             m_statPulled = m_missing = m_dropped = m_statMaxLevel = 0u;
+             m_statMinLevel = SIZE_MAX;
+             m_statMinRate = m_statMaxRate = 1.0;
+@@ -461,9 +472,35 @@ namespace
+         return *queue;
+     }
+ 
++    // Adds the movie's sound straight from the device callback (see g_movieDevPcm).
++    void mixDeviceMovie(int16_t *out, size_t frames)
++    {
++        std::lock_guard<std::mutex> lock(g_movieDevMutex);
++        if (!g_movieDevStarted)
++            return;
++        const size_t have = (g_movieDevPcm.size() - g_movieDevRead) / 2u;
++        const size_t n = frames < have ? frames : have;
++        const int16_t *in = g_movieDevPcm.data() + g_movieDevRead;
++        for (size_t i = 0; i < n * 2u; ++i)
++        {
++            const int32_t sum = static_cast<int32_t>(out[i]) + static_cast<int32_t>(in[i]);
++            out[i] = static_cast<int16_t>(sum > 32767 ? 32767 : sum < -32768 ? -32768 : sum);
++        }
++        g_movieDevRead += n * 2u;
++        if (frames > n)
++            g_movieDevMissing += frames - n;
++        if (g_movieDevRead >= 48000u * 2u)
++        {
++            g_movieDevPcm.erase(g_movieDevPcm.begin(), g_movieDevPcm.begin() + static_cast<std::ptrdiff_t>(g_movieDevRead));
++            g_movieDevRead = 0u;
++        }
++    }
++
+     void onDeviceRequest(void *buffer, unsigned int frames)
+     {
+-        deviceQueue().pull(static_cast<int16_t *>(buffer), frames);
++        int16_t *out = static_cast<int16_t *>(buffer);
++        deviceQueue().pull(out, frames);
++        mixDeviceMovie(out, frames);
+     }
+ #endif
+ 
+@@ -472,8 +509,11 @@ namespace
+     class MixedOutput
+     {
+     public:
+-        void push(const int16_t *pcm, size_t frames)
++        // wavPcm: the SPU mix plus the movie's sound (WAV capture); devicePcm: the SPU mix alone, the device callback adds the
++        // movie's sound itself.
++        void push(const int16_t *wavPcm, const int16_t *devicePcm, size_t frames)
+         {
++            const int16_t *pcm = wavPcm;
+             if (!pcm || frames == 0u)
+                 return;
+             std::lock_guard<std::mutex> lock(m_mutex);
+@@ -491,7 +531,7 @@ namespace
+                 }
+             }
+ #if !defined(PLATFORM_VITA)
+-            pumpDevice(pcm, frames);
++            pumpDevice(devicePcm ? devicePcm : pcm, frames);
+ #endif
+         }
+ 
+@@ -627,7 +667,7 @@ namespace
+                 played = mixed.data();
+             }
+         }
+-        mixedOutput().push(played, frames);
++        mixedOutput().push(played, pcm, frames);
+     }
+ 
+     struct MixedAudioRegistration
+@@ -655,6 +695,11 @@ void ps2PushMoviePcm(const int16_t *stereoInterleaved, size_t frames)
+     g_moviePcm.insert(g_moviePcm.end(), stereoInterleaved, stereoInterleaved + frames * 2u);
+     if (g_moviePcm.size() / 2u > kMaxFrames)
+         g_moviePcm.erase(g_moviePcm.begin(), g_moviePcm.end() - static_cast<std::ptrdiff_t>(kMaxFrames * 2u));
++    std::lock_guard<std::mutex> deviceLock(g_movieDevMutex);
++    g_movieDevStarted = true;
++    g_movieDevPcm.insert(g_movieDevPcm.end(), stereoInterleaved, stereoInterleaved + frames * 2u);
++    if ((g_movieDevPcm.size() - g_movieDevRead) / 2u > kMaxFrames)
++        g_movieDevRead = g_movieDevPcm.size() - kMaxFrames * 2u;
+ }
+ 
+ void ps2ClearMoviePcm()
+@@ -664,6 +709,10 @@ void ps2ClearMoviePcm()
+     g_movieStarted = false;
+     g_moviePlayedFrames = 0u;
+     g_movieMissingFrames = 0u;
++    std::lock_guard<std::mutex> deviceLock(g_movieDevMutex);
++    g_movieDevPcm.clear();
++    g_movieDevRead = 0u;
++    g_movieDevStarted = false;
+ }
+ 
+ Ps2MoviePcmStats ps2MoviePcmStats()
+-- 
+2.55.0.windows.3
+
