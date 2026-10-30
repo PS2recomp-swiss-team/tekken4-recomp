@@ -342,6 +342,14 @@ namespace tekken4
         std::vector<int16_t> out;
         out.reserve((static_cast<size_t>(kFrames * 48000.0 / g_movieSourceHz) + 8u) * 2u);
         resampleMovieAudio(pcm.data(), kFrames, out);
+        // The movie tracks are mastered hot and we play them at full scale: TEKKEN4_MOVIE_GAIN (default 0.7) keeps the
+        // mix out of clipping. Host-side audio only, no guest state.
+        static const float movieGain = []() {
+            const char *env = std::getenv("TEKKEN4_MOVIE_GAIN");
+            return env ? static_cast<float>(std::atof(env)) : 0.7f;
+        }();
+        for (int16_t &sample : out)
+            sample = static_cast<int16_t>(static_cast<float>(sample) * movieGain);
         pushMoviePcm(out.data(), out.size() / 2u);
         if (g_movieAudioUnits++ == 0u)
             RUNTIME_LOG("[tekken4] movie audio: unit " << unit << " -> " << kFrames << " stereo frames at "
