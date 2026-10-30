@@ -1,0 +1,362 @@
+diff --git a/ps2xRecomp/src/lib/control_flow_emitter.cpp b/ps2xRecomp/src/lib/control_flow_emitter.cpp
+index 4bf8dc5..fc9c69b 100644
+--- a/ps2xRecomp/src/lib/control_flow_emitter.cpp
++++ b/ps2xRecomp/src/lib/control_flow_emitter.cpp
+@@ -44,7 +44,8 @@ namespace ps2recomp
+ 
+     bool ControlFlowEmitter::hasRealDelaySlot() const
+     {
+-        return !m_delaySlotOverride.empty() || !isGuestNop(m_delaySlot);
++        // A switch patch on a nop delay slot still has to run the patched word.
++        return !m_delaySlotOverride.empty() || !isGuestNop(m_delaySlot) || !m_delaySlot.switchName.empty();
+     }
+ 
+     bool ControlFlowEmitter::isCallLikeEdge() const
+diff --git a/ps2xRecomp/src/lib/function_emitter.cpp b/ps2xRecomp/src/lib/function_emitter.cpp
+index 9694045..f6e741e 100644
+--- a/ps2xRecomp/src/lib/function_emitter.cpp
++++ b/ps2xRecomp/src/lib/function_emitter.cpp
+@@ -24,6 +24,24 @@ namespace ps2recomp
+             inst.function = SPECIAL_SLL;
+             return inst;
+         }
++
++        // Unindented body: ControlFlowEmitter prefixes each line with the delay-slot indent.
++        std::string emitSwitchableDelaySlot(CodeGenerator &cg, const Instruction &original)
++        {
++            const Instruction patched = R5900Decoder().decodeInstruction(original.address, original.switchRaw);
++            if (patched.isBranch || patched.isJump || patched.hasDelaySlot)
++                throw std::runtime_error("switch patch must not be a branch or jump");
++
++            std::ostringstream body;
++            body << "if (PS2_SWITCH(\"" << original.switchName << "\")) { // 0x" << std::hex << original.switchRaw
++                 << std::dec << "  " << R5900Decoder::disassembleInstruction(patched) << " (Delay Slot)\n";
++            body << cg.translateInstruction(patched) << "\n";
++            body << "} else { // 0x" << std::hex << original.raw << std::dec << "  "
++                 << R5900Decoder::disassembleInstruction(original) << " (Delay Slot)\n";
++            body << cg.translateInstruction(original) << "\n";
++            body << "}";
++            return body.str();
++        }
+     }
+ 
+     FunctionEmitter::FunctionEmitter(CodeGenerator &codeGenerator)
+@@ -152,13 +170,25 @@ namespace ps2recomp
+                         ss << "label_" << std::hex << delaySlot->address << std::dec << ":\n";
+                     }
+ 
+-                    if (hasDecodedDelaySlot && !delaySlot->switchName.empty())
+-                        throw std::runtime_error("switch patch in a branch delay slot is not supported");
+-
+-                    if (gifDmaKickPlan.valid &&
++                    const bool gifDmaDelaySlot =
++                        gifDmaKickPlan.valid &&
+                         gifDmaKickPlan.completesInDelaySlot &&
+                         gifDmaKickPlan.branchIndex == i &&
+-                        hasDecodedDelaySlot)
++                        hasDecodedDelaySlot;
++
++                    if (hasDecodedDelaySlot && !delaySlot->switchName.empty() && gifDmaDelaySlot)
++                        throw std::runtime_error("switch patch in a GIF DMA kick delay slot is not supported");
++
++                    if (hasDecodedDelaySlot && !delaySlot->switchName.empty())
++                    {
++                        ss << cg.handleBranchDelaySlots(
++                            inst,
++                            *delaySlot,
++                            function,
++                            analysisResult,
++                            emitSwitchableDelaySlot(cg, *delaySlot));
++                    }
++                    else if (gifDmaDelaySlot)
+                     {
+                         ss << cg.handleBranchDelaySlots(
+                             inst,
+diff --git a/ps2xRuntime/include/runtime/ps2_graphics_settings.h b/ps2xRuntime/include/runtime/ps2_graphics_settings.h
+index 73498e8..1933953 100644
+--- a/ps2xRuntime/include/runtime/ps2_graphics_settings.h
++++ b/ps2xRuntime/include/runtime/ps2_graphics_settings.h
+@@ -193,6 +193,7 @@ namespace ps2_graphics
+         bool smoothScreen = false; // bilinear filtering when the frame is scaled to the window
+         int internalScale = 1;     // GL GS renderer resolution, 1..4 x the PS2's (PS2X_GS_HW_SCALE wins until changed)
+         bool widescreen = false;   // runtime switch "widescreen": the game's 16:9 patch ([patches] in the recompiler config)
++        bool noInterlace = false;  // runtime switch "no_interlace": PCSX2 No-Interlacing (boot GS mode 480p; removes field bob)
+         TextureFilter textureFilter = TextureFilter::Game;
+         bool fxaa = false;         // FXAA on the frame as it is drawn to the window
+         int sharpen = 0;           // 0..100 %, contrast-limited sharpening in the same pass
+diff --git a/ps2xRuntime/src/lib/ps2_debug_panel.cpp b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+index 7392497..6b49aa7 100644
+--- a/ps2xRuntime/src/lib/ps2_debug_panel.cpp
++++ b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+@@ -2444,6 +2444,10 @@ namespace
+                     settings.aspect = ps2_graphics::Aspect::Ratio4x3;
+                 changed = true;
+             }
++            if (ImGui::Checkbox("No-Interlacing (progressive, removes field bob)", &settings.noInterlace))
++                changed = true;
++            if (settings.noInterlace)
++                ImGui::TextDisabled("Applied when the game resets the GS (boot). Restart if toggled mid-run.");
+             static const char *const kAspects[] = {"4:3", "16:9", "Stretch to window",
+                                                    "Frame pixels (640x448, old default)"};
+             int aspect = static_cast<int>(settings.aspect);
+diff --git a/ps2xRuntime/src/lib/ps2_graphics_settings.cpp b/ps2xRuntime/src/lib/ps2_graphics_settings.cpp
+index 1e118d6..0c3cc91 100644
+--- a/ps2xRuntime/src/lib/ps2_graphics_settings.cpp
++++ b/ps2xRuntime/src/lib/ps2_graphics_settings.cpp
+@@ -998,6 +998,8 @@ namespace ps2_graphics
+                     g_settings.internalScale = value;
+                 else if (key == "widescreen")
+                     g_settings.widescreen = value != 0;
++                else if (key == "no_interlace")
++                    g_settings.noInterlace = value != 0;
+                 else if (key == "texture_filter" && (value == 0 || value == 1))
+                     g_settings.textureFilter = static_cast<TextureFilter>(value);
+                 else if (key == "fxaa")
+@@ -1014,6 +1016,7 @@ namespace ps2_graphics
+         void applySwitchesLocked()
+         {
+             ps2_switches::set("widescreen", g_settings.widescreen);
++            ps2_switches::set("no_interlace", g_settings.noInterlace);
+         }
+ 
+         void saveLocked()
+@@ -1028,6 +1031,7 @@ namespace ps2_graphics
+             std::fprintf(file, "smooth_screen=%d\n", g_settings.smoothScreen ? 1 : 0);
+             std::fprintf(file, "internal_scale=%d\n", g_settings.internalScale);
+             std::fprintf(file, "widescreen=%d\n", g_settings.widescreen ? 1 : 0);
++            std::fprintf(file, "no_interlace=%d\n", g_settings.noInterlace ? 1 : 0);
+             std::fprintf(file, "texture_filter=%d\n", static_cast<int>(g_settings.textureFilter));
+             std::fprintf(file, "fxaa=%d\n", g_settings.fxaa ? 1 : 0);
+             std::fprintf(file, "sharpen=%d\n", g_settings.sharpen);
+@@ -1079,3 +1083,12 @@ namespace ps2_graphics
+         }
+     }
+ }
++
++namespace
++{
++    // no_interlace is consumed at GS reset during boot, before the first present/F2 get().
++    [[maybe_unused]] const int g_loadGraphicsSettings = [] {
++        (void)ps2_graphics::get();
++        return 0;
++    }();
++}
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index 463b6cf..4c897cb 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -2006,6 +2006,214 @@ void register_code_generator_tests()
+                      "jalr fallback should not dispatch directly to tail-jump delay slot");
+         });
+ 
++        tc.Run("switch patch on a JAL delay slot emits both words", [](TestCase &t) {
++            Function func;
++            func.name = "jal_delay_switch";
++            func.start = 0x22B134;
++            func.end = 0x22B140;
++            func.isRecompiled = true;
++            func.isStub = false;
++
++            Instruction jal = makeJal(0x22B134, 0x22AF18);
++            Instruction delay = makeAddiu(0x22B138, 5, 0, 4);
++            delay.switchName = "no_interlace";
++            delay.switchRaw = 0x24050006u;
++
++            CodeGenerator gen({}, {});
++            std::string generated = gen.generateFunction(func, {jal, delay}, false);
++            printGeneratedCode("switch patch on a JAL delay slot emits both words", generated);
++
++            t.IsTrue(generated.find("if (PS2_SWITCH(\"no_interlace\"))") != std::string::npos,
++                     "delay-slot switch should emit PS2_SWITCH");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 5, (int32_t)ADD32(GPR_U32(ctx, 0), 6));") != std::string::npos,
++                     "patched delay slot should load immediate 6");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 5, (int32_t)ADD32(GPR_U32(ctx, 0), 4));") != std::string::npos,
++                     "original delay slot should load immediate 4");
++            t.IsTrue(generated.find("ctx->in_delay_slot = true;") != std::string::npos,
++                     "switchable delay slot still runs as the branch delay slot");
++            const auto switchAt = generated.find("if (PS2_SWITCH(\"no_interlace\"))");
++            const auto delayFlag = generated.find("ctx->in_delay_slot = true;");
++            t.IsTrue(switchAt != std::string::npos && delayFlag != std::string::npos && switchAt > delayFlag,
++                     "both delay-slot variants should be emitted inside the branch delay-slot region");
++        });
++
++        tc.Run("switch patch on a BEQ delay slot emits both words", [](TestCase &t) {
++            Function func;
++            func.name = "beq_delay_switch";
++            func.start = 0x1000;
++            func.end = 0x1010;
++            func.isRecompiled = true;
++            func.isStub = false;
++
++            Instruction br = makeBranch(0x1000, 1);
++            Instruction delay = makeAddiu(0x1004, 2, 0, 1);
++            delay.switchName = "no_interlace";
++            delay.switchRaw = 0x24020002u;
++            Instruction target = makeNop(0x1008);
++
++            CodeGenerator gen({}, {});
++            std::string generated = gen.generateFunction(func, {br, delay, target}, false);
++            printGeneratedCode("switch patch on a BEQ delay slot emits both words", generated);
++
++            t.IsTrue(generated.find("if (PS2_SWITCH(\"no_interlace\"))") != std::string::npos,
++                     "conditional-branch delay-slot switch should emit PS2_SWITCH");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 2, (int32_t)ADD32(GPR_U32(ctx, 0), 2));") != std::string::npos,
++                     "patched BEQ delay slot should load immediate 2");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 2, (int32_t)ADD32(GPR_U32(ctx, 0), 1));") != std::string::npos,
++                     "original BEQ delay slot should load immediate 1");
++        });
++
++        tc.Run("switch patch on a likely-branch delay slot stays on the taken path", [](TestCase &t) {
++            Function func;
++            func.name = "beql_delay_switch";
++            func.start = 0x1200;
++            func.end = 0x1210;
++            func.isRecompiled = true;
++            func.isStub = false;
++
++            Instruction br{};
++            br.address = 0x1200;
++            br.opcode = OPCODE_BEQL;
++            br.rs = 1;
++            br.rt = 2;
++            br.simmediate = 1;
++            br.isBranch = true;
++            br.hasDelaySlot = true;
++            br.raw = 0x50010001u;
++
++            Instruction delay = makeAddiu(0x1204, 7, 0, 123);
++            delay.switchName = "no_interlace";
++            delay.switchRaw = 0x24070009u;
++            Instruction target = makeNop(0x1208);
++
++            CodeGenerator gen({}, {});
++            std::string generated = gen.generateFunction(func, {br, delay, target}, false);
++            printGeneratedCode("switch patch on a likely-branch delay slot stays on the taken path", generated);
++
++            t.IsTrue(generated.find("if (branch_taken_0x1200)") != std::string::npos,
++                     "likely branch should still gate the delay slot");
++            t.IsTrue(generated.find("if (PS2_SWITCH(\"no_interlace\"))") != std::string::npos,
++                     "likely-branch delay-slot switch should emit PS2_SWITCH");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 7, (int32_t)ADD32(GPR_U32(ctx, 0), 9));") != std::string::npos,
++                     "patched likely delay slot should load immediate 9");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 7, (int32_t)ADD32(GPR_U32(ctx, 0), 123));") != std::string::npos,
++                     "original likely delay slot should load immediate 123");
++        });
++
++        tc.Run("switch patch on a nop delay slot still emits the patched word", [](TestCase &t) {
++            Function func;
++            func.name = "nop_delay_switch";
++            func.start = 0x2000;
++            func.end = 0x2010;
++            func.isRecompiled = true;
++            func.isStub = false;
++
++            Instruction jal = makeJal(0x2000, 0x3000);
++            Instruction delay = makeNop(0x2004);
++            delay.switchName = "no_interlace";
++            delay.switchRaw = 0x24050006u;
++
++            CodeGenerator gen({}, {});
++            std::string generated = gen.generateFunction(func, {jal, delay}, false);
++            printGeneratedCode("switch patch on a nop delay slot still emits the patched word", generated);
++
++            t.IsTrue(generated.find("if (PS2_SWITCH(\"no_interlace\"))") != std::string::npos,
++                     "nop delay-slot switch must not be dropped as a guest nop");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 5, (int32_t)ADD32(GPR_U32(ctx, 0), 6));") != std::string::npos,
++                     "patched word of a nop delay slot should still be translated");
++        });
++
++        tc.Run("non-delay switch patch still emits both words", [](TestCase &t) {
++            Function func;
++            func.name = "body_switch";
++            func.start = 0x1E2250;
++            func.end = 0x1E225C;
++            func.isRecompiled = true;
++            func.isStub = false;
++
++            Instruction lui = makeLui(0x1E2250, 16, 0x37);
++            Instruction addiu = makeAddiu(0x1E2254, 2, 0, 1);
++            addiu.switchName = "no_interlace";
++            addiu.switchRaw = 0x24020002u;
++            Instruction next = makeNop(0x1E2258);
++
++            CodeGenerator gen({}, {});
++            std::string generated = gen.generateFunction(func, {lui, addiu, next}, false);
++            printGeneratedCode("non-delay switch patch still emits both words", generated);
++
++            t.IsTrue(generated.find("if (PS2_SWITCH(\"no_interlace\"))") != std::string::npos,
++                     "body switch should emit PS2_SWITCH");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 2, (int32_t)ADD32(GPR_U32(ctx, 0), 2));") != std::string::npos,
++                     "patched body word should load immediate 2");
++            t.IsTrue(generated.find("SET_GPR_S32(ctx, 2, (int32_t)ADD32(GPR_U32(ctx, 0), 1));") != std::string::npos,
++                     "original body word should load immediate 1");
++        });
++
++        tc.Run("switch patch that becomes a branch is rejected", [](TestCase &t) {
++            Function func;
++            func.name = "switch_to_branch";
++            func.start = 0x4000;
++            func.end = 0x4010;
++            func.isRecompiled = true;
++            func.isStub = false;
++
++            Instruction jal = makeJal(0x4000, 0x5000);
++            Instruction delay = makeAddiu(0x4004, 2, 0, 1);
++            delay.switchName = "no_interlace";
++            delay.switchRaw = 0x10000001u;
++
++            CodeGenerator gen({}, {});
++            bool threw = false;
++            try
++            {
++                (void)gen.generateFunction(func, {jal, delay}, false);
++            }
++            catch (const std::exception &)
++            {
++                threw = true;
++            }
++            t.IsTrue(threw, "a switch whose patched word is a branch must throw");
++        });
++
++        tc.Run("switch patch on a GIF DMA kick delay slot is rejected", [](TestCase &t) {
++            Function func;
++            func.name = "gif_delay_switch";
++            func.start = 0x2E7C90;
++            func.end = 0x2E7CC8;
++            func.isRecompiled = true;
++
++            std::vector<Instruction> instructions;
++            instructions.push_back(makeBranch(0x2E7C90, 2));
++            instructions.push_back(makeLui(0x2E7C94, 5, 0x1000));
++            instructions.push_back(makeLui(0x2E7C98, 5, 0x1000));
++            instructions.push_back(makeAddiu(0x2E7C9C, 6, 0, 4));
++            instructions.push_back(makeOri(0x2E7CA0, 3, 5, 0xE020));
++            instructions.push_back(makeSw(0x2E7CA4, 6, 3, 0));
++            instructions.push_back(makeOri(0x2E7CA8, 3, 5, 0xE010));
++            instructions.push_back(makeSw(0x2E7CAC, 6, 3, 0));
++            instructions.push_back(makeOri(0x2E7CB0, 3, 5, 0xA030));
++            instructions.push_back(makeSw(0x2E7CB4, 4, 3, 0));
++            instructions.push_back(makeAddiu(0x2E7CB8, 4, 0, 0x0105));
++            instructions.push_back(makeOri(0x2E7CBC, 3, 5, 0xA000));
++            instructions.push_back(makeJr(0x2E7CC0, 31));
++            Instruction chcr = makeSw(0x2E7CC4, 4, 3, 0);
++            chcr.switchName = "no_interlace";
++            chcr.switchRaw = 0xAC640000u;
++            instructions.push_back(chcr);
++
++            CodeGenerator gen({}, {});
++            bool threw = false;
++            try
++            {
++                (void)gen.generateFunction(func, instructions, false);
++            }
++            catch (const std::exception &)
++            {
++                threw = true;
++            }
++            t.IsTrue(threw, "a switch on a coalesced GIF DMA kick delay slot must throw");
++        });
++
+         tc.Run("VU random helpers emit line comments on separate lines", [](TestCase &t) {
+             CodeGenerator gen({}, {});
+ 

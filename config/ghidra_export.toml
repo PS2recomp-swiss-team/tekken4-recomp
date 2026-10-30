@@ -341,6 +341,9 @@ skip = []
 # Runtime-switchable instruction patches: each is emitted as if (PS2_SWITCH("<switch>")) { value } else { original }.
 # "widescreen" = the F2 settings option. From PCSX2's patches.zip SCES-50878_2251E14D.pnach, "Widescreen 16:9" by
 # nemesis2000 (its two EE words at 0x292424/0x292628 are in sceIpuStopDMA/sceIpuSync, PCSX2-only, not taken).
+# "no_interlace" = F2 No-Interlacing. From SCES-50878_F48F994A.pnach (other PAL CRC; --ignore-crc). gsinterlacemode=1
+# is a PCSX2 display setting, not an EE write, not taken. 0x0022B138 / 0x001EDC24 are delay slots (emitter emits both
+# words inside the branch). Do not add 0x001E2254 alone: it does not clear SMODE2 interlaced.
 [patches]
 instructions = [
   { address = "0x002177E0", value = "0x3C013F40", switch = "widescreen" }, # gameplay: lui at,0x3F80 (1.0) -> 0.75
@@ -349,6 +352,9 @@ instructions = [
   { address = "0x002015D4", value = "0x3C013F40", switch = "widescreen" }, # rfix 2: nop -> lui at,0x3F40
   { address = "0x002015D8", value = "0x44810000", switch = "widescreen" }, #         nop -> mtc1 at,f0
   { address = "0x002015E4", value = "0x46006303", switch = "widescreen" }, #         nop -> div.s f12,f12,f0
+  { address = "0x0022B138", value = "0x24050006", switch = "no_interlace" }, # jal delay: GS table row 4 (PAL interlaced) -> 6 (DTV 480p)
+  { address = "0x001EDC24", value = "0x24020009", switch = "no_interlace" }, # b delay: struct byte 2 -> 9 (F48F994A; not SMODE2)
+  { address = "0x001E2254", value = "0x24020002", switch = "no_interlace" }, # store 2 not 1 at 0x0036E9ED (F48F994A; not SMODE2)
 ]
 
 [ghidra_export]

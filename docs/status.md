@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30 01:36 (session 7, end)_
+_Last updated: 2026-10-30 afternoon (Grok review of the morning queue)_
 
 ## Resume here
 To continue, open Claude Code in this folder and say: "read docs/status.md and continue".
@@ -1172,6 +1172,19 @@ The user pre-authorized publishing every successful milestone on three channels:
     (docs/SUPER_RECOMPILER.md) then us-netcheck (logs/grok/us-netcheck-report.md); no-interlace (tree
     external/wt-no-interlace) then zero-copy (external/wt-zero-copy). The user lets Grok run tools/console-skill (not
     their delete paths). NEXT SESSION: review all four (prompts in docs/ai/prompts/), port reviewed work as patches 43+.
+    **Reviewed 2026-10-30 afternoon (Grok, Claude at the weekly limit).** All four had finished in the morning and
+    nothing was still running. `super-recomp-design` is `docs/SUPER_RECOMPILER.md`: one toolchain, two guest images,
+    same-disc netplay only, and do not merge `us-iso` into `master`. `us-netcheck` stands and changed no code: the
+    forced desync is the newlib rand word at frame 150 (`H:\tekken4-recomp_usa\logs\net\grok-us-ndesync`, host
+    `rb_frames.log:160`), and the 12000-frame pairs reported 0 mismatches. Those pairs were not re-run.
+    **Patch 43** is no-interlace (delay-slot `PS2_SWITCH`, F2 checkbox, three words in `config/ghidra_export.toml`;
+    `generated/` already emits them). `ps2x_tests` re-run 496/496. The remaining ±2 guest-pixel field copy is still
+    open. The morning shots were not re-measured. **Patch 44** is shared presentation (draw the GS texture, fall
+    back to readback). `ps2x_tests` re-run 489/489 on that tree, which does not have the delay-slot tests. Morning
+    fights stayed at 60 fps at 4×; the measured win is GS time and upload time. Not re-measured this afternoon.
+    TheWishin pushed `us-slus20328` today, tip `caf10f5` (movie gain 70%). `us-iso` is still `770c647`. The branches
+    diverged at `c7f13d6`, with 21 commits on his side since (unlock-all, launcher, patches through 86). He has not
+    answered the four questions in `docs/HANDOFF_WISHIN.md`.
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
