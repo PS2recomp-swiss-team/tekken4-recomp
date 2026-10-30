@@ -20,7 +20,7 @@ documents the switch, session 1 adds the control.
 - One launcher for T5DR + T4 + future games: a shell with per-game modules (build, play, settings, online). `launcher\t4core.py`
   is the first module. The T5DR launcher lives in `C:\T5DROnline\launcher` and belongs to the T5DR side: agree the plan with
   the owner; other sessions already work on launcher design there ("Launcher-Redesign", "T5DR Online launcher design").
-- Real `.exe` starter, updater, Online tab (today a placeholder). The BUILD GAME tab is only dry-run tested (`toolsuild_game.ps1` itself ran end to end).
+- Real `.exe` starter, updater, Online tab (today a placeholder). The BUILD GAME tab is only dry-run tested (`tools\build_game.ps1` itself ran end to end).
 - Settings still missing in the UI: AA levels, HUD sharp, anisotropic filtering, run-ahead.
 
 **2. Game**

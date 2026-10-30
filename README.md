@@ -55,10 +55,10 @@ You need your own Tekken 4 USA ISO (SLUS-20328), Visual Studio 2022 Build Tools 
 Unpack into a new, empty folder (the build uses the folder next to it for PS2Recomp), then:
 
 ```
-python launcher	4_launcher.pyw
+python launcher\t4_launcher.pyw
 ```
 
-or `powershell -ExecutionPolicy Bypass -File toolsuild_game.ps1 -Iso "C:\path\Tekken 4 (USA).iso"`, then set `TEKKEN4_ISO` and run `toolsun_game.cmd`.
+or `powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso "C:\path\Tekken 4 (USA).iso"`, then set `TEKKEN4_ISO` and run `tools\run_game.cmd`.
 About 7-20 minutes and 6 GB. Details: `START_HIER.txt`, `docs/E2E_BUILD.md`. Project overview: `docs/PROJECT_MAP.md`.
 
 ## Thanks
