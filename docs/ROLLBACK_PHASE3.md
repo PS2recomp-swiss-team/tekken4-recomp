@@ -142,10 +142,20 @@ pads the frame ran with; `NETHASH`, `NETTS` (time sync), `NETSUMMARY` every 600 
 ## 4. Reproduce
 
 Build (stages generated code, the HEAD versions of the shared overrides, the working rollback/netplay driver and
-`runtime/tekken4_net*`; builds `D:\tekken4-fork-net\out\net`; writes `t4net_build.txt`):
+`runtime/tekken4_net*`; builds `<TEKKEN4_SRC>\out\<TEKKEN4_BUILD_DIR>`; writes `ps2xRuntime\t4net_build.txt` there):
 ```
 docs\rollback\net_build.cmd
 ```
+The project root is resolved from the script location, independent of the current directory. Defaults:
+the sibling `..\tekken4-fork-net` worktree and build directory `net` (still `D:\tekken4-fork-net\out\net`
+when this project is at `D:\tekken4-us`). To override them in cmd.exe before calling the script:
+```
+set "TEKKEN4_SRC=C:\work\tekken4-fork-net"
+set "TEKKEN4_BUILD_DIR=net"
+docs\rollback\net_build.cmd
+```
+Paths with spaces are supported. The same source and build directory are used for staging, building and the build id stamp.
+
 Pairs (PowerShell; `net_pair.ps1` holds `logs\run.lock` for both games, closes them when both logged `NETEND`):
 ```
 $v = 'TEKKEN4_RAND_SEED=1;TEKKEN4_RB_INPUT=500:Start,800:Start,960:Down,1020:Down,1080:Cross,1320:Cross,1560:Cross,1800:Cross;TEKKEN4_RB_INPUT2=1320:Cross,1560:Cross,1800:Cross;TEKKEN4_RB_FUZZ=2400;TEKKEN4_RB_FUZZ2=2400;TEKKEN4_SOUND=1;TEKKEN4_NET_LOCALPAD=0;TEKKEN4_NET_DESYNC_DUMP=1'
@@ -235,6 +245,6 @@ This repo (not committed by me):
   NETHASH lines (also in measure mode), session seed in srand. Header lists every switch.
   The netplay code is guarded by `__has_include("tekken4_net.h") && PS2X_ROLLBACK_IOP_STATE`: the file still builds in
   trees without patches 41/42 (stage_generated copies it everywhere), netplay is then simply absent.
-- `docs/rollback/net_build.cmd` (build `D:\tekken4-fork-net\out\net` + build id stamp), `tools/net_pair.ps1` (two
+- `docs/rollback/net_build.cmd` (build the sibling `tekken4-fork-net\out\net` by default + build id stamp), `tools/net_pair.ps1` (two
   instances, network simulator, run lock), `tools/t4_buildid.py`, `docs/rollback/net_compare.py`,
   `docs/rollback/net_desync_diff.py`, `docs/rollback/net_contact.py`, `tools/net_play.ps1` (one game by hand).
