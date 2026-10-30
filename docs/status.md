@@ -11,7 +11,10 @@ _Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps 
   hashed the tree's commit (different on every PC, because `build_game.ps1` commits the patches at build time) and raw bytes (checkout
   CRLF vs zip); it now hashes the tree id and normalises line endings. Not taken: his no-interlace (PAL addresses, CT16 row 6; ours is
   `TEKKEN4_PROGRESSIVE`, CT24 row 5), the rest of 44 (our patch 49 does it). Later, if 16:9 is wanted: his patch 39 + the emitter part of 43.
-  Open: compiler version and flags are still not in the build id (his finding; players compile locally, so this can desync).
+  **Toolchain in the build id (his finding):** compiler id and exact version, build type, flags, PS2X_* options and native VU1 or
+  interpreter now count, paths do not. Consequence: players on different MSVC updates (`19.44.35229.0` here) are refused at the
+  handshake until the release pins the compiler (`docs/RELEASE_PLAN_T4.md` option B). Id after this change: `66667604060267d0`.
+  The ids in the evidence below are from before it. Handshake and pair not re-run with this id, the runtime did not change.
   Evidence: ps2x_tests 482/482; rollback self-test 202 rollbacks, 447 frames, 0 mismatches (`logs\perf\rb\fb_p2c`); fallback forced with a
   temporary hook: message once, picture back (`logs\perf\rb\fb_noshared`); one-step build from a clean export (`D:\t4-net87`, 362 s) and
   `D:\tekken4-fork-fb` give the same id `f86af146de8e9636` with different commits; pair from that build at RTT 150, 3 % loss, 6000 frames:

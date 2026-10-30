@@ -93,9 +93,10 @@ Optional `TEKKEN4_NET_KEY`: SipHash-2-4 tag on every packet. The peer is lost af
 3 levels, so stick noise is no new input).
 
 **Build id** (`tools/t4_buildid.py`, run by `net_build.cmd`, written to `out\net\ps2xRuntime\t4net_build.txt`):
-`sha1("t4dr-build:<SLUS_203.28 sha1>:<code_id>:<net version>")[:16]`, code_id = SHA-1 over the PS2Recomp tree's commit
-and uncommitted diff, `patches/*.patch`, `config/*.toml|*.csv`, the staged game modules (`*_overrides.cpp`,
-`tekken4_net*`). The games take it from `TEKKEN4_NET_BUILD` (the scripts set it from the stamp) or
+`sha1("t4dr-build:<SLUS_203.28 sha1>:<code_id>:<net version>")[:16]`, code_id = SHA-1 over the PS2Recomp tree's id
+(not the commit, which differs per PC) and uncommitted diff, `patches/*.patch`, `config/*.toml|*.csv`, the staged game
+modules (`*_overrides.cpp`, `tekken4_net*`; line endings normalised) and the toolchain of the CMake build (compiler id and
+exact version, build type, flags, PS2X_* options, native VU1 or interpreter; no paths). The games take it from `TEKKEN4_NET_BUILD` (the scripts set it from the stamp) or
 `t4net_build.txt` in the run dir; unset = no check (tests only).
 
 **Session seed**: the host's (`TEKKEN4_NET_SEED`, else its session id) is mixed into the game's srand

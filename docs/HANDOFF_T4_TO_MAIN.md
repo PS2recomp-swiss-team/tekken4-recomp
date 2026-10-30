@@ -49,7 +49,8 @@ high resolution, hitches at boot and char select -> loading, run-ahead too slow 
 (`tools\net_lobby_pair.ps1`); result file for ranked; direct fight; later replays, spectating, training rooms.
 
 **Release:** player still needs Python, Git, CMake, Ninja, VS 2022 Build Tools. Options in `docs/RELEASE_PLAN_T4.md`: B = compiler in the zip,
-MSVC libs fetched on the player's PC; A = game code as a DLL like T5DR. Recommended: B first, then A.
+MSVC libs fetched on the player's PC; A = game code as a DLL like T5DR. Recommended: B first, then A. The build id now holds the exact
+compiler version: until a release pins the compiler, players on different MSVC updates are refused at the handshake.
 
 ## Decisions the user still has to make
 - Release path (B then A?), product name and channel (proposed: "Tekken 4 Online", releases in the Swiss repo).

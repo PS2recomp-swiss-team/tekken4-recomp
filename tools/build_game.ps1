@@ -469,12 +469,26 @@ Step 'stage' 'tools\stage_generated.cmd' {
     'staged'
 }
 
+# The netplay build id both peers must share (t4net_build.txt next to the exe; tools\net_pair.ps1 and the lobby read
+# it). Same inputs as docs\rollback\net_build.cmd. Written after an 'up to date' step too: the step's fingerprint does
+# not cover how the id is computed.
+function Write-NetBuildId {
+    $py = $Script:Tools['py']
+    if (-not $py) { $c = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1; $py = @{ Exe = $c.Source; Pre = @() }; if ($c.Name -ieq 'py.exe') { $py.Pre = @('-3') } }
+    $a = @($py.Pre) + @('-I', (Join-Path $PSScriptRoot 't4_buildid.py'), '--src', $Tree, '--out', (Split-Path -Parent $RunnerExe))
+    $code = Invoke-Logged -File $py.Exe -ArgList $a -Label 'Netplay build id (t4_buildid.py)'
+    if ($code -ne 0) { Say '    NOTE: the netplay build id could not be written: online matches will refuse this build.' }
+}
+
 # ================================================================ runtime
 Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
     $vu1 = @(Files (Join-Path $Root 'game\vu1\micro') '*.bin')   # @(): an empty result is $null and .Count then throws under StrictMode
     $fp = Sha1Text ((Get-StateValue 'stage' 'fingerprint') + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'patches') '*.patch')) + '|' +
                     (Get-StatFingerprint $vu1) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead) + '|' + $BuildDirName)
-    if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $RunnerExe) 't4net_build.txt')) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) { return 'up to date' }
+    if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) {
+        if (-not $WhatIf) { Write-NetBuildId }
+        return 'up to date'
+    }
     if ($WhatIf) { Plan 'run tools\build_runtime.cmd (cmake + ninja, 10-40 minutes the first time)'; $Changed['runtime'] = $true; return 'would run' }
     if ($vu1.Count -eq 0) {
         # The VU1 micro memory image (native VU1 = full speed) is assembled from the player's own ELF.
@@ -492,13 +506,7 @@ Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'build_runtime.cmd') -Label 'Building the game runtime (ninja)'
     if ($code -ne 0) { throw "tools\build_runtime.cmd failed (exit $code)" }
     if (-not (Test-Path -LiteralPath $RunnerExe)) { throw "build finished but $RunnerExe is missing" }
-    # The netplay build id both peers must share (t4net_build.txt next to the exe; tools\net_pair.ps1 and the lobby
-    # read it). Same inputs as docs\rollback\net_build.cmd.
-    $py = $Script:Tools['py']
-    if (-not $py) { $c = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1; $py = @{ Exe = $c.Source; Pre = @() }; if ($c.Name -ieq 'py.exe') { $py.Pre = @('-3') } }
-    $a = @($py.Pre) + @('-I', (Join-Path $PSScriptRoot 't4_buildid.py'), '--src', $Tree, '--out', (Split-Path -Parent $RunnerExe))
-    $code = Invoke-Logged -File $py.Exe -ArgList $a -Label 'Netplay build id (t4_buildid.py)'
-    if ($code -ne 0) { Say '    NOTE: the netplay build id could not be written: online matches will refuse this build.' }
+    Write-NetBuildId
     Set-StateValues 'runtime' @{ fingerprint = $fp; exe = $RunnerExe }
     $Changed['runtime'] = $true
     'built'
