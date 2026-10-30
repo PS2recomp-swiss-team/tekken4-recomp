@@ -1185,6 +1185,9 @@ The user pre-authorized publishing every successful milestone on three channels:
     TheWishin pushed `us-slus20328` today, tip `caf10f5` (movie gain 70%). `us-iso` is still `770c647`. The branches
     diverged at `c7f13d6`, with 21 commits on his side since (unlock-all, launcher, patches through 86). He has not
     answered the four questions in `docs/HANDOFF_WISHIN.md`.
+    **Review tree for Claude, before his approval:** `external/wt-before-claude` (baseline `6b7cbd5` = patches 01-42;
+    uncommitted diff = patches 43 and 44, 10 files). `git -C external/wt-before-claude diff HEAD`. `REVIEW.txt` there
+    points at the design and the netplay report. Do not take `register_functions.cpp`; it is not in this diff.
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
