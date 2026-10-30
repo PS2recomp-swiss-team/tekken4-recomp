@@ -20,6 +20,11 @@ if errorlevel 8 (echo copying the netplay transport failed & exit /b 1)
 rem robocopy exit 1 = the transport was copied in now. The rollback overrides test __has_include("tekken4_net.h") inside
 rem a unity batch whose dependency list never had that header: touch them so Ninja recompiles them with netplay on.
 if errorlevel 1 powershell -NoProfile -Command "(Get-Item -LiteralPath '%RT%\src\runner\tekken4_rollback_overrides.cpp').LastWriteTime = Get-Date"
+rem Header-only opt-in state discovery and online result reporting, included by the rollback overrides.
+robocopy "%~dp0..\runtime" "%RT%\src\runner" tekken4_state_probe.h tekken4_online_result.h /NJH /NJS /NFL /NDL /NP
+if errorlevel 8 (echo copying the state probe and result headers failed & exit /b 1)
+rem Touch the including translation unit when either header is first staged or changed (including unity builds).
+if errorlevel 1 powershell -NoProfile -Command "(Get-Item -LiteralPath '%RT%\src\runner\tekken4_rollback_overrides.cpp').LastWriteTime = Get-Date"
 robocopy "%GEN%" "%RT%\include" ps2_recompiled_functions.h ps2_recompiled_stubs.h /NJH /NJS /NFL /NDL /NP
 if errorlevel 8 (echo copying headers failed & exit /b 1)
 exit /b 0

@@ -3,6 +3,13 @@
 _Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps the US line)_
 
 ## Resume here
+- **Direct-fight discovery (2026-10-30, source only):** default-OFF `TEKKEN4_STATE_PROBE=1`
+  adds read-only live-boundary candidate/raw-range logging; `TEKKEN4_NET_RESULT=<path>` writes an
+  explicitly incomplete online-session JSON report. No T4 mode/round/winner/score/health addresses
+  are proven, so winner/score stay null. Confirmed sampled hash and host session FPS have stated
+  limits. `docs/DIRECTFIGHT_T4.md` records evidence, probe steps, T5DR failure lessons and the direct
+  fight/persistent-game plan. No build or game run; a real US build, annotated probe, rollback
+  self-test and two-PC outcome/lifecycle tests are still required. Direct fight is not implemented.
 - **Rollback source follow-up (2026-10-30, unbuilt):** two default-OFF switches in `runtime/`:
   `TEKKEN4_NET_COALESCE=1` skips identical boundary INPUT sends within 15 ms while preserving sampled inputs
   and retries; `TEKKEN4_NET_HASH_PROFILE=1` reports worker queue/collection age and snapshot reader waits.
