@@ -28,6 +28,12 @@
 | `console-saves/memcard.py` | PCSX2 / raw memory card images to the runtime's `mc0` folders, .psu, backups, cloud sync | no |
 | `console-anywhere/targets.py` | per-platform build doctor and packaging with a no-game-files guard | no |
 
+## Permission (user, 2026-10-30)
+
+"give grok the right to use the last tool you spoke about": Grok may run the tools in this folder (python -I).
+Still forbidden for everyone: their delete/replace paths on project data (memcard.py restore/sync/import over an
+existing save, targets.py package, the tests' temp-folder cleanup), per the no-delete rule.
+
 ## Project rules that apply here
 
 - Run them with `python -I tools/console-skill/<skill>/<tool>.py ...` (CLAUDE.md: `python -I` on anything under `game/`).

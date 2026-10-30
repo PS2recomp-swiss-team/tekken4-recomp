@@ -1,0 +1,7 @@
+OWNS: docs/SUPER_RECOMPILER.md
+TASK: super-recomp-design. Work mode, high effort, 150 turns, READ-ONLY on code: design the "super recompiler" (user goal: one recompiler for both ISOs, PAL SCES-50878 and US SLUS-20328, with online play on both).
+NOTES: logs/grok/super-recomp-design-notes.md; logs/grok/super-recomp-design-final.json by turn 135.
+READ: CLAUDE.md, docs/status.md (session 7), docs/HANDOFF_WISHIN.md, tools/pal_us_map.py + config/pal_us_map.csv, config/ghidra_export.toml, patches/ (PAL 01-42), H:\tekken4-recomp_usa (branch us-iso: CLAUDE.md, config/, patches/ 01-56, runtime/, tools/build_game.ps1, docs/ROLLBACK_*), runtime/*_overrides.cpp of both.
+ASK: write docs/SUPER_RECOMPILER.md: (1) disc detection (ELF SHA-1/CRC) and per-disc data (function maps, jump tables, [patches], override addresses, DATA.BIN LBN): which can be generated from one source + pal_us_map; (2) one runtime: which PAL and US patches are the same fix twice (music, cdvd search, SIF/SPU2 IRQ), which are complementary (PAL F2 graphics/controls, US rollback/netplay/perf), a merged patch order and conflicts, with file:line evidence; (3) per-game overrides written once with an address table per disc; (4) netplay across the two discs (can a PAL and a US player meet? what differs in guest state); (5) a migration plan in small testable steps with effort S/M/L.
+DOD: the doc with evidence refs; notes + final JSON.
+LIMITS: no edits except docs/SUPER_RECOMPILER.md and your logs; no deletes/moves.
