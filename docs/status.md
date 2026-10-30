@@ -3,6 +3,11 @@
 _Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
 
 ## Resume here
+- **MINI RELEASE 2026-10-30 (dist\T4-Mini-Release-2026-10-30, local only):** Tekken4.cmd (resolution menu, fullscreen
+  J/E/N) + Launcher.cmd + LIESMICH.txt, exe = patches 01-84 + unlock override (all fighters unlocked by default,
+  runtime/tekken4_unlock_overrides.cpp: callback 0x1ec350 -> 1). Intro movie fixed at high resolution (patch 84:
+  device-side movie sound, bicubic movie upscale). Release check (logs/release_check): 1440p Story fight at full
+  speed (round clock 29.97 s per 30 s). Not tested: unlock in Story/VS/netplay. Commits are local; user pushes to swiss.
 - **USER TEST 2026-10-30 morning:** "game runs much smoother", "in-game music/sound better"; fullscreen hid the other
   monitor -> patch 83 (borderless = undecorated monitor-sized window like T5DR, F11 or Alt+Enter; checked: 2560x1440 on
   DISPLAY1, DISPLAY2 free, not iconified). Open: "now and then a few micro stutters" (where/when not known yet:
