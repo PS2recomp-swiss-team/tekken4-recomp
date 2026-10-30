@@ -1,0 +1,421 @@
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 1854be1..ee227b9 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -3,7 +3,14 @@
+ #include "runtime/gs/gs_frontend.h"
+ #include "ps2_log.h"
+ #include <atomic>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
++
++namespace
++{
++    void traceVif1Tag(char path, uint32_t tagAddr, uint64_t tag, size_t outBytes); // GOW_VU1N_CHECKLONG debug
++}
+ #include <limits>
+ #include <stdexcept>
+ #include <algorithm>
+@@ -1221,6 +1228,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+     {
+         // D_ENABLEW: D_ENABLER (0x1000F520) reads back the last write. Games poll it after setting CPND
+         // (bit 16) to suspend DMA; transfers here finish synchronously, so there is nothing to hold back.
++        traceVif1Tag('W', address, value, 0u);
+         m_ioRegisters[address] = value;
+         m_ioRegisters[0x1000F520u] = value;
+         return true;
+@@ -1228,10 +1236,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+ 
+     // A DMA channel still running ignores CHCR writes, except one clearing STR, which stops it, unless the DMAC is
+     // suspended (D_ENABLER.CPND), as in PCSX2's DmaExec ("Fields other than STR can only be written to when the DMA is
+-    // stopped"). Here the only channel left running is an MFIFO drain waiting for the ring to fill.
++    // stopped"). Here that is an MFIFO drain waiting for the ring: Tekken 4 switches D_CTRL.MFD off and rewrites
++    // VIF1 CHCR while VIF1 waits; starting a normal chain at TADR would read the ring's stale memory as tags.
+     if (m_mfifoWaitingChannel != 0u && address == m_mfifoWaitingChannel && (m_ioRegisters[address] & 0x100u) != 0u &&
+         ((m_ioRegisters[0x1000F520u] >> 16) & 1u) == 0u)
+     {
++        traceVif1Tag('I', address, value, 0u);
+         if ((value & 0x100u) == 0u)
+         {
+             m_ioRegisters[address] &= ~0x100u;
+@@ -1241,6 +1251,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+     }
+ 
+     m_ioRegisters[address] = value;
++    if (address == 0x10009000u || address == 0x10009030u || address == 0x10009010u || address == 0x1000E000u || address == 0x1000D000u || address == 0x1000D020u ||
++        address == 0x1000D010u || address == 0x1000D080u) // VIF1 TADR / MADR, D_CTRL, fromSPR CHCR / MADR / SADR writes
++        traceVif1Tag('W', address, value, 0u);
+ 
+     if (address >= 0x10003C00u && address < 0x10003E00u)
+     {
+@@ -1328,6 +1341,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
+             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
+             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
++            if (channelBase == 0x10009000u) // VIF1 start: CHCR written, TADR, D_CTRL
++                traceVif1Tag('S', m_ioRegisters[channelBase + 0x30],
++                             (static_cast<uint64_t>(dctrlIt == m_ioRegisters.end() ? 0u : dctrlIt->second) << 32) | value, qwc);
+ 
+             if (tryProcessScratchpadDma(channelBase, value))
+             {
+@@ -1472,6 +1488,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                         uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
+                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
+                         ++tagsProcessed;
++                        if (channelBase == 0x10009000u)
++                            traceVif1Tag('c', currentTagAddr, tag, chainBuf.size());
+ 
+                         uint32_t dataAddr = 0;
+                         bool hasPayload = (tagQwc > 0);
+@@ -1644,6 +1662,7 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
+     {
+         // MFIFO: fromSPR's destination is the ring, MADR wraps inside it (RBOR + (addr & RBSR)).
+         uint32_t dst = mfifoWrap(originalMadr);
++        traceVif1Tag('F', dst, (static_cast<uint64_t>(qwc) << 32) | originalSadr, byteCount);
+         uint32_t scratchOffset = originalSadr;
+         for (uint32_t done = 0u; done < byteCount; done += 16u)
+         {
+@@ -1858,6 +1877,101 @@ uint32_t PS2Memory::mfifoWrap(uint32_t address)
+     return rbor + (address & rbsr);
+ }
+ 
++namespace
++{
++    // GOW_VU1N_CHECKLONG debug: the last VIF1 DMA tags read (chain walker or MFIFO drain), printed with a bad VIFcode
++    struct DmaTagTraceEntry
++    {
++        char path;
++        uint32_t tagAddr;
++        uint64_t tag;
++        uint32_t outBytes;
++    };
++    DmaTagTraceEntry g_dmaTagTrace[4096];
++    unsigned g_dmaTagTraceNext = 0u;
++    const bool g_dmaTagTraceOn = std::getenv("GOW_VU1N_CHECKLONG") != nullptr;
++    void traceVif1Tag(char path, uint32_t tagAddr, uint64_t tag, size_t outBytes)
++    {
++        if (!g_dmaTagTraceOn)
++            return;
++        g_dmaTagTrace[g_dmaTagTraceNext] = {path, tagAddr, tag, static_cast<uint32_t>(outBytes)};
++        g_dmaTagTraceNext = (g_dmaTagTraceNext + 1u) % 4096u;
++    }
++}
++
++void ps2DmaTagTraceDump(const uint8_t *rdram)
++{
++    uint32_t lastStartTadr = 0u; // the raw ring around the last VIF1 start's TADR (compare with a PCSX2 ring dump)
++    for (unsigned k = 0u; k < 4096u; ++k)
++    {
++        const DmaTagTraceEntry &e = g_dmaTagTrace[(g_dmaTagTraceNext + k) % 4096u];
++        if (e.path == 'S')
++            lastStartTadr = e.tagAddr;
++    }
++    if (rdram && lastStartTadr >= 0x200u)
++        for (uint32_t a = lastStartTadr - 0x100u; a < lastStartTadr + 0x200u; a += 16u)
++        {
++            uint64_t lo = 0, hi = 0;
++            std::memcpy(&lo, rdram + (a & (PS2_RAM_SIZE - 1u)), 8);
++            std::memcpy(&hi, rdram + ((a + 8u) & (PS2_RAM_SIZE - 1u)), 8);
++            std::fprintf(stderr, "[vif1-bad]   ring %08x: %016llx %016llx\n", a, static_cast<unsigned long long>(lo),
++                         static_cast<unsigned long long>(hi));
++        }
++    unsigned first = 0u; // from 40 events before the last drain that reached END / REFE
++    for (unsigned k = 0u; k < 4096u; ++k)
++    {
++        const DmaTagTraceEntry &e = g_dmaTagTrace[(g_dmaTagTraceNext + k) % 4096u];
++        if (e.path == 'E' && (e.tag & 1u) != 0u)
++            first = k >= 40u ? k - 40u : 0u;
++    }
++    for (unsigned k = first; k < 4096u; ++k)
++    {
++        const DmaTagTraceEntry &e = g_dmaTagTrace[(g_dmaTagTraceNext + k) % 4096u];
++        if (e.path == 0)
++            continue;
++        if (e.path == 'E')
++        {
++            std::fprintf(stderr, "[vif1-bad]   drain done: TADR=%08x ring write pos=%08x %s, %x bytes\n", e.tagAddr,
++                         static_cast<unsigned>(e.tag >> 32), (e.tag & 1u) ? "ENDED" : "waiting", e.outBytes);
++            continue;
++        }
++        if (e.path == 'F')
++        {
++            std::fprintf(stderr, "[vif1-bad]   fromSPR to ring %08x: qwc=%x from SPR %04x (ends %08x)\n", e.tagAddr,
++                         static_cast<unsigned>(e.tag >> 32), static_cast<unsigned>(e.tag & 0xFFFFu), e.tagAddr + e.outBytes);
++            continue;
++        }
++        if (e.path == 'R')
++        {
++            std::fprintf(stderr, "[vif1-bad]     next tag at TADR %08x: id=%u qwc=%x addr=%08x (%x bytes written after TADR)\n",
++                         e.tagAddr, static_cast<unsigned>((e.tag >> 28) & 7u), static_cast<unsigned>(e.tag & 0xFFFFu),
++                         static_cast<unsigned>((e.tag >> 32) & 0x7FFFFFF0u), e.outBytes);
++            continue;
++        }
++        if (e.path == 'I')
++        {
++            std::fprintf(stderr, "[vif1-bad]   ignored CHCR write %08x = %08x (channel waiting on MFIFO)\n", e.tagAddr,
++                         static_cast<unsigned>(e.tag));
++            continue;
++        }
++        if (e.path == 'W')
++        {
++            std::fprintf(stderr, "[vif1-bad]   EE writes %08x = %08x\n", e.tagAddr, static_cast<unsigned>(e.tag & 0xFFFFFFFFu));
++            continue;
++        }
++        if (e.path == 'S')
++        {
++            std::fprintf(stderr, "[vif1-bad]   VIF1 start: CHCR=%08x TADR=%08x QWC=%x D_CTRL=%08x (MFD=%u)\n",
++                         static_cast<unsigned>(e.tag & 0xFFFFFFFFu), e.tagAddr, e.outBytes,
++                         static_cast<unsigned>(e.tag >> 32), static_cast<unsigned>((e.tag >> 34) & 3u));
++            continue;
++        }
++        std::fprintf(stderr, "[vif1-bad]   tag %c at %08x: id=%u qwc=%x addr=%08x (buffer had %x bytes)\n", e.path, e.tagAddr,
++                     static_cast<unsigned>((e.tag >> 28) & 7u), static_cast<unsigned>(e.tag & 0xFFFFu),
++                     static_cast<unsigned>((e.tag >> 32) & 0x7FFFFFF0u), e.outBytes);
++    }
++}
++
+ void PS2Memory::drainMfifo()
+ {
+     const uint32_t channel = mfifoDrainChannel();
+@@ -1930,6 +2044,8 @@ void PS2Memory::drainMfifo()
+             break; // packet only partly written: wait for the rest
+ 
+         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
++        if (isVif)
++            traceVif1Tag('m', tadr, tag, out.size());
+         if (transferTag)
+             out.insert(out.end(), tp + 8u, tp + 16u);
+ 
+@@ -1992,6 +2108,10 @@ void PS2Memory::drainMfifo()
+         completeDmacChannel(channel, isVif ? 1u : 2u);
+     }
+     m_mfifoWaitingChannel = ended ? 0u : channel;
++    traceVif1Tag('E', tadr, (static_cast<uint64_t>(writePos) << 32) | (ended ? 1u : 0u), out.size());
++    if (((writePos - tadr) & ringMask) >= 16u) // what sits at TADR now (the next tag, if written)
++        traceVif1Tag('R', tadr, loadScalar<uint64_t>(m_rdram + (tadr & (PS2_RAM_SIZE - 1u)), 0, 16, "mfifo tag", tadr),
++                     (writePos - tadr) & ringMask);
+     m_mfifoDraining = false;
+ }
+ 
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index e63ab8b..d363bac 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -1,5 +1,8 @@
+ // Based on Blackline Interactive implementation
+ #include "runtime/ps2_memory.h"
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ 
+ enum VIFCmd : uint8_t
+@@ -394,6 +397,64 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
+     processVIF1Data(m_rdram + srcPhys, sizeBytes);
+ }
+ 
++namespace
++{
++    // GOW_VU1N_CHECKLONG debug: the last VIF1 codes, printed when a VU1 run stops on its budget (ps2Vif1TraceDump)
++    struct Vif1TraceEntry
++    {
++        uint32_t cmd;
++        uint32_t tops;
++        uint32_t stat;
++        uintptr_t source;
++        uint32_t pos;
++        uint32_t size;
++    };
++    Vif1TraceEntry g_vif1Trace[160];
++    unsigned g_vif1TraceNext = 0u;
++    // the last 16 STMOD codes however long ago, with the VIF1 code count at the time and the code before them
++    struct Vif1ModeEntry
++    {
++        uint32_t cmd;
++        uint32_t previousCmd;
++        uint64_t codeIndex;
++        uintptr_t source;
++        uint32_t pos;
++        uint32_t size;
++    };
++    Vif1ModeEntry g_vif1Modes[16];
++    unsigned g_vif1ModesNext = 0u;
++    uint64_t g_vif1CodeCount = 0u;
++    uint32_t g_vif1PreviousCmd = 0u;
++    const uint8_t *g_vif1TraceRdram = nullptr;
++    const bool g_vif1TraceOn = std::getenv("GOW_VU1N_CHECKLONG") != nullptr;
++}
++
++void ps2DmaTagTraceDump(const uint8_t *rdram);
++
++void ps2Vif1TraceDump()
++{
++    if (!g_vif1TraceOn)
++        return;
++    for (unsigned k = 0; k < 160u; ++k)
++    {
++        const Vif1TraceEntry &e = g_vif1Trace[(g_vif1TraceNext + k) % 160u];
++        const uintptr_t ram = reinterpret_cast<uintptr_t>(g_vif1TraceRdram);
++        const bool inRam = g_vif1TraceRdram && e.source >= ram && e.source < ram + PS2_RAM_SIZE;
++        std::fprintf(stderr, "[vif1-trace] %3u cmd=%08x tops=%03x dbf=%u mode=%u src=%s%08llx pos=%x/%x\n", 160u - k, e.cmd,
++                     e.tops, (e.stat >> 7) & 1u, (e.stat >> 24) & 3u, inRam ? "ram:" : "host:",
++                     static_cast<unsigned long long>(inRam ? e.source - ram : e.source), e.pos, e.size);
++    }
++    for (unsigned k = 0; k < 16u; ++k)
++    {
++        const Vif1ModeEntry &m = g_vif1Modes[(g_vif1ModesNext + k) % 16u];
++        if (m.cmd == 0u)
++            continue;
++        std::fprintf(stderr, "[vif1-trace] STMOD cmd=%08x (code before: %08x) %llu VIF codes ago src=host:%llx pos=%x/%x\n", m.cmd,
++                     m.previousCmd, static_cast<unsigned long long>(g_vif1CodeCount - m.codeIndex),
++                     static_cast<unsigned long long>(m.source), m.pos, m.size);
++    }
++}
++
+ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+ {
+     if (sizeBytes == 0u)
+@@ -415,6 +476,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+     const auto carryFrom = [&](uint32_t cmdPos) { m_vif1Carry.assign(data + cmdPos, data + sizeBytes); };
+ 
+     uint32_t pos = 0;
++    g_vif1TraceRdram = m_rdram;
+ 
+     while (pos + 4 <= sizeBytes)
+     {
+@@ -440,6 +502,44 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+         uint16_t imm = cmd & 0xFFFF;
+         uint8_t num = (cmd >> 16) & 0xFF;
+         const bool irq = (cmd & 0x80000000u) != 0u;
++        if (g_vif1TraceOn && opcode != VIF_NOP)
++        {
++            // stat bits 24-25 carry the current STMOD mode in the trace (VIF STAT has no such field)
++            g_vif1Trace[g_vif1TraceNext] = {cmd, vif1_regs.tops, (vif1_regs.stat & 0x00FFFFFFu) | ((vif1_regs.mode & 3u) << 24),
++                                            reinterpret_cast<uintptr_t>(data) + pos - 4u, pos - 4u, sizeBytes};
++            g_vif1TraceNext = (g_vif1TraceNext + 1u) % 160u;
++            if (opcode == VIF_STMOD)
++            {
++                g_vif1Modes[g_vif1ModesNext] = {cmd, g_vif1PreviousCmd, g_vif1CodeCount,
++                                                reinterpret_cast<uintptr_t>(data) + pos - 4u, pos - 4u, sizeBytes};
++                g_vif1ModesNext = (g_vif1ModesNext + 1u) % 16u;
++            }
++            ++g_vif1CodeCount;
++            g_vif1PreviousCmd = cmd;
++            // an opcode no VIF1 command has: the parser lost its place; print how it got there (first 3 times)
++            const bool valid = opcode <= 0x07u || opcode == 0x10u || opcode == 0x11u || opcode == 0x13u || opcode == 0x14u ||
++                               opcode == 0x15u || opcode == 0x17u || opcode == 0x20u || opcode == 0x30u || opcode == 0x31u ||
++                               opcode == 0x4Au || opcode == 0x50u || opcode == 0x51u || opcode >= 0x60u;
++            static unsigned badShown = 0;
++            if (!valid && badShown < 3u)
++            {
++                ++badShown;
++                std::fprintf(stderr, "[vif1-bad] invalid VIF1 code %08x at pos=%x/%x, the codes before it:\n", cmd, pos - 4u, sizeBytes);
++                for (unsigned k = 136u; k < 160u; ++k)
++                {
++                    const Vif1TraceEntry &e = g_vif1Trace[(g_vif1TraceNext + k) % 160u];
++                    std::fprintf(stderr, "[vif1-bad]   cmd=%08x mode=%u pos=%x/%x\n", e.cmd, (e.stat >> 24) & 3u, e.pos, e.size);
++                }
++                ps2DmaTagTraceDump(m_rdram); // the DMA tags that built this buffer (ps2_memory.cpp)
++                const uint32_t from = pos >= 4u + 0x1C0u ? (pos - 4u - 0x1C0u) & ~15u : 0u;
++                for (uint32_t o = from; o + 16u <= sizeBytes && o < pos + 32u; o += 16u)
++                {
++                    uint32_t w[4];
++                    std::memcpy(w, data + o, sizeof(w));
++                    std::fprintf(stderr, "[vif1-bad]   data+%05x: %08x %08x %08x %08x\n", o, w[0], w[1], w[2], w[3]);
++                }
++            }
++        }
+ 
+         // Track most-recent command for VIFn_CODE emulation.
+         vif1_regs.code = cmd;
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index 16aa728..a6555d8 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -1902,6 +1902,22 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
+     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
+ }
+ 
++void ps2Vif1TraceDump();
++
++namespace
++{
++    // GOW_VU1N_CHECKLONG: the last eight VU1 runs, printed with a run that stops on its budget
++    struct RunRecord
++    {
++        uint32_t startPc = 0u;
++        uint32_t top = 0u;
++        uint64_t cycles = 0u;
++        bool ended = false;
++    };
++    RunRecord g_vu1RunHistory[8];
++    unsigned g_vu1RunHistoryNext = 0u;
++}
++
+ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+                          uint8_t *vuData, uint32_t dataSize,
+                          GS &gs, PS2Memory *memory, uint32_t maxCycles)
+@@ -2189,6 +2205,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+         else if (checked % 2000u == 0u)
+             std::fprintf(stderr, "[vu1n-verify] %u runs checked, %u mismatches\n", checked, bad);
+     }
++    const uint32_t runStartTop = m_state.top;
+     // GOW_VU1N_CHECKLONG=1: debug, a native run that stops on its cycle budget is run again by the exact engine from the
+     // same entry state, to tell a native bug (the exact engine ends) from bad input (it runs to the budget too)
+     static const bool checkLong = std::getenv("GOW_VU1N_CHECKLONG") != nullptr;
+@@ -2275,12 +2292,54 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+             for (int r = 1; r < 16; ++r)
+                 std::fprintf(stderr, " %x", static_cast<unsigned>(longEntry->m_state.vi[r] & 0xFFFFu));
+             std::fprintf(stderr, " top=%x itop=%x\n", longEntry->m_state.top, longEntry->m_state.itop);
++            const uint32_t topAddr = (longEntry->m_state.top & 0x3FFu) * 16u;
++            for (uint32_t q = 0; q < 4u && topAddr + q * 16u + 16u <= dataSize; ++q)
++            {
++                uint32_t w[4];
++                std::memcpy(w, longEntryData.data() + topAddr + q * 16u, sizeof(w));
++                std::fprintf(stderr, "[vu1n-checklong]   top+%u: %08x %08x %08x %08x\n", q, w[0], w[1], w[2], w[3]);
++            }
++            // the other double buffer (the previous run's TOP): where the input lands if DBF / TOPS got out of step
++            const uint32_t otherAddr = (g_vu1RunHistory[(g_vu1RunHistoryNext + 7u) % 8u].top & 0x3FFu) * 16u;
++            for (uint32_t q = 0; q < 2u && otherAddr != topAddr && otherAddr + q * 16u + 16u <= dataSize; ++q)
++            {
++                uint32_t w[4];
++                std::memcpy(w, longEntryData.data() + otherAddr + q * 16u, sizeof(w));
++                std::fprintf(stderr, "[vu1n-checklong]   other buffer %x+%u: %08x %08x %08x %08x\n", otherAddr / 16u, q, w[0],
++                             w[1], w[2], w[3]);
++            }
++            if (checked == 1u)
++                ps2Vif1TraceDump(); // the VIF1 codes that led to this run (ps2_vif1_interpreter.cpp)
++            for (unsigned k = 0; k < 8u; ++k)
++            {
++                const RunRecord &h = g_vu1RunHistory[(g_vu1RunHistoryNext + k) % 8u];
++                std::fprintf(stderr, "[vu1n-checklong]   before -%u: startPc=%x top=%x cycles=%llu %s\n", 8u - k, h.startPc, h.top,
++                             static_cast<unsigned long long>(h.cycles), h.ended ? "ended" : "not ended");
++            }
+             *this = after;
+             std::memcpy(vuData, dataAfter.data(), dataSize);
+             m_native->enabled = true;
+             m_verifySilent = silentBefore;
+         }
+     }
++    if (checkLong && m_unit == Unit::VU1 && programEnded && runStartPc == 0x32A0u && longEntry)
++    {
++        // what a good input header of the program looks like (Tekken 4's stall at 0x32a0), every 5000th normal run
++        static unsigned normalRuns = 0;
++        if (normalRuns++ % 5000u == 0u && normalRuns < 40000u)
++        {
++            const uint32_t topAddr = (runStartTop & 0x3FFu) * 16u;
++            uint32_t w[8];
++            std::memcpy(w, longEntryData.data() + topAddr, sizeof(w));
++            std::fprintf(stderr, "[vu1n-checklong] normal 32a0 run, top=%x: %08x %08x %08x %08x | %08x %08x %08x %08x\n",
++                         runStartTop, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
++        }
++    }
++    if (checkLong && m_unit == Unit::VU1)
++    {
++        g_vu1RunHistory[g_vu1RunHistoryNext] = {runStartPc, runStartTop, m_cycle - (context.budgetEnd - maxCycles), programEnded};
++        g_vu1RunHistoryNext = (g_vu1RunHistoryNext + 1u) % 8u;
++    }
+     commitReadyFlags(); // GOW-Port: el estado visible tras la ejecución
+     m_state.cycles = m_cycle;
+     // GOW_VU1_STARTMAC=1 also counts the MAC flag a startPc 0 program ends with (A/B with PCSX2's interpreter)

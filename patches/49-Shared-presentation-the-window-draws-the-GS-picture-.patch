@@ -1,0 +1,241 @@
+From 39db6908e1bc89cfd11147fd319877b8f36260a7 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:38:32 +0100
+Subject: [PATCH 49/55] Shared presentation: the window draws the GS picture as
+ a GPU texture, no readback per vsync
+
+GSSharedPresent (GoW port) was never armed: CaptureHostContext was not called and
+the GS GL context was created before the window, so every vsync the presenter
+drained the GS queue and read the picture back (glReadPixels stalls the GL thread
+until the GPU is idle) and uploaded it again. Now the window is created first,
+its context captured before the GS renderer starts, and UploadFrame draws the
+shared texture (after a latch it waits up to 12 ms for that picture to be
+published, so the picture is as recent as with the readback). Frame shots read
+back on demand. The input-latency probe keeps the readback path.
+Shared textures are point-sampled like the readback texture.
+PS2X_GS_DIRECT_PRESENT=0: readback path as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/gs/gs_frontend.h |  3 +
+ ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp         |  4 +-
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp       | 40 ++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp          | 80 ++++++++++++++++++--
+ 4 files changed, 119 insertions(+), 8 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_frontend.h b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+index 0419c93..7d8b2e4 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_frontend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+@@ -130,6 +130,9 @@ public:
+     void setDebugHistoryPaused(bool paused);
+     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
+     void latchHostPresentationFrame();
++    // GL backend with a context shared with the host window: the presented picture is a GPU texture
++    // (GSSharedPresent::Acquire), no pixels are read back per frame.
++    bool usesSharedPresentation() const { return m_backend && m_backend->UsesSharedPresentation(); }
+     bool copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+                                           uint32_t &outWidth,
+                                           uint32_t &outHeight,
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+index 89d3258..6396a9b 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+@@ -333,8 +333,8 @@ namespace GSGL
+             {
+                 gl.BindTexture(kTexture2D, slot.frame.texture);
+                 gl.TexImage2D(kTexture2D, 0, kRgba8, width, height, 0, kRgba, kUnsignedByte, nullptr);
+-                gl.TexParameteri(kTexture2D, kTextureMinFilter, kLinear);
+-                gl.TexParameteri(kTexture2D, kTextureMagFilter, kLinear);
++                gl.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
++                gl.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+                 gl.TexParameteri(kTexture2D, kTextureWrapS, kClampToEdge);
+                 gl.TexParameteri(kTexture2D, kTextureWrapT, kClampToEdge);
+                 gl.BindTexture(kTexture2D, 0u);
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 1104402..218669b 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -605,6 +605,46 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+                                           uint32_t *outSourceFbp,
+                                           bool *outUsedPreferred) const
+ {
++    {
++        std::lock_guard<std::mutex> lock(m_presentationMutex);
++        if (m_hasHostPresentationFrame && !m_hostPresentationFrame.empty())
++            goto latched;
++    }
++    if (usesSharedPresentation())
++    {
++        // shared presentation keeps no pixels: read the displayed picture back on demand (frame shots)
++        GSPresentationRequest request{};
++        {
++            std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
++            if (!m_privRegs)
++                return false;
++            request = buildPresentationRequestUnlocked();
++        }
++        request.forceReadback = true;
++        PresentationFrame frame{};
++        {
++            std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
++            if (m_backend)
++                frame = m_backend->Present(request);
++        }
++        if (!frame)
++            return false;
++        const size_t stride = static_cast<size_t>(std::max<uint32_t>(frame.width, 640u)) * 4u;
++        const size_t row = static_cast<size_t>(frame.width) * 4u;
++        outPixels.resize(row * frame.height);
++        for (uint32_t y = 0; y < frame.height && y * stride + row <= frame.pixels.size(); ++y)
++            std::memcpy(outPixels.data() + y * row, frame.pixels.data() + y * stride, row);
++        outWidth = frame.width;
++        outHeight = frame.height;
++        if (outDisplayFbp)
++            *outDisplayFbp = frame.displayFbp;
++        if (outSourceFbp)
++            *outSourceFbp = frame.sourceFbp;
++        if (outUsedPreferred)
++            *outUsedPreferred = frame.usedPreferred;
++        return true;
++    }
++latched:
+     std::lock_guard<std::mutex> lock(m_presentationMutex);
+     if (!m_hasHostPresentationFrame || m_hostPresentationFrame.empty())
+     {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 2f37799..855a5eb 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -16,6 +16,9 @@
+ #include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_rollback_cuts.h"
+ #include "runtime/ps2_perf_stats.h"
++#if defined(PS2X_GS_GL)
++#include "runtime/gs/gs_shared_present.h"
++#endif
+ 
+ #include <iostream>
+ #include <stdexcept>
+@@ -377,7 +380,7 @@ namespace
+     }
+ }
+ 
+-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
++static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight, Texture2D *drawTex = nullptr)
+ {
+     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
+     static bool s_hasLatchedInitialFrame = false;
+@@ -395,6 +398,57 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     const bool needsLatch = !s_hasLatchedInitialFrame ||
+                             (currentTick != s_lastPresentationTick &&
+                              !ps2_rollback::cutActive(ps2_rollback::CutPresent));
++#if defined(PS2X_GS_GL)
++    // Shared presentation (GL backend, context shared with the window): the GS worker copies the displayed picture into a
++    // shared texture; draw that texture. After a latch, wait (at most ~12 ms) until the worker has published it, so the
++    // picture is as recent as with the readback. The input-latency probe needs pixels: it keeps the readback path.
++    if (drawTex && rt->gs().usesSharedPresentation() && GSSharedPresent::Active() && !ps2_input_latency::enabled())
++    {
++        static uint64_t s_sharedSequence = 0;
++        if (needsLatch)
++        {
++            rt->gs().latchHostPresentationFrame();
++            if (ps2_perf_stats::enabled())
++                ps2_perf_stats::add(ps2_perf_stats::g_counters.latches);
++            s_lastPresentationTick = currentTick;
++            s_hasLatchedInitialFrame = true;
++        }
++        GSSharedPresent::Frame frame{};
++        bool have = GSSharedPresent::Acquire(frame);
++        if (needsLatch)
++        {
++            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
++            while ((!have || frame.sequence <= s_sharedSequence) && std::chrono::steady_clock::now() < deadline)
++            {
++                std::this_thread::yield();
++                have = GSSharedPresent::Acquire(frame);
++            }
++        }
++        if (have)
++            s_sharedSequence = std::max(s_sharedSequence, frame.sequence);
++        if (have && !frame.blank && frame.texture && frame.width && frame.height)
++        {
++            Texture2D shared{};
++            shared.id = frame.texture;
++            shared.width = static_cast<int>(frame.width);
++            shared.height = static_cast<int>(frame.height);
++            shared.mipmaps = 1;
++            shared.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
++            *drawTex = shared;
++            outWidth = frame.width;
++            outHeight = frame.height;
++            s_lastWidth = outWidth;
++            s_lastHeight = outHeight;
++        }
++        else
++        {
++            drawTex->id = 0; // blank (PMODE off) or nothing published yet: black
++            outWidth = s_lastWidth ? s_lastWidth : FB_WIDTH;
++            outHeight = s_lastHeight ? s_lastHeight : DEFAULT_DISPLAY_HEIGHT;
++        }
++        return;
++    }
++#endif
+     if (needsLatch)
+     {
+         ps2_input_latency::onLatchBegin(currentTick);
+@@ -770,7 +824,21 @@ bool PS2Runtime::initialize(const char *title)
+             return false;
+         }
+ 
+-        if (!syncCoreSubsystems())
++#if !defined(PLATFORM_VITA)
++        // Tekken 4 port (perf): the window first, so the GL GS renderer (created by syncCoreSubsystems on its worker)
++        // can share objects with the window's context: the presented picture then goes to the window as a GPU texture
++        // instead of a glReadPixels + texture upload every vsync (GSSharedPresent; PS2X_GS_DIRECT_PRESENT=0: readback).
++        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
++        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
++#if defined(PS2X_GS_GL)
++        GSSharedPresent::CaptureHostContext(); // releases the window's context until RestoreHostContext
++#endif
++#endif
++        const bool coreBound = syncCoreSubsystems();
++#if defined(PS2X_GS_GL) && !defined(PLATFORM_VITA)
++        GSSharedPresent::RestoreHostContext();
++#endif
++        if (!coreBound)
+         {
+             std::cerr << "Failed to bind runtime core subsystems" << std::endl;
+             return false;
+@@ -778,8 +846,6 @@ bool PS2Runtime::initialize(const char *title)
+ #if defined(PLATFORM_VITA)
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
+ #else
+-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+-        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+         InitAudioDevice();
+         m_audioBackend.setAudioReady(IsAudioDeviceReady());
+ #endif
+@@ -2447,7 +2513,8 @@ void PS2Runtime::run()
+     {
+         uint32_t presentWidth = FB_WIDTH;
+         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+-        UploadFrame(frameTex, this, presentWidth, presentHeight);
++        Texture2D drawTex = frameTex;
++        UploadFrame(frameTex, this, presentWidth, presentHeight, &drawTex);
+         // Keys posted during the readback are dispatched before the swap, so the
+         // game thread can see them for the rest of this guest frame.
+         if (!ps2_input_latency::legacy())
+@@ -2468,7 +2535,8 @@ void PS2Runtime::run()
+             (screenHeight - dstHeight) * 0.5f,
+             dstWidth,
+             dstHeight};
+-        DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
++        if (drawTex.id != 0u)
++            DrawTexturePro(drawTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+         if (m_debugUiInitialized && m_debugUiDrawCallback)
+         {
+             m_debugUiDrawCallback(*this, m_debugUiUserData);
+-- 
+2.55.0.windows.3
+

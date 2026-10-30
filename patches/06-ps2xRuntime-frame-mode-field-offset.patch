@@ -1,0 +1,160 @@
+diff --git a/ps2xRuntime/include/runtime/gs/gs_frontend.h b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+index 4c3f641..0419c93 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_frontend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+@@ -222,6 +222,7 @@ private:
+     GSFrameReg m_preferredDisplaySourceFrame{};
+     uint32_t m_preferredDisplayDestFbp = 0;
+     bool m_hasPreferredDisplaySource = false;
++    int m_displayWriteField = -1;
+     std::vector<uint8_t> m_hostPresentationFrame;
+     uint32_t m_hostPresentationWidth = 0;
+     uint32_t m_hostPresentationHeight = 0;
+diff --git a/ps2xRuntime/include/runtime/gs/gs_types.h b/ps2xRuntime/include/runtime/gs/gs_types.h
+index 836a3ff..5ad1496 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_types.h
++++ b/ps2xRuntime/include/runtime/gs/gs_types.h
+@@ -288,6 +288,7 @@ struct GSPresentationRequest
+     GSFrameReg preferredSource{};
+     uint32_t preferredDestFbp = 0;
+     bool hasPreferredSource = false;
++    int displayField = -1; // CSR.FIELD when the displayed buffer was last drawn into, -1 = not yet
+ };
+ 
+ struct PresentationFrame
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+index 7d700ee..128d5e6 100644
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -402,14 +402,16 @@ namespace
+         return (magv + 1u) * ((smode2.interlaced && smode2.frameMode) ? 2u : 1u);
+     }
+ 
+-    // Spreads the first ceil(height / repeat) rows over `height` rows, each repeated `repeat` times.
+-    void repeatPresentationLines(std::vector<uint8_t> &pixels, uint32_t width, uint32_t height, uint32_t repeat)
++    // Spreads the first ceil(height / repeat) rows over `height` rows, each repeated `repeat` times, starting
++    // `offset` rows lower (the odd field of an interlaced picture sits one line below the even one).
++    void repeatPresentationLines(std::vector<uint8_t> &pixels, uint32_t width, uint32_t height, uint32_t repeat,
++                                 uint32_t offset = 0u)
+     {
+-        if (pixels.empty() || repeat <= 1u)
++        if (pixels.empty() || (repeat <= 1u && offset == 0u))
+             return;
+         for (uint32_t y = height; y-- > 0u;)
+         {
+-            const uint32_t sourceY = y / repeat;
++            const uint32_t sourceY = (y < offset ? 0u : y - offset) / repeat;
+             if (sourceY != y)
+                 std::memcpy(pixels.data() + y * kHostFrameWidth * 4u,
+                             pixels.data() + sourceY * kHostFrameWidth * 4u,
+@@ -1891,6 +1893,9 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
+     decodeDisplaySize(request.display2, width2, height2);
+     const uint32_t lineRepeat1 = decodeDisplayLineRepeat(request.display1, smode2);
+     const uint32_t lineRepeat2 = decodeDisplayLineRepeat(request.display2, smode2);
++    // In interlaced FRAME mode the buffer holds one field; a TV shows the odd one a line lower. Place it by the
++    // field it was drawn for, not the current one: a game below 60 fps keeps a field on screen for several.
++    const uint32_t fieldOffset = (smode2.interlaced && smode2.frameMode && request.displayField == 1) ? 1u : 0u;
+     const bool valid1 = pmode.enableCrt1 && hasDisplaySetup(request.display1, displayFrame1);
+     const bool valid2 = pmode.enableCrt2 && hasDisplaySetup(request.display2, displayFrame2);
+     if (!valid1 && !valid2)
+@@ -1939,7 +1944,7 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
+                 break;
+             }
+         }
+-        repeatPresentationLines(pixels, width, displayHeight, lineRepeat);
++        repeatPresentationLines(pixels, width, displayHeight, lineRepeat, lineRepeat > 1u ? fieldOffset : 0u);
+         return true;
+     };
+ 
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 5658928..b5f0cff 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -159,6 +159,7 @@ void GS::reset()
+     m_preferredDisplaySourceFrame = {};
+     m_preferredDisplayDestFbp = 0;
+     m_hasPreferredDisplaySource = false;
++    m_displayWriteField = -1;
+     if (m_backend)
+     {
+         m_backend->Flush();
+@@ -521,6 +522,7 @@ GSPresentationRequest GS::buildPresentationRequestUnlocked() const
+     request.preferredSource = m_preferredDisplaySourceFrame;
+     request.preferredDestFbp = m_preferredDisplayDestFbp;
+     request.hasPreferredSource = m_hasPreferredDisplaySource;
++    request.displayField = m_displayWriteField;
+     return request;
+ }
+ 
+@@ -1707,6 +1709,10 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
+     const GSContext &ctx = state.context;
+     if (m_hasPreferredDisplaySource && ctx.frame.fbp == m_preferredDisplayDestFbp)
+         m_hasPreferredDisplaySource = false;
++    // Which field the displayed buffer holds: games that draw one field per frame (interlaced FRAME mode) pick
++    // its lines by CSR.FIELD, and the odd field belongs one line lower on screen.
++    if (m_privRegs && (ctx.frame.fbp == (m_privRegs->dispfb1 & 0x1FFu) || ctx.frame.fbp == (m_privRegs->dispfb2 & 0x1FFu)))
++        m_displayWriteField = static_cast<int>((m_privRegs->csr.load(std::memory_order_acquire) >> 13u) & 1u);
+     if (state.prim.type != GS_PRIM_SPRITE || batch.vertexCount < 2u)
+         return;
+ 
+diff --git a/ps2xTest/src/ps2_gs_tests.cpp b/ps2xTest/src/ps2_gs_tests.cpp
+index 53854ad..be75682 100644
+--- a/ps2xTest/src/ps2_gs_tests.cpp
++++ b/ps2xTest/src/ps2_gs_tests.cpp
+@@ -1782,6 +1782,56 @@ void register_ps2_gs_tests()
+             }
+         });
+ 
++        tc.Run("latched host presentation puts an odd FRAME-mode field one line lower", [](TestCase &t)
++        {
++            // The buffer holds one field; which one is the CSR.FIELD of the last draw into it, and a TV shows the
++            // odd field one line below the even one.
++            for (uint32_t field = 0; field < 2u; ++field)
++            {
++                std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
++                GSRegisters regs{};
++                regs.pmode = 0x0001ull;
++                regs.smode2 = 0x0003ull; // interlaced, FRAME mode
++                regs.dispfb1 = 0ull | (10ull << 9) | (static_cast<uint64_t>(GS_PSM_CT32) << 15);
++                regs.display1 = (639ull << 32) | (447ull << 44);
++
++                GS gs;
++                gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
++                auto lineColor = [](uint32_t y) { return 0x00010000u * (y & 0xFFu) + y + 1u; };
++                for (uint32_t y = 0; y < 224u; ++y)
++                    writeReferencePSMCT32Pixel(vram, 0u, 10u, 0u, y, lineColor(y));
++
++                regs.csr.store(field ? 0x2000ull : 0ull);
++                gs.writeRegister(GS_REG_FRAME_1, (10ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
++                gs.writeRegister(GS_REG_SCISSOR_1, (639ull << 16) | (447ull << 48));
++                gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
++                gs.writeRegister(GS_REG_TEST_1, 0x30000ull);
++                gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_POINT));
++                gs.writeRegister(GS_REG_RGBAQ, 0x80FFFFFFull);
++                gs.writeRegister(GS_REG_XYZ2, (639ull << 4) | (223ull << 20)); // a field draw into the shown buffer
++
++                gs.latchHostPresentationFrame();
++                std::vector<uint8_t> frame;
++                uint32_t width = 0u;
++                uint32_t height = 0u;
++                t.IsTrue(gs.copyLatchedHostPresentationFrame(frame, width, height), "presentation should produce a frame");
++                auto rowColor = [&](uint32_t row) -> uint32_t
++                {
++                    const size_t off = static_cast<size_t>(row) * 640u * 4u;
++                    return static_cast<uint32_t>(frame[off]) | (static_cast<uint32_t>(frame[off + 1u]) << 8) |
++                           (static_cast<uint32_t>(frame[off + 2u]) << 16);
++                };
++                bool ok = height == 448u;
++                for (uint32_t row = 0; row < 448u && ok; ++row)
++                {
++                    const uint32_t line = field ? (row == 0u ? 0u : (row - 1u) / 2u) : row / 2u;
++                    ok = rowColor(row) == (lineColor(line) & 0x00FFFFFFu);
++                }
++                t.IsTrue(ok, field ? "the odd field should start one display line lower"
++                                   : "the even field should start at the top");
++            }
++        });
++
+         tc.Run("GIF PACKED A+D writes DISPFB1 and DISPLAY1 privileged registers", [](TestCase &t)
+         {
+             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);

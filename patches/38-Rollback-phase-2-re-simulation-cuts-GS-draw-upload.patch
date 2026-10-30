@@ -1,0 +1,302 @@
+From fe83d7b5eb186dd5c4dbac844b52ff46da669e73 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 02:08:58 +0100
+Subject: [PATCH] Rollback phase 2: re-simulation cuts (GS draw/upload,
+ presenter, IOP freeze) and the IOP gate
+
+- ps2_rollback_cuts.h: active cut mask (draw, upload, iop, present) set by the game's rollback driver while a
+  frame is re-simulated; zero by default, so the normal path only reads one word.
+- GS: no primitive batch built/submitted under CutDraw, no host->local image data under CutUpload (registers,
+  CSR SIGNAL/FINISH, local->host still served).
+- Presenter: no latch on vsync ticks under CutPresent (the last live frame stays on screen).
+- IopGate: sees every IOP effect on the EE (RDRAM writes, SIF commands, RPC begin/end) on live frames; under
+  CutIop the IOP is not advanced (frozenAdvance replays logged async effects), RPCs go to frozenRpc (logged
+  reply instead of the IOP), EE->IOP memory writes go to frozenIopWrite.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../include/runtime/ps2_rollback_cuts.h       | 75 +++++++++++++++++++
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        |  8 +-
+ ps2xRuntime/src/lib/ps2_iop_host.cpp          |  7 ++
+ ps2xRuntime/src/lib/ps2_rollback.cpp          | 21 ++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp           | 36 ++++++++-
+ 5 files changed, 140 insertions(+), 7 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback_cuts.h b/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+new file mode 100644
+index 0000000..95e6d38
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+@@ -0,0 +1,75 @@
++#pragma once
++
++// Rollback phase 2 (docs/ROLLBACK_PHASE2.md of the Tekken 4 port): what a re-simulated frame leaves out, and the
++// gate that keeps the IOP (sound driver, SPU2) outside the rollback state. Nothing here is active unless a game
++// module sets cuts or installs a gate; the default runtime path only reads a zero word / a null pointer.
++
++#include <atomic>
++#include <cstddef>
++#include <cstdint>
++#include <functional>
++
++struct R5900Context;
++
++namespace ps2x::iop
++{
++    struct RpcRequest;
++    struct RpcResult;
++}
++
++namespace ps2_rollback
++{
++    // Host-only work dropped while a frame is re-simulated. Everything that writes guest-visible state (RDRAM,
++    // VU memories, DMA/VIF/GIF registers, GS privileged registers incl. CSR SIGNAL/FINISH, VU1 runs) still runs.
++    enum Cut : uint32_t
++    {
++        CutDraw = 1u << 0,    // GS: assembled primitives are not built nor submitted to the raster backend
++        CutUpload = 1u << 1,  // GS: host->local image data is not written to VRAM (local->local/host still served)
++        CutIop = 1u << 2,     // IOP frozen: no IOP cycles, sound RPCs answered by the gate (see IopGate)
++        CutPresent = 1u << 3, // the presenter keeps showing the last live frame (no latch on vsync ticks)
++    };
++
++    extern std::atomic<uint32_t> g_activeCuts;
++
++    inline uint32_t activeCuts() noexcept
++    {
++        return g_activeCuts.load(std::memory_order_relaxed);
++    }
++
++    inline bool cutActive(Cut cut) noexcept
++    {
++        return (g_activeCuts.load(std::memory_order_relaxed) & cut) != 0u;
++    }
++
++    inline void setActiveCuts(uint32_t cuts) noexcept
++    {
++        g_activeCuts.store(cuts, std::memory_order_relaxed);
++    }
++
++    // Everything the IOP does to the EE goes through PS2IopHostAdapter (RDRAM writes, SIF commands) or comes back
++    // from a synchronous RPC. A gate sees all of it on live frames (to log it), and answers in its place while
++    // CutIop is active (the IOP does not run, so a re-simulated frame neither repeats sound commands nor advances
++    // the sound clock; the logged replies are written back instead).
++    class IopGate
++    {
++    public:
++        virtual ~IopGate() = default;
++
++        // Live (IOP running): effects on EE state, in order. data == nullptr: zero fill.
++        virtual void guestWrite(uint32_t address, const uint8_t *data, size_t size) = 0;
++        virtual void sifCommand(uint32_t commandId, const uint8_t *packet, size_t size) = 0;
++        virtual void rpcBegin(const ps2x::iop::RpcRequest &request) = 0;
++        virtual void rpcEnd(const ps2x::iop::RpcRequest &request, const ps2x::iop::RpcResult &result) = 0;
++
++        // CutIop active: called instead of advancing the IOP (eeCycle = EE cycle after the advance) ...
++        virtual void frozenAdvance(uint64_t eeCycle) = 0;
++        // ... instead of an RPC into the IOP. forward() runs the call for real (IOP state changes).
++        virtual ps2x::iop::RpcResult frozenRpc(const ps2x::iop::RpcRequest &request,
++                                               const std::function<ps2x::iop::RpcResult()> &forward) = 0;
++        // ... when the EE writes IOP memory (sceSifSetDma etc.): return true to let the write through.
++        virtual bool frozenIopWrite(uint32_t address, size_t size) = 0;
++    };
++
++    void setIopGate(IopGate *gate) noexcept;
++    IopGate *iopGate() noexcept;
++}
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index c658047..f4e62e8 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -5,6 +5,7 @@
+ #endif
+ #include "ps2_log.h"
+ #include "runtime/ps2_memory.h"
++#include "runtime/ps2_rollback_cuts.h"
+ #include <atomic>
+ #include <algorithm>
+ #include <cmath>
+@@ -832,7 +833,8 @@ bool GS::tryProcessNativeImageUploadPacket(const uint8_t *data, uint32_t sizeByt
+     constexpr uint32_t kPackedAdPayloadBytes = kSetupRegisters * 16u;
+     constexpr uint64_t kPackedAdDescriptor = 0x0Eull;
+ 
+-    if (!data || sizeBytes < 16u + kPackedAdPayloadBytes + 16u)
++    if (!data || sizeBytes < 16u + kPackedAdPayloadBytes + 16u ||
++        ps2_rollback::cutActive(ps2_rollback::CutUpload)) // generic path: registers kept, image data dropped
+         return false;
+ 
+     const uint64_t setupTagLo = loadLE64(data);
+@@ -1593,7 +1595,7 @@ void GS::vertexKick(bool drawing)
+     if (m_vtxCount < needed)
+         return;
+ 
+-    if (drawing && m_backend)
++    if (drawing && m_backend && !ps2_rollback::cutActive(ps2_rollback::CutDraw))
+     {
+         GSPrimitiveBatch batch = buildDrawBatch(needed);
+         updatePreferredDisplaySourceForDraw(batch);
+@@ -1630,7 +1632,7 @@ void GS::vertexKick(bool drawing)
+ 
+ void GS::processImageData(const uint8_t *data, uint32_t sizeBytes)
+ {
+-    if (m_backend)
++    if (m_backend && !ps2_rollback::cutActive(ps2_rollback::CutUpload))
+         m_backend->UploadImage(data, sizeBytes);
+ }
+ 
+diff --git a/ps2xRuntime/src/lib/ps2_iop_host.cpp b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+index 8d46e03..e039b31 100644
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -6,6 +6,7 @@
+ #include "runtime/ps2_memory.h"
+ #include "Kernel/Stubs/MemoryCard.h"
+ #include "Kernel/Syscalls/Common.h"
++#include "runtime/ps2_rollback_cuts.h"
+ 
+ #include <algorithm>
+ #include <cstring>
+@@ -163,6 +164,8 @@ bool PS2IopHostAdapter::writeGuest(uint32_t address, const void *source, size_t
+         uint8_t *const rdram = m_activeRdram ? m_activeRdram : m_runtime.memory().getRDRAM();
+         ps2TraceGuestRangeWrite(rdram, address, static_cast<uint32_t>(size), "IopHost::writeGuest", nullptr);
+         std::memcpy(destination, source, size);
++        if (ps2_rollback::IopGate *const gate = ps2_rollback::iopGate())
++            gate->guestWrite(address, static_cast<const uint8_t *>(source), size);
+     }
+     return true;
+ }
+@@ -179,6 +182,8 @@ bool PS2IopHostAdapter::zeroGuest(uint32_t address, size_t size)
+         uint8_t *const rdram = m_activeRdram ? m_activeRdram : m_runtime.memory().getRDRAM();
+         ps2TraceGuestRangeWrite(rdram, address, static_cast<uint32_t>(size), "IopHost::zeroGuest", nullptr);
+         std::memset(destination, 0, size);
++        if (ps2_rollback::IopGate *const gate = ps2_rollback::iopGate())
++            gate->guestWrite(address, nullptr, size);
+     }
+     return true;
+ }
+@@ -510,6 +515,8 @@ bool PS2IopHostAdapter::sendSifCommand(uint32_t commandId,
+     uint8_t *const rdram = m_activeRdram
+                                ? m_activeRdram
+                                : m_runtime.memory().getRDRAM();
++    if (ps2_rollback::IopGate *const gate = ps2_rollback::iopGate())
++        gate->sifCommand(commandId, static_cast<const uint8_t *>(packet), packetSize);
+     return ps2_stubs::dispatchSifCommand(rdram,
+                                          &m_runtime,
+                                          commandId,
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+index 0fe2d24..6ce567c 100644
+--- a/ps2xRuntime/src/lib/ps2_rollback.cpp
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/ps2_rollback.h"
++#include "runtime/ps2_rollback_cuts.h"
+ 
+ #include "ps2_runtime.h"
+ #include "Kernel/Stubs/Pad.h"
+@@ -281,3 +282,23 @@ namespace ps2_rollback
+         return result;
+     }
+ }
++
++namespace ps2_rollback
++{
++    std::atomic<uint32_t> g_activeCuts{0u};
++
++    namespace
++    {
++        IopGate *g_iopGate = nullptr;
++    }
++
++    void setIopGate(IopGate *gate) noexcept
++    {
++        g_iopGate = gate;
++    }
++
++    IopGate *iopGate() noexcept
++    {
++        return g_iopGate;
++    }
++}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index ccd9193..bb36c54 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -14,6 +14,7 @@
+ #include "runtime/ps2_input_latency.h"
+ #include "ps2_iop_host.h"
+ #include "ps2x/iop/iop_subsystem.h"
++#include "runtime/ps2_rollback_cuts.h"
+ 
+ #include <iostream>
+ #include <stdexcept>
+@@ -389,7 +390,10 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
+ 
+     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
+-    const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
++    // A re-simulated frame (rollback) is never shown: keep the last live frame until the live frames go on.
++    const bool needsLatch = !s_hasLatchedInitialFrame ||
++                            (currentTick != s_lastPresentationTick &&
++                             !ps2_rollback::cutActive(ps2_rollback::CutPresent));
+     if (needsLatch)
+     {
+         ps2_input_latency::onLatchBegin(currentTick);
+@@ -606,9 +610,21 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
+ 
+ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
+ {
+-    auto scope = m_iopHost->enterCall(ctx, rdram);
+-    request.callToken = scope.token();
+-    return m_iopSubsystem->handleRpc(request);
++    auto forward = [&]()
++    {
++        auto scope = m_iopHost->enterCall(ctx, rdram);
++        request.callToken = scope.token();
++        return m_iopSubsystem->handleRpc(request);
++    };
++    ps2_rollback::IopGate *const gate = ps2_rollback::iopGate();
++    if (!gate)
++        return forward();
++    if (ps2_rollback::cutActive(ps2_rollback::CutIop))
++        return gate->frozenRpc(request, forward);
++    gate->rpcBegin(request);
++    const ps2x::iop::RpcResult result = forward();
++    gate->rpcEnd(request, result);
++    return result;
+ }
+ 
+ void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer)
+@@ -619,6 +635,12 @@ void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransf
+ 
+ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
+ {
++    if (ps2_rollback::cutActive(ps2_rollback::CutIop))
++    {
++        if (ps2_rollback::IopGate *const gate = ps2_rollback::iopGate())
++            gate->frozenAdvance(m_eeScheduler ? m_eeScheduler->eeCycle() : 0u);
++        return;
++    }
+     m_iopSubsystem->runEeCycles(eeCycles);
+ }
+ 
+@@ -649,11 +671,17 @@ bool PS2Runtime::readIopMemory(uint32_t address, void *destination, size_t size)
+ 
+ bool PS2Runtime::writeIopMemory(uint32_t address, const void *source, size_t size)
+ {
++    if (ps2_rollback::cutActive(ps2_rollback::CutIop))
++        if (ps2_rollback::IopGate *const gate = ps2_rollback::iopGate(); gate && !gate->frozenIopWrite(address, size))
++            return m_iopSubsystem && m_iopSubsystem->isMemoryRange(address, size);
+     return m_iopSubsystem && m_iopSubsystem->writeMemory(address, source, size);
+ }
+ 
+ bool PS2Runtime::zeroIopMemory(uint32_t address, size_t size)
+ {
++    if (ps2_rollback::cutActive(ps2_rollback::CutIop))
++        if (ps2_rollback::IopGate *const gate = ps2_rollback::iopGate(); gate && !gate->frozenIopWrite(address, size))
++            return m_iopSubsystem && m_iopSubsystem->isMemoryRange(address, size);
+     return m_iopSubsystem && m_iopSubsystem->zeroMemory(address, size);
+ }
+ 
+-- 
+2.55.0.windows.3
+

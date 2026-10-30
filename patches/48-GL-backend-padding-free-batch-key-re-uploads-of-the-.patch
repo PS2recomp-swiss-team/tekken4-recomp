@@ -1,0 +1,165 @@
+From 46f1217145265242faa6820c66c311dee6c5392c Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:15:14 +0100
+Subject: [PATCH 48/55] GL backend: padding-free batch key; re-uploads of the
+ same bytes keep their textures
+
+- batchKey is built field by field into zeroed memory: GSDrawState{} leaves padding
+  indeterminate and the key is compared with memcmp, so random padding split
+  batches (3x the batches in the first measurement).
+- A host->local upload's texture invalidation is deferred until its data is in
+  (next draw/transfer/present); when the uploaded blocks (at most 512 KB) hash
+  as before, the textures stay valid. The game re-uploads many textures every
+  frame with the same bytes: those re-decodes (GSMem::ReadIndexRun 16% of the GL
+  thread) and revalidation hashes go away. A draw in the middle of a transfer
+  invalidates as before. PS2X_GL_UPLOAD_SAME=0: off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 88 ++++++++++++++++----
+ 1 file changed, 71 insertions(+), 17 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index e433659..c8c1481 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -664,32 +664,37 @@ struct GSHwBackend::Impl
+         }();
+         if (!loose)
+             return s;
+-        GSDrawState k{};
+-        k.context.frame = s.context.frame;
+-        k.context.scissor = s.context.scissor;
+-        k.context.zbuf = s.context.zbuf;
+-        k.context.alpha = s.context.alpha;
+-        k.context.test = s.context.test;
++        // built field by field into zeroed memory: the key is compared with memcmp, so no padding byte may differ
++        // (a GSDrawState{} leaves padding indeterminate; whole-struct copies carry the source's padding)
++        GSDrawState k;
++        std::memset(&k, 0, sizeof(k));
++        const GSContext &c = s.context;
++        k.context.frame.fbp = c.frame.fbp, k.context.frame.fbw = c.frame.fbw, k.context.frame.psm = c.frame.psm;
++        k.context.frame.fbmsk = c.frame.fbmsk;
++        k.context.scissor.x0 = c.scissor.x0, k.context.scissor.x1 = c.scissor.x1;
++        k.context.scissor.y0 = c.scissor.y0, k.context.scissor.y1 = c.scissor.y1;
++        k.context.zbuf.zbp = c.zbuf.zbp, k.context.zbuf.psm = c.zbuf.psm, k.context.zbuf.zmask = c.zbuf.zmask;
++        k.context.alpha = c.alpha;
++        k.context.test = c.test;
+         k.prim.iip = s.prim.iip;
+         k.prim.tme = s.prim.tme;
+         k.prim.abe = s.prim.abe;
+         k.prim.fst = s.prim.fst;
+         k.colclamp = s.colclamp;
++        k.textureWidth = k.textureHeight = 1;
+         if (s.prim.tme)
+         {
+-            k.context.tex0 = s.context.tex0;
+-            k.context.tex1 = s.context.tex1;
+-            k.context.clamp = s.context.clamp;
+-            k.texa = s.texa;
++            const GSTex0Reg &t = c.tex0;
++            GSTex0Reg &kt = k.context.tex0;
++            kt.tbp0 = t.tbp0, kt.tbw = t.tbw, kt.psm = t.psm, kt.tw = t.tw, kt.th = t.th, kt.tcc = t.tcc, kt.tfx = t.tfx;
++            kt.cbp = t.cbp, kt.cpsm = t.cpsm, kt.csm = t.csm, kt.csa = t.csa, kt.cld = t.cld;
++            k.context.tex1 = c.tex1;
++            k.context.clamp = c.clamp;
++            k.texa.ta0 = s.texa.ta0, k.texa.aem = s.texa.aem, k.texa.ta1 = s.texa.ta1;
+             k.textureWidth = s.textureWidth;
+             k.textureHeight = s.textureHeight;
+             k.linearFilter = s.linearFilter;
+         }
+-        else
+-        {
+-            // TFX/TCC are uniforms the shader reads only for textured primitives
+-            k.textureWidth = k.textureHeight = 1;
+-        }
+         return k;
+     }
+     bool havePending = false;
+@@ -737,6 +742,7 @@ struct GSHwBackend::Impl
+         // Tekken 4 port: what ended each batch (FlushWhy) and, for state changes, which part of the state differed
+         uint64_t flushWhy[10] = {};
+         uint64_t rtUploads = 0; // Tekken 4 port: uploads also written into a render target
++        uint64_t uploadsSame = 0; // uploads that left the raw blocks as they were (textures kept)
+         std::map<std::string, uint64_t> transfers; // Tekken 4 port: "dir dbp dbw dpsm wxh" -> count per stats window
+         uint64_t stateDiff[24] = {};
+         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+@@ -2111,8 +2117,46 @@ struct GSHwBackend::Impl
+         ++stats.draws, PS2_PERF_COUNT(glDraws);
+     }
+ 
++    // Tekken 4 port (perf): the game re-uploads many textures every frame with the same bytes. A host->local upload's
++    // texture invalidation waits until the transfer's data is in (the next draw, transfer or present): when the raw
++    // blocks hash as before, nothing changed and the textures stay valid (no re-decode, no revalidation hash).
++    // Uploads spanning more than kUploadHashMaxBlocks are invalidated right away as before. PS2X_GL_UPLOAD_SAME=0: off.
++    static constexpr uint32_t kUploadHashMaxBlocks = 2048u; // 512 KB
++    struct DeferredUpload
++    {
++        bool active = false;
++        GSTransferCommand command{};
++        uint32_t lo = 0, hi = 0;
++        uint64_t before = 0;
++    } deferredUpload;
++    static bool uploadSameCheck()
++    {
++        static const bool on = []
++        {
++            const char *value = std::getenv("PS2X_GL_UPLOAD_SAME");
++            return !value || *value != '0';
++        }();
++        return on;
++    }
++    void finishDeferredUpload()
++    {
++        if (!deferredUpload.active)
++            return;
++        deferredUpload.active = false;
++        // still receiving data (a draw in the middle of the transfer): invalidate as before
++        const bool complete = store.TransferState().direction != 0u;
++        const uint64_t after = complete ? hashBlocks(deferredUpload.lo, deferredUpload.hi) : 0u;
++        if (after != 0u && after == deferredUpload.before)
++        {
++            ++stats.uploadsSame;
++            return;
++        }
++        invalidateForUpload(deferredUpload.command, deferredUpload.lo, deferredUpload.hi);
++    }
++
+     void flushPending(FlushWhy why = WhyOther)
+     {
++        finishDeferredUpload();
+         applyRtUpload();
+         ++batchSerial; // the next sprite starts a new batch: no seam with the previous one
+         flushShuffle();
+@@ -2740,8 +2784,10 @@ struct GSHwBackend::Impl
+                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
+                      (unsigned long long)stats.unsupportedBlend, textures.size());
+         {
+-            std::string why = "[gs-hw] rtUploads=" + std::to_string(stats.rtUploads) + " batch ends:";
++            std::string why = "[gs-hw] rtUploads=" + std::to_string(stats.rtUploads) + " uploadsSame=" +
++                              std::to_string(stats.uploadsSame) + " batch ends:";
+             stats.rtUploads = 0;
++            stats.uploadsSame = 0;
+             char item[48];
+             for (int i = 0; i < 10; ++i)
+                 if (stats.flushWhy[i])
+@@ -2853,7 +2899,15 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
+     {
+         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
+         const uint32_t lo = command.bitbltbuf.dbp, hi = lo + spanBlocks(command.bitbltbuf.dpsm, command.bitbltbuf.dbw, rows);
+-        if (command.direction == 0u)
++        if (command.direction == 0u && d.uploadSameCheck() && hi > lo && hi - lo <= Impl::kUploadHashMaxBlocks &&
++            (d.deferredUpload.before = d.hashBlocks(lo, hi)) != 0u)
++        {
++            d.deferredUpload.active = true;
++            d.deferredUpload.command = command;
++            d.deferredUpload.lo = lo;
++            d.deferredUpload.hi = hi;
++        }
++        else if (command.direction == 0u)
+             d.invalidateForUpload(command, lo, hi);
+         else
+             d.invalidateBlocks(lo, hi);
+-- 
+2.55.0.windows.3
+

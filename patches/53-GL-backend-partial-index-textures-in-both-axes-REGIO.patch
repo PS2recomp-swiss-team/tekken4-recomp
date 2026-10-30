@@ -1,0 +1,258 @@
+From 5f60e22d886f9408f1f0c4aafb6b3a5ad1b123c8 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 06:04:58 +0100
+Subject: [PATCH 53/55] GL backend: partial index textures in both axes,
+ REGION_REPEAT ranges, edge-exact REPEAT
+
+- The decoded part of a big index texture is a rectangle (columns too: the
+  1024-wide textures sample ~64-256 columns); it grows by the bands a later
+  draw adds.
+- REGION_REPEAT samples texel (u & UMSK) | UFIX: the range [UFIX, UMSK|UFIX]
+  is known whatever the coordinates (most of the Arena's 1024x1024 T4/T8 draws).
+- REPEAT: a primitive whose far edge lies exactly on the texture's end does not
+  wrap.
+- PS2X_GL_DECODE_LOG also lists draws that still decode a big texture whole.
+Arena (Practice): 50 -> 60 fps, GL thread 17 -> 10 ms per frame.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 147 ++++++++++++-------
+ 1 file changed, 98 insertions(+), 49 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index dcdee2d..f7615a4 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -477,9 +477,10 @@ void main()
+             uint64_t lastUse = 0;
+         };
+         std::vector<Version> versions;
+-        // Tekken 4 port (perf): a partial index texture holds only rows [rowLo, rowHi) (the rest is not decoded yet)
++        // Tekken 4 port (perf): a partial index texture holds only texels [colLo, colHi) x [rowLo, rowHi) (the rest is not
++        // decoded yet)
+         bool partial = false;
+-        uint32_t rowLo = 0, rowHi = 0;
++        uint32_t rowLo = 0, rowHi = 0, colLo = 0, colHi = 0;
+     };
+ 
+     struct RenderTarget
+@@ -1218,67 +1219,83 @@ struct GSHwBackend::Impl
+         return on;
+     }
+ 
+-    // The texture rows the batch's vertices can sample: [lo, hi). All rows (lo 0, hi ~0) when the addressing may wrap or
+-    // the coordinates are not finite. Perspective-correct interpolation stays inside the vertices' range.
+-    static void sampledRows(const GSDrawState &s, const std::vector<HwVertex> &verts, uint32_t &lo, uint32_t &hi)
++    // The texels the batch's vertices can sample along one axis: [lo, hi). All (lo 0, hi ~0) when the addressing may wrap
++    // or a coordinate is not finite. Perspective-correct interpolation stays inside the vertices' range.
++    static void sampledRange(float c0, float c1, float size, uint32_t wrap, float rmin, float rmax, uint32_t &lo, uint32_t &hi)
+     {
+         lo = 0u, hi = ~0u;
++        float a = std::floor(c0) - 2.0f, b = std::floor(c1) + 3.0f; // filtering and rounding margin
++        if (wrap == 0u) // REPEAT: only when nothing wraps
++        {
++            if (c0 < 0.0f || c1 > size) // a primitive's far edge may lie exactly on the texture's end
++                return;
++            a = std::max(a, 0.0f), b = std::min(b, size);
++        }
++        else if (wrap == 1u) // CLAMP
++            a = std::max(a, 0.0f), b = std::min(b, size);
++        else if (wrap == 2u) // REGION_CLAMP: inside [MIN, MAX]
++        {
++            a = std::max(std::min(a, rmax), rmin), b = std::min(std::max(b, rmin + 1.0f), rmax + 1.0f);
++            a = std::max(a, 0.0f), b = std::min(b, size);
++        }
++        else
++        {
++            // REGION_REPEAT: texel (u & UMSK) | UFIX (MINU holds UMSK, MAXU holds UFIX), whatever the coordinate
++            const uint32_t msk = static_cast<uint32_t>(rmin), fix = static_cast<uint32_t>(rmax);
++            a = static_cast<float>(fix), b = static_cast<float>((msk | fix) + 1u);
++            b = std::min(b, size);
++        }
++        if (b <= a)
++            return;
++        lo = static_cast<uint32_t>(a), hi = static_cast<uint32_t>(b);
++    }
++    static void sampledRect(const GSDrawState &s, const std::vector<HwVertex> &verts, uint32_t &x0, uint32_t &x1, uint32_t &y0,
++                            uint32_t &y1)
++    {
++        x0 = y0 = 0u, x1 = y1 = ~0u;
+         if (verts.empty())
+             return;
++        const float texW = static_cast<float>(std::max<uint16_t>(s.textureWidth, 1));
+         const float texH = static_cast<float>(std::max<uint16_t>(s.textureHeight, 1));
+-        float v0 = 1e30f, v1 = -1e30f;
++        float u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
+         for (const HwVertex &v : verts)
+         {
+-            float tv;
++            float tu, tv;
+             if (s.prim.fst || v.cu0 > -1e29f) // sprites carry texel coordinates
+-                tv = v.v;
++                tu = v.u, tv = v.v;
+             else
+             {
+                 const float q = std::fabs(v.q) < 1e-30f ? 1e-30f : v.q;
+-                tv = v.t / q * texH;
++                tu = v.s / q * texW, tv = v.t / q * texH;
+             }
+-            if (!(tv == tv) || std::fabs(tv) > 1e7f)
+-                return;
+-            v0 = std::min(v0, tv), v1 = std::max(v1, tv);
+-        }
+-        const uint32_t wmt = static_cast<uint32_t>((s.context.clamp >> 2) & 3u);
+-        float a = std::floor(v0) - 2.0f, b = std::floor(v1) + 3.0f; // filtering and rounding margin
+-        if (wmt == 0u) // REPEAT: only when nothing wraps
+-        {
+-            if (v0 < 0.0f || v1 >= texH)
++            if (!(tu == tu) || !(tv == tv) || std::fabs(tu) > 1e7f || std::fabs(tv) > 1e7f)
+                 return;
+-            a = std::max(a, 0.0f), b = std::min(b, texH);
+-        }
+-        else if (wmt == 1u) // CLAMP
+-            a = std::max(a, 0.0f), b = std::min(b, texH);
+-        else if (wmt == 2u) // REGION_CLAMP: inside [MINV, MAXV]
+-        {
+-            const float minv = static_cast<float>((s.context.clamp >> 24) & 0x3FFu), maxv = static_cast<float>((s.context.clamp >> 34) & 0x3FFu);
+-            a = std::max(std::min(a, maxv), minv), b = std::min(std::max(b, minv + 1.0f), maxv + 1.0f);
+-            a = std::max(a, 0.0f), b = std::min(b, texH);
++            u0 = std::min(u0, tu), u1 = std::max(u1, tu), v0 = std::min(v0, tv), v1 = std::max(v1, tv);
+         }
+-        else
+-            return; // REGION_REPEAT
+-        if (b <= a)
+-            return;
+-        lo = static_cast<uint32_t>(a), hi = static_cast<uint32_t>(b);
++        const uint64_t cl = s.context.clamp;
++        sampledRange(u0, u1, texW, static_cast<uint32_t>(cl & 3u), static_cast<float>((cl >> 4) & 0x3FFu),
++                     static_cast<float>((cl >> 14) & 0x3FFu), x0, x1);
++        sampledRange(v0, v1, texH, static_cast<uint32_t>((cl >> 2) & 3u), static_cast<float>((cl >> 24) & 0x3FFu),
++                     static_cast<float>((cl >> 34) & 0x3FFu), y0, y1);
+     }
+ 
+-    void decodeIndexRows(Texture &tex, const GSTex0Reg &t, uint32_t y0, uint32_t y1)
++    void decodeIndexRect(Texture &tex, const GSTex0Reg &t, uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1)
+     {
+-        if (y1 <= y0)
++        if (y1 <= y0 || x1 <= x0)
+             return;
++        const uint32_t w = x1 - x0;
+         std::vector<uint8_t> &rows = decodeScratch;
+-        rows.resize(static_cast<size_t>(tex.width) * (y1 - y0));
++        rows.resize(static_cast<size_t>(w) * (y1 - y0));
+         for (uint32_t y = y0; y < y1; ++y)
+-            GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width, rows.data() + static_cast<size_t>(y - y0) * tex.width);
++            GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, x0, y, w, rows.data() + static_cast<size_t>(y - y0) * w);
+         const Api &g = gl();
+         g.BindTexture(kTexture2D, tex.id);
+         g.PixelStorei(kUnpackAlignment, 1);
+-        g.TexSubImage2D(kTexture2D, 0, 0, static_cast<GLint>(y0), tex.width, y1 - y0, 0x1903 /*RED*/, kUnsignedByte, rows.data());
++        g.TexSubImage2D(kTexture2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), w, y1 - y0, 0x1903 /*RED*/, kUnsignedByte, rows.data());
+     }
+ 
+-    Texture &indexTextureFor(const GSDrawState &s, uint32_t needLo = 0u, uint32_t needHi = ~0u)
++    Texture &indexTextureFor(const GSDrawState &s, uint32_t needX0 = 0u, uint32_t needX1 = ~0u, uint32_t needLo = 0u,
++                             uint32_t needHi = ~0u)
+     {
+         const GSTex0Reg &t = s.context.tex0;
+         const uint64_t key = (1ull << 63) | t.tbp0 | (static_cast<uint64_t>(t.tbw) << 14) | (static_cast<uint64_t>(t.psm & 63) << 20) |
+@@ -1288,24 +1305,31 @@ struct GSHwBackend::Impl
+         const uint32_t fullH = std::max<uint32_t>(1u, s.textureHeight), fullW = std::max<uint32_t>(1u, s.textureWidth);
+         needHi = std::min(needHi, fullH);
+         needLo = std::min(needLo, needHi);
+-        const bool wantPartial = partialRows() && fullH >= 128u && needHi > needLo && (needHi - needLo) * 2u <= fullH;
++        needX1 = std::min(needX1, fullW);
++        needX0 = std::min(needX0, needX1);
++        const uint64_t needArea = static_cast<uint64_t>(needHi - needLo) * (needX1 - needX0);
++        const bool wantPartial = partialRows() && static_cast<uint64_t>(fullW) * fullH >= 16384u && needArea != 0u &&
++                                 needArea * 2u <= static_cast<uint64_t>(fullW) * fullH;
+         if (tex.valid && tex.partial)
+         {
+             // rows uploaded again since (same layout): re-decode those that are decoded
+             if (tex.dirtyY1 > tex.dirtyY0)
+             {
+                 ++stats.texRowDecodes, PS2_PERF_COUNT(texRowDecodes);
+-                decodeIndexRows(tex, t, std::max(tex.dirtyY0, tex.rowLo), std::min(tex.dirtyY1, tex.rowHi));
++                decodeIndexRect(tex, t, tex.colLo, tex.colHi, std::max(tex.dirtyY0, tex.rowLo), std::min(tex.dirtyY1, tex.rowHi));
+                 tex.dirtyY0 = tex.dirtyY1 = 0;
+             }
+-            // grow the decoded range to cover the rows this draw samples (and the gap between)
++            // grow the decoded rectangle to the bounding box of it and the texels this draw samples: decode the new bands
+             const uint32_t lo = std::min(needLo, tex.rowLo), hi = std::max(needHi, tex.rowHi);
+-            if (lo < tex.rowLo || hi > tex.rowHi)
++            const uint32_t cl = std::min(needX0, tex.colLo), ch = std::max(needX1, tex.colHi);
++            if (lo < tex.rowLo || hi > tex.rowHi || cl < tex.colLo || ch > tex.colHi)
+             {
+                 PS2_PERF_COUNT(texRowDecodes);
+-                decodeIndexRows(tex, t, lo, tex.rowLo);
+-                decodeIndexRows(tex, t, tex.rowHi, hi);
+-                tex.rowLo = lo, tex.rowHi = hi;
++                decodeIndexRect(tex, t, cl, ch, lo, tex.rowLo);                 // above
++                decodeIndexRect(tex, t, cl, ch, tex.rowHi, hi);                 // below
++                decodeIndexRect(tex, t, cl, tex.colLo, tex.rowLo, tex.rowHi);   // left
++                decodeIndexRect(tex, t, tex.colHi, ch, tex.rowLo, tex.rowHi);   // right
++                tex.rowLo = lo, tex.rowHi = hi, tex.colLo = cl, tex.colHi = ch;
+             }
+             ++stats.texHits;
+             return tex;
+@@ -1338,10 +1362,12 @@ struct GSHwBackend::Impl
+                 g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+                 g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+             }
+-            decodeIndexRows(tex, t, needLo, needHi);
++            decodeIndexRect(tex, t, needX0, needX1, needLo, needHi);
+             tex.partial = true;
+             tex.rowLo = needLo;
+             tex.rowHi = needHi;
++            tex.colLo = needX0;
++            tex.colHi = needX1;
+             markValid(tex);
+             if (textures.size() > 6000u)
+                 evictOld();
+@@ -1383,6 +1409,8 @@ struct GSHwBackend::Impl
+         tex.partial = false;
+         tex.rowLo = 0u;
+         tex.rowHi = fullH;
++        tex.colLo = 0u;
++        tex.colHi = fullW;
+         if (contentHash != 0u && tex.id && tex.contentHash == contentHash && tex.indexed &&
+             tex.width == std::max<uint32_t>(1u, s.textureWidth) && tex.height == std::max<uint32_t>(1u, s.textureHeight))
+         {
+@@ -2765,10 +2793,31 @@ struct GSHwBackend::Impl
+             if (rsrc == &rt)
+                 g.TextureBarrier();
+             const bool indexed = !(src || rsrc || zsrc) && isIndexed(c.tex0.psm) && vram != nullptr;
+-            uint32_t needLo = 0u, needHi = ~0u;
++            uint32_t needX0 = 0u, needX1 = ~0u, needLo = 0u, needHi = ~0u;
+             if (indexed)
+-                sampledRows(s, verts, needLo, needHi);
+-            Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s, needLo, needHi) : textureFor(s);
++                sampledRect(s, verts, needX0, needX1, needLo, needHi);
++            {
++                static const bool decodeLogOn = std::getenv("PS2X_GL_DECODE_LOG") != nullptr;
++                static std::vector<uint32_t> fullShown;
++                if (decodeLogOn && indexed && fullShown.size() < 40 && s.textureWidth * s.textureHeight >= 65536 &&
++                    (needX1 == ~0u || needHi == ~0u) &&
++                    std::find(fullShown.begin(), fullShown.end(), c.tex0.tbp0) == fullShown.end())
++                {
++                    fullShown.push_back(c.tex0.tbp0);
++                    float u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
++                    for (const HwVertex &v : verts)
++                    {
++                        const float q = std::fabs(v.q) < 1e-30f ? 1e-30f : v.q;
++                        const float tu = (s.prim.fst || v.cu0 > -1e29f) ? v.u : v.s / q * s.textureWidth;
++                        const float tv = (s.prim.fst || v.cu0 > -1e29f) ? v.v : v.t / q * s.textureHeight;
++                        u0 = std::min(u0, tu), u1 = std::max(u1, tu), v0 = std::min(v0, tv), v1 = std::max(v1, tv);
++                    }
++                    std::fprintf(stderr, "[gs-full] tbp=%x psm=%x %ux%u clamp=%llx fst=%d verts=%zu u=%.1f..%.1f v=%.1f..%.1f\n",
++                                 c.tex0.tbp0, c.tex0.psm, s.textureWidth, s.textureHeight, (unsigned long long)c.clamp,
++                                 s.prim.fst ? 1 : 0, verts.size(), u0, u1, v0, v1);
++                }
++            }
++            Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s, needX0, needX1, needLo, needHi) : textureFor(s);
+             g.Uniform1i(locIndexed, indexed ? 1 : 0);
+             g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
+             // Tekken 4 port: the CLAMP modes as they are (region modes for every texture source but depth/reinterpret)
+-- 
+2.55.0.windows.3
+

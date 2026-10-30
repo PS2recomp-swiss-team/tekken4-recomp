@@ -1,0 +1,8 @@
+OWNS: external/ps2recomp-pr10/ps2xRuntime/include/ps2_runtime_macros.h,external/ps2recomp-pr10/ps2xRecomp/src/lib/vu_translator.cpp,external/ps2recomp-pr10/ps2xRecomp/src/lib/vu_translation_helpers.cpp,external/ps2recomp-pr10/ps2xTest/src/ps2_vu_tests.cpp,external/ps2recomp-pr10/ps2xTest/src/ps2_float_semantics_tests.cpp
+TASK: turn patches/17-ps2xRecomp-ee-fpu-vu0-macro-semantics.patch (your fpu-fixes) into an upstream-ready PR in worktree external/ps2recomp-pr10 (branch ee-fpu-vu0-macro-semantics = upstream ran-j/PS2Recomp main eb8688b). Work mode.
+CTX: the patch; logs/grok/fpu-audit_20261022_062059.json + logs/grok/fpu-fixes_20261022_065037.json (PCSX2 refs, site counts); docs/status.md "EE FPU / VU0 macro semantics (patch 17)". The SQRT.S fix is a separate open PR (#382): do not include it.
+ASK: 1. apply the four fixes to upstream (adapt if upstream differs); 2. keep/port their tests; 3. `cmd /c external\ps2recomp-pr10\build_pr_tests.cmd` (check logs\run.lock first), all pass; 4. PR text in logs/grok/fpu-pr-notes.md (title; problem per fix with the PCSX2 reference; per-file changes; found while: Tekken 4 recomp audit after the SQRT.S operand bug, site counts in the ELF; verified with; last line "Made by Pablo and assisted with Claude Code and Grok.").
+TOOLS: one simple command per tool call; never chain with ; or && or set $env: inline.
+LIMITS: OWNS files + logs/grok/ only; no git write commands; never touch external/PS2Recomp.
+PACING: do not return the final JSON until the DOD is met or you are blocked after trying.
+DOD: tests pass in pr10 (count); diff = only OWNS files; PR notes; final JSON.

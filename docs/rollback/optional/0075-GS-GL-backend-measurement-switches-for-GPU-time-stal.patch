@@ -1,0 +1,229 @@
+From e4233a5cc7e31f8c2c3fc910e46759d0b54cf684 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 05:25:09 +0100
+Subject: [PATCH 75/75] GS GL backend: measurement switches for GPU-time stalls
+ (netplay phase 3b)
+
+PS2X_GS_SLOW_LOG=1: GS worker chunks over 10 ms with the time spent waiting for the vertex ring's fences, and
+texture barriers per presented frame. Diagnostics only, all off by default (the barrier count is one relaxed add):
+PS2X_GL_MAX_GPU_LAG=<K> (GPU at most K+1 presented frames behind), PS2X_GL_NO_BARRIER=1, PS2X_GL_WRAP_BATCH=1.
+Finding: two games on one PC saturate the RTX 3090 in the cage fight (99 %); the game with less GPU time waits
+35-200 ms on a ring fence every ~6 frames. None of the switches removed that GPU time.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp  | 88 +++++++++++++++++--
+ .../src/lib/gs/gs_threaded_backend.cpp        | 17 ++++
+ 2 files changed, 99 insertions(+), 6 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index cc42f67..d2e69de 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include <map>
+ #include <algorithm>
++#include <atomic>
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
+@@ -22,10 +23,75 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++// Tekken 4 port (netplay 3b): host time the GS worker waited for the vertex ring fences (PS2X_GS_SLOW_LOG).
++std::atomic<uint64_t> g_ps2xGsRingWaitNs{0};
++std::atomic<uint64_t> g_ps2xGsBarriers{0}; // glTextureBarrier calls (PS2X_GS_SLOW_LOG: per presented frame)
++
+ namespace
+ {
+     using namespace GSGL;
+ 
++    // Tekken 4 port (netplay 3b, measurement): PS2X_GL_MAX_GPU_LAG=<K> keeps the GPU at most K+1 presented frames
++    // behind this thread (a fence per presented frame). Two games on one PC saturate the GPU in a fight (99 %);
++    // the one that gets less GPU time then waited for the vertex ring's fences in one block every quarter (~6
++    // frames: 35-200 ms). Bounding the lag did not make that GPU time smaller (docs/ROLLBACK_PHASE3B.md): off by
++    // default. With PS2X_GS_SLOW_LOG=1 it also prints the texture barriers per presented frame (needs K > 0).
++    // Every glTextureBarrier of the renderer goes through here (counted for PS2X_GS_SLOW_LOG). PS2X_GL_NO_BARRIER=1
++    // (measurement only, phase 3b: how much of the GPU time the barriers cost) skips them: shader reads of the
++    // render target may then see stale pixels.
++    void gsTextureBarrier(const Api &g)
++    {
++        static const bool skip = []
++        {
++            const char *v = std::getenv("PS2X_GL_NO_BARRIER");
++            return v && *v == '1';
++        }();
++        g_ps2xGsBarriers.fetch_add(1, std::memory_order_relaxed);
++        if (!skip)
++            g.TextureBarrier();
++    }
++
++    void boundGpuLag(const Api &g)
++    {
++        static const int lag = []
++        {
++            const char *v = std::getenv("PS2X_GL_MAX_GPU_LAG");
++            return v && *v ? std::max(0, std::min(8, std::atoi(v))) : 0;
++        }();
++        static const bool slowLog = []
++        {
++            const char *v = std::getenv("PS2X_GS_SLOW_LOG");
++            return v && *v == '1';
++        }();
++        static GLsync fences[9] = {};
++        static unsigned next = 0, presented = 0;
++        static uint64_t lastBarriers = 0;
++        if (slowLog && ++presented % 300u == 0u)
++        {
++            const uint64_t b = g_ps2xGsBarriers.load(std::memory_order_relaxed);
++            std::fprintf(stderr, "[gs-barriers] %.1f texture barriers per presented frame (last 300)\n",
++                         static_cast<double>(b - lastBarriers) / 300.0);
++            lastBarriers = b;
++        }
++        if (lag <= 0 || !g.FenceSync || !g.ClientWaitSync || !g.DeleteSync)
++            return;
++        const unsigned n = static_cast<unsigned>(lag) + 1u;
++        if (fences[next % n])
++        {
++            const auto t0 = std::chrono::steady_clock::now();
++            while (g.ClientWaitSync(fences[next % n], kSyncFlushCommandsBit, 1000000000ull) == kTimeoutExpired)
++            {
++            }
++            g.DeleteSync(fences[next % n]);
++            fences[next % n] = nullptr;
++            g_ps2xGsRingWaitNs.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                             std::chrono::steady_clock::now() - t0).count()),
++                                         std::memory_order_relaxed);
++        }
++        fences[next % n] = g.FenceSync(kSyncGpuCommandsComplete, 0u);
++        ++next;
++    }
++
+     constexpr GLenum kArrayBuffer = 0x8892;
+     constexpr GLenum kFloat = 0x1406;
+     constexpr GLenum kColorAttachment0 = 0x8CE0;
+@@ -631,9 +697,13 @@ struct GSHwBackend::Impl
+     {
+         if (!ringFence[q])
+             return;
++        const auto waitT0 = std::chrono::steady_clock::now();
+         while (g.ClientWaitSync(ringFence[q], kSyncFlushCommandsBit, 1000000000ull) == kTimeoutExpired)
+         {
+         }
++        g_ps2xGsRingWaitNs.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                                         std::chrono::steady_clock::now() - waitT0).count()),
++                                     std::memory_order_relaxed);
+         g.DeleteSync(ringFence[q]);
+         ringFence[q] = nullptr;
+     }
+@@ -2180,7 +2250,7 @@ struct GSHwBackend::Impl
+         g.Uniform4i(locShTexa, shuffleState.texa.ta0 >> 7, shuffleState.texa.ta1 >> 7, shuffleState.texa.aem ? 1 : 0, 0);
+         g.Uniform2f(locShInvSize, 1.0f / dst.pxW, 1.0f / dst.pxH);
+         if (&src == &dst)
+-            g.TextureBarrier();
++            gsTextureBarrier(g);
+         g.BindVertexArray(shuffleVao);
+         g.BindBuffer(kArrayBuffer, shuffleVbo);
+         for (uint32_t i = 0; i < 4; ++i)
+@@ -2732,7 +2802,7 @@ struct GSHwBackend::Impl
+                 g.BindTexture(kTexture2D, rt.color);
+                 g.Uniform1i(locDest, 4);
+                 g.ActiveTexture(kTexture0);
+-                g.TextureBarrier();
++                gsTextureBarrier(g);
+             }
+         }
+         g.Uniform2f(locInvSize, 1.0f / rt.pxW, 1.0f / rt.pxH);
+@@ -2767,7 +2837,7 @@ struct GSHwBackend::Impl
+                     }
+                 }
+             if (src == &rt)
+-                g.TextureBarrier();
++                gsTextureBarrier(g);
+             Texture dummy;
+             RenderTarget *zsrc = nullptr;
+             const bool zFormat = c.tex0.psm == 0x30 || c.tex0.psm == 0x31 || c.tex0.psm == 0x32 || c.tex0.psm == 0x3A;
+@@ -2793,7 +2863,7 @@ struct GSHwBackend::Impl
+                 }
+             }
+             if (rsrc == &rt)
+-                g.TextureBarrier();
++                gsTextureBarrier(g);
+             const bool indexed = !(src || rsrc || zsrc) && isIndexed(c.tex0.psm) && vram != nullptr;
+             uint32_t needX0 = 0u, needX1 = ~0u, needLo = 0u, needHi = ~0u;
+             if (indexed)
+@@ -2934,7 +3004,12 @@ struct GSHwBackend::Impl
+         }
+         g.ColorMask(mr, mg, mb, ma);
+         g.DepthMask(zwrite ? kTrue : kFalse);
+-        if (softBlend && !zAliasWrite && (s.colclamp & 1u) == 0u)
++        static const bool wrapBatchDiag = [] // (diagnostic, phase 3b GPU-time A/B: one draw, overlaps not counted)
++        {
++            const char *v = std::getenv("PS2X_GL_WRAP_BATCH");
++            return v && *v == '1';
++        }();
++        if (softBlend && !zAliasWrite && (s.colclamp & 1u) == 0u && !wrapBatchDiag)
+         {
+             // wrapping blend (COLCLAMP=0, only the shadow-volume passes): the shader reads the destination, so draw one
+             // triangle at a time with a barrier in between; overlapping triangles of one draw then see each other's results
+@@ -2942,7 +3017,7 @@ struct GSHwBackend::Impl
+             for (size_t i = 0; i + 3 <= verts.size(); i += 3)
+             {
+                 if (i != 0)
+-                    g.TextureBarrier();
++                    gsTextureBarrier(g);
+                 g.DrawArrays(kTriangles, first + static_cast<GLint>(i), 3);
+             }
+         }
+@@ -3567,6 +3642,7 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+     {
+         // GOW-Port: zero-copy presentation: GPU copy into a texture shared with the host window, no pixels returned.
+         GSGL::PublishSharedTexture(g, d.presentTex, outW, outH, d.presentCount, fbp, fbp, request.vsyncTick);
++        boundGpuLag(g);
+         return PresentationFrame{};
+     }
+     g.ReadPixels(0, 0, outW, outH, kRgba, kUnsignedByte, frame.pixels.data());
+diff --git a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+index 0d0c929..befb5c8 100644
+--- a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+@@ -12,9 +12,12 @@
+ #include <algorithm>
+ #include <cstdlib>
+ #include <cstring>
++#include <chrono>
+ #include <cstdio>
+ #include <xmmintrin.h>
+ 
++extern std::atomic<uint64_t> g_ps2xGsRingWaitNs; // gpu/gs_hw_backend.cpp
++
+ namespace
+ {
+     constexpr size_t kPublishBytes = 64u * 1024u;
+@@ -226,7 +229,21 @@ void GSThreadedBackend::WorkerLoop()
+         {
+             std::lock_guard<std::mutex> exec(m_execMutex);
+             ps2_perf_stats::Timer busy(ps2_perf_stats::g_counters.gsWorkerBusyNs);
++            static const bool slowLog = []
++            {
++                const char *v = std::getenv("PS2X_GS_SLOW_LOG");
++                return v && *v == '1';
++            }();
++            const auto t0 = std::chrono::steady_clock::now();
++            const uint64_t ring0 = g_ps2xGsRingWaitNs.load(std::memory_order_relaxed);
+             Execute(chunk, draw);
++            if (slowLog)
++            {
++                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
++                if (ms > 10.0)
++                    std::fprintf(stderr, "[gs-slow] chunk %zu bytes %.1f ms, vertex ring fence wait %.1f ms\n", chunk.size(), ms,
++                                 static_cast<double>(g_ps2xGsRingWaitNs.load(std::memory_order_relaxed) - ring0) / 1e6);
++            }
+         }
+         {
+             std::lock_guard<std::mutex> lock(m_queueMutex);
+-- 
+2.55.0.windows.3
+

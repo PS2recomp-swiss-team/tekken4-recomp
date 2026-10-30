@@ -1,0 +1,40 @@
+From 459e1a1dfbfd239b4ce0731bee84aa203a405f9c Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:38:33 +0100
+Subject: [PATCH 51/55] ps2xIOP: TEKKEN4_SOUND_TRACE read once (no static guard
+ per sample block)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/src/emulator/core/sound_engine.cpp | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.cpp b/ps2xIOP/src/emulator/core/sound_engine.cpp
+index 7b977bd..f3d3fd4 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.cpp
++++ b/ps2xIOP/src/emulator/core/sound_engine.cpp
+@@ -18,14 +18,13 @@ namespace ps2x::iop::detail
+         constexpr size_t kMaxBufferedFrames = 48000u * 2u; // 2 s; without a consumer the oldest samples are dropped
+ 
+         // TEKKEN4_SOUND_TRACE=1. Off unless that env is exactly "1". One line per mixer second plus KON/KOFF.
+-        bool soundTrace()
+-        {
+-            static const bool on = [] {
+-                const char *value = std::getenv("TEKKEN4_SOUND_TRACE");
+-                return value != nullptr && value[0] == '1' && value[1] == '\0';
+-            }();
+-            return on;
+-        }
++        // Read once at start-up: soundTrace() is asked per decoded sample block, and a function-local static paid its
++        // initialisation guard on every call (~1% of the game thread in fights).
++        const bool s_soundTrace = [] {
++            const char *value = std::getenv("TEKKEN4_SOUND_TRACE");
++            return value != nullptr && value[0] == '1' && value[1] == '\0';
++        }();
++        inline bool soundTrace() { return s_soundTrace; }
+ 
+         struct TraceState
+         {
+-- 
+2.55.0.windows.3
+

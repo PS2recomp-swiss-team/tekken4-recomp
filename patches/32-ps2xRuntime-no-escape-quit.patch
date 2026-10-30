@@ -1,0 +1,14 @@
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index db5be56..ccd9193 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -748,6 +748,9 @@ bool PS2Runtime::initialize(const char *title)
+         InitAudioDevice();
+         m_audioBackend.setAudioReady(IsAudioDeviceReady());
+ #endif
++        // raylib quits on Escape by default; games use Escape as a pad button (Circle here), so only the window's
++        // close button ends the run.
++        SetExitKey(KEY_NULL);
+         SetTargetFPS(60);
+         if (m_debugUiInitCallback)
+         {

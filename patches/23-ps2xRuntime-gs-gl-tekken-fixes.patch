@@ -1,0 +1,340 @@
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index 486aa56..674a1e4 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -390,9 +390,14 @@ out vec4 oColor;
+ uniform sampler2D uSrc;
+ uniform ivec4 uSrcOffset; // x, y: source pixel of output pixel 0; z: 1 = CT24 (alpha 0x80); w: 1 = alpha x2 as blend factor
+ uniform int uSrcEdge; // first source row/column shown; the ones before it repeat it
++// Tekken 4 port (CPU backend's decodeDisplayLineRepeat / displayField): x = output lines per buffer line ((MAGV+1), x2 in
++// interlaced FRAME mode), y = output lines the picture starts lower (odd field of an interlaced FRAME-mode picture).
++uniform ivec4 uLineRep;
+ void main()
+ {
+-    ivec2 p = max(ivec2(gl_FragCoord.xy) + uSrcOffset.xy, ivec2(uSrcEdge));
++    ivec2 q = ivec2(gl_FragCoord.xy);
++    q.y = max(q.y - uLineRep.y, 0) / max(uLineRep.x, 1);
++    ivec2 p = max(q + uSrcOffset.xy, ivec2(uSrcEdge));
+     ivec2 size = textureSize(uSrc, 0);
+     vec4 c = (p.x < size.x && p.y < size.y) ? texelFetch(uSrc, p, 0) : vec4(0.0);
+     float a = (uSrcOffset.z != 0) ? 128.0 / 255.0 : c.a;
+@@ -431,6 +436,12 @@ void main()
+         uint32_t blockLo = 0, blockHi = 0;
+         bool valid = false;
+         uint64_t lastUse = 0;
++        // Tekken 4 port: an index texture keeps its layout so an upload in that same layout (font glyphs into a font
++        // page) only marks rows [dirtyY0, dirtyY1) for re-decoding instead of invalidating the whole page.
++        bool indexed = false;
++        uint32_t tbp = 0, tbw = 0;
++        uint8_t psm = 0;
++        uint32_t dirtyY0 = 0, dirtyY1 = 0;
+     };
+ 
+     struct RenderTarget
+@@ -445,6 +456,7 @@ void main()
+         uint64_t version = 1, lastDrawSeq = 0;
+         uint64_t lastDepthSeq = 0; // writeSeq of the last draw that wrote this target's depth (memory at zbp)
+         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
++        int lastDrawPresent = -1; // Tekken 4 port: presentCount at its last draw
+     };
+ 
+     uint32_t pageRowsFor(uint32_t psm)
+@@ -475,7 +487,8 @@ struct GSHwBackend::Impl
+     uint8_t *vram = nullptr;
+     uint32_t vramSize = 0;
+ 
+-    float scale = 2.0f;
++    // Tekken 4 port: 1 by default (RAM frames have a 640-pixel stride; Tekken's frame copy repeats at 2).
++    float scale = 1.0f;
+     GLuint program = 0, vao = 0, vbo = 0;
+     GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTexDim = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
+           locAte = -1, locFailTint = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
+@@ -485,7 +498,7 @@ struct GSHwBackend::Impl
+ 
+     GLuint tableTex = 0, paletteTex = 0;
+     GLuint presentProgram = 0, presentVao = 0, presentFbo = 0, presentTex = 0;
+-    GLint locPresentSrc = -1, locPresentOffset = -1, locPresentEdge = -1;
++    GLint locPresentSrc = -1, locPresentOffset = -1, locPresentEdge = -1, locPresentLineRep = -1;
+     uint32_t presentW = 0, presentH = 0;
+     GLuint shuffleProgram = 0, shuffleVao = 0, shuffleVbo = 0;
+     GLint locShTexa = -1;
+@@ -566,7 +579,7 @@ struct GSHwBackend::Impl
+     struct Stats
+     {
+         uint64_t shuffles = 0;
+-        uint64_t draws = 0, batches = 0, skippedPsm = 0, unsupportedBlend = 0, texDecodes = 0, texHits = 0, skippedPrim = 0;
++        uint64_t draws = 0, batches = 0, skippedPsm = 0, unsupportedBlend = 0, texDecodes = 0, texRowDecodes = 0, texHits = 0, skippedPrim = 0;
+         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+     } stats;
+     bool statsEnabled = std::getenv("GOW_GS_HW_STATS") != nullptr;
+@@ -689,6 +702,7 @@ struct GSHwBackend::Impl
+                 locPresentSrc = g.GetUniformLocation(presentProgram, "uSrc");
+                 locPresentOffset = g.GetUniformLocation(presentProgram, "uSrcOffset");
+                 locPresentEdge = g.GetUniformLocation(presentProgram, "uSrcEdge");
++                locPresentLineRep = g.GetUniformLocation(presentProgram, "uLineRep");
+                 g.GenVertexArrays(1, &presentVao);
+                 g.BindVertexArray(vao);
+             }
+@@ -935,6 +949,24 @@ struct GSHwBackend::Impl
+                              (static_cast<uint64_t>(s.textureWidth) << 26) | (static_cast<uint64_t>(s.textureHeight) << 38);
+         Texture &tex = textures[key];
+         tex.lastUse = ++useCounter;
++        if (tex.valid && tex.dirtyY1 > tex.dirtyY0)
++        {
++            ++stats.texRowDecodes;
++            const uint32_t y0 = tex.dirtyY0, y1 = std::min(tex.dirtyY1, tex.height);
++            tex.dirtyY0 = tex.dirtyY1 = 0;
++            if (y1 > y0)
++            {
++                std::vector<uint8_t> rows(static_cast<size_t>(tex.width) * (y1 - y0));
++                for (uint32_t y = y0; y < y1; ++y)
++                    GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width,
++                                        rows.data() + static_cast<size_t>(y - y0) * tex.width);
++                const Api &g = gl();
++                g.BindTexture(kTexture2D, tex.id);
++                g.PixelStorei(kUnpackAlignment, 1);
++                g.TexSubImage2D(kTexture2D, 0, 0, static_cast<GLint>(y0), tex.width, y1 - y0, 0x1903 /*RED*/, kUnsignedByte, rows.data());
++            }
++            return tex;
++        }
+         if (tex.valid)
+         {
+             ++stats.texHits;
+@@ -944,6 +976,11 @@ struct GSHwBackend::Impl
+         classifyTexture(s);
+         tex.width = std::max<uint32_t>(1u, s.textureWidth);
+         tex.height = std::max<uint32_t>(1u, s.textureHeight);
++        tex.indexed = true;
++        tex.tbp = t.tbp0;
++        tex.tbw = t.tbw;
++        tex.psm = static_cast<uint8_t>(t.psm & 63u);
++        tex.dirtyY0 = tex.dirtyY1 = 0;
+         std::vector<uint8_t> indices(static_cast<size_t>(tex.width) * tex.height);
+         for (uint32_t y = 0; y < tex.height; ++y)
+             GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width,
+@@ -1062,6 +1099,29 @@ struct GSHwBackend::Impl
+         }
+     }
+ 
++    // Tekken 4 port: like invalidateBlocks, but an index texture with exactly the upload's layout (same base, width and
++    // format, rectangle inside it) keeps its decoded rows and only re-decodes the uploaded ones at its next use.
++    void invalidateForUpload(const GSTransferCommand &c, uint32_t lo, uint32_t hi)
++    {
++        const uint32_t x0 = c.trxpos.dsax, y0 = c.trxpos.dsay, x1 = x0 + c.trxreg.rrw, y1 = y0 + c.trxreg.rrh;
++        for (auto &kv : textures)
++        {
++            Texture &t = kv.second;
++            if (!t.valid || !(t.blockLo < hi && lo < t.blockHi))
++                continue;
++            if (t.indexed && t.tbp == c.bitbltbuf.dbp && t.tbw == c.bitbltbuf.dbw && t.psm == (c.bitbltbuf.dpsm & 63u) &&
++                x1 <= t.width && y1 <= t.height)
++            {
++                if (t.dirtyY1 <= t.dirtyY0)
++                    t.dirtyY0 = y0, t.dirtyY1 = y1;
++                else
++                    t.dirtyY0 = std::min(t.dirtyY0, y0), t.dirtyY1 = std::max(t.dirtyY1, y1);
++                continue;
++            }
++            t.valid = false;
++        }
++    }
++
+     // The render target whose memory range holds the texture's first block (and was not overwritten by an upload since).
+     // Formats that live only in bits 24-31 (T8H, T4HL, T4HH) are never written by a 24 bit target (CT24 colour, Z24): the
+     // game keeps uploaded textures there, so such a target is not their source.
+@@ -1555,9 +1615,18 @@ struct GSHwBackend::Impl
+         }
+         // a draw through a different-format view (CT16) of memory that a CT32/CT24 target already owns writes bit fields of its
+         // pixels; it cannot be rasterised into the RGBA target at the same coordinates
+-        for (const RenderTarget &t : targets)
++        for (RenderTarget &t : targets)
+             if (t.fbp == s.context.frame.fbp && t.usedW != 0u && family16(t.psm) != family16(fpsm))
+             {
++                // Tekken 4 port: a buffer re-purposed for the other family (the 16 bit PAL50 display buffer is 32 bit in
++                // PAL60) takes the new format when the old one has not drawn there since the last present; within a frame
++                // (GoW's bit-field views) the draw is still skipped.
++                if (t.lastDrawPresent != presentCount)
++                {
++                    t.psm = fpsm;
++                    t.usedW = t.usedH = 0;
++                    break;
++                }
+                 ++stats.skippedPsm;
+                 dumpSkipped(s, b, "view");
+                 return;
+@@ -1824,6 +1893,7 @@ struct GSHwBackend::Impl
+         RenderTarget &rt = target(c.frame.fbp, c.frame.fbw);
+         attachDepth(rt, c.zbuf.zbp);
+         rt.psm = c.frame.psm;
++        rt.lastDrawPresent = presentCount;
+         ++rt.version;
+         rt.lastDrawSeq = ++writeSeq;
+         {
+@@ -2256,11 +2326,11 @@ struct GSHwBackend::Impl
+         if (now - stats.last < std::chrono::seconds(5))
+             return;
+         stats.last = now;
+-        std::fprintf(stderr, "[gs-hw] shuffles=%llu draws=%llu batches=%llu texDecodes=%llu texHits=%llu skippedPsm=%llu skippedPrim=%llu unsupportedBlend=%llu textures=%zu\n",
+-                     (unsigned long long)stats.shuffles, (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes,
++        std::fprintf(stderr, "[gs-hw] shuffles=%llu draws=%llu batches=%llu texDecodes=%llu texRowDecodes=%llu texHits=%llu skippedPsm=%llu skippedPrim=%llu unsupportedBlend=%llu textures=%zu\n",
++                     (unsigned long long)stats.shuffles, (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes, (unsigned long long)stats.texRowDecodes,
+                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
+                      (unsigned long long)stats.unsupportedBlend, textures.size());
+-        stats.shuffles = stats.draws = stats.batches = stats.texDecodes = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
++        stats.shuffles = stats.draws = stats.batches = stats.texDecodes = stats.texRowDecodes = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
+     }
+ 
+     RenderTarget *findTarget(uint32_t fbp)
+@@ -2332,7 +2402,10 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
+     {
+         const uint32_t rows = static_cast<uint32_t>(command.trxpos.dsay) + command.trxreg.rrh;
+         const uint32_t lo = command.bitbltbuf.dbp, hi = lo + spanBlocks(command.bitbltbuf.dpsm, command.bitbltbuf.dbw, rows);
+-        d.invalidateBlocks(lo, hi);
++        if (command.direction == 0u)
++            d.invalidateForUpload(command, lo, hi);
++        else
++            d.invalidateBlocks(lo, hi);
+         // GOW_GS_HW_XFERWATCH=<hex block>: debug, log the transfers whose block range holds that block
+         static const long xferWatch = std::getenv("GOW_GS_HW_XFERWATCH") ? std::strtol(std::getenv("GOW_GS_HW_XFERWATCH"), nullptr, 16) : -1;
+         // GOW_GS_HW_XFERRANGE=<lo hex>-<hi hex>: also log every transfer whose destination block lies in [lo, hi)
+@@ -2457,9 +2530,10 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+         dbx = static_cast<uint32_t>((dispfb >> 32) & 0x7FFu);
+         dby = static_cast<uint32_t>((dispfb >> 43) & 0x7FFu);
+         const uint32_t hdiv = static_cast<uint32_t>((display >> 23) & 0xFu) + 1u;
+-        const uint32_t vdiv = static_cast<uint32_t>((display >> 27) & 0x3u) + 1u;
+         w = (static_cast<uint32_t>((display >> 32) & 0xFFFu) + 1u) / hdiv;
+-        h = (static_cast<uint32_t>((display >> 44) & 0x7FFu) + 1u) / vdiv;
++        // Tekken 4 port: DH+1 output lines like the CPU backend; MAGV and interlaced FRAME mode repeat buffer lines
++        // (uLineRep) instead of shortening the picture.
++        h = static_cast<uint32_t>((display >> 44) & 0x7FFu) + 1u;
+         return enabled && display != 0u && w != 0u && h != 0u;
+     };
+     // GOW_GS_HW_DISPLOG=1: the display registers each time they change (picture size and placement per mode)
+@@ -2497,8 +2571,9 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+     // a 480-line display at the same DY; their streams are 640x480 with the picture in the top 448 lines and 32 black
+     // lines below, which a TV shows in its bottom border. Taller displays are cut to 448 lines, so a movie fills the
+     // window like the game does instead of leaving a black band under it.
+-    constexpr uint32_t kTvLines = 448u;
+-    const uint32_t fbp = ok1 ? fbp1 : fbp2, w = ok1 ? w1 : w2, h = std::min(ok1 ? h1 : h2, kTvLines);
++    // Tekken 4 port: no 448-line TV cut (GoW's movies); the host frame holds 512 lines like the CPU backend's.
++    constexpr uint32_t kTvLines = 512u;
++    const uint32_t fbp = ok1 ? fbp1 : fbp2, w = std::min(ok1 ? w1 : w2, 640u), h = std::min(ok1 ? h1 : h2, kTvLines);
+     frame.displayFbp = fbp;
+     frame.sourceFbp = fbp;
+     // GOW_GS_HW_DISPDUMP=<n>: the n-th present after the displayed buffer's size changed (e.g. a movie starts) writes that
+@@ -2614,7 +2689,13 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+     // Row 0 of the displayed buffer is the game's black line (the 416 -> 448 stretch starts at y 0.5 and a line
+     // primitive clears row 0), which a TV's overscan hides on the console: the first two PS2 rows and columns repeat
+     // the next one so no dark line shows along the top and left edge.
+-    g.Uniform1i(d.locPresentEdge, static_cast<GLint>(std::lround(2.0f * d.scale)));
++    // Tekken 4 port: GoW repeated the first two rows/columns (its black line under the overscan); show them as they are.
++    g.Uniform1i(d.locPresentEdge, 0);
++    const bool interlacedFrame = (request.smode2 & 1ull) != 0ull && ((request.smode2 >> 1) & 1ull) != 0ull;
++    const auto lineRepeat = [&](uint64_t display) {
++        return static_cast<GLint>((((display >> 27) & 0x3u) + 1u) * (interlacedFrame ? 2u : 1u));
++    };
++    const GLint fieldOffset = (interlacedFrame && request.displayField == 1) ? static_cast<GLint>(std::lround(d.scale)) : 0;
+     const bool mmod = ((request.pmode >> 5) & 1u) != 0u, slbg = ((request.pmode >> 7) & 1u) != 0u;
+     const uint32_t alp = static_cast<uint32_t>((request.pmode >> 8) & 0xFFu);
+     const auto drawCircuit = [&](uint32_t cfbp, uint64_t dispfb, uint32_t cdbx, uint32_t cdby, bool alphaFactor)
+@@ -2622,6 +2703,8 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+         RenderTarget *rt = d.findTarget(cfbp);
+         if (!rt)
+             return;
++        const GLint repeat = lineRepeat(dispfb == request.dispfb1 ? request.display1 : request.display2);
++        g.Uniform4i(d.locPresentLineRep, repeat, repeat > 1 ? fieldOffset : 0, 0, 0);
+         g.BindTexture(kTexture2D, rt->color);
+         g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+         g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+diff --git a/ps2xRuntime/src/lib/gs/ps2_gs_memory.cpp b/ps2xRuntime/src/lib/gs/ps2_gs_memory.cpp
+index f55868a..4f3fdba 100644
+--- a/ps2xRuntime/src/lib/gs/ps2_gs_memory.cpp
++++ b/ps2xRuntime/src/lib/gs/ps2_gs_memory.cpp
+@@ -261,11 +261,20 @@ namespace GSMem
+                 PixelStorageTraits<psm>::Write(data, bp, bw, x + i, y, static_cast<Packed>(fetch(i)));
+         }
+ 
+-        template<PixelStorageMode psm>
+-        void readIndexRunT(const u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 count, u8* out)
++        // Page lookup table instead of the per-pixel swizzle formula (SwizzleMatchesLookup ties the two together):
++        // the GL backend decodes whole index textures with this, its hottest path in Tekken's menus.
++        template<PixelStorageMode psm, typename Table>
++        void readIndexRunT(const Table& table, const u8* data, u32 bp, u32 bw, u32 x, u32 y, u32 count, u8* out)
+         {
++            using Traits = PixelStorageTraits<psm>;
++            constexpr u32 width = static_cast<u32>(UnpackedBitWidth(psm));
++            constexpr u32 offset = static_cast<u32>(Traits::BitOffset());
++            constexpr u32 mask = (psm == P4 || psm == P4HL || psm == P4HH) ? 0x0Fu : 0xFFu;
+             for (u32 i = 0; i < count; ++i)
+-                out[i] = static_cast<u8>(PixelStorageTraits<psm>::Read(data, bp, bw, x + i, y));
++            {
++                const u32 bits = Traits::Address(table, bp, bw, x + i, y) * width + offset;
++                out[i] = static_cast<u8>((data[(bits >> 3) & (MEMORY_SIZE - 1u)] >> (bits & 7u)) & mask);
++            }
+         }
+ 
+         template<PixelStorageMode psm>
+@@ -280,11 +289,11 @@ namespace GSMem
+     {
+         switch (static_cast<PixelStorageMode>(psm & 0x3Fu))
+         {
+-        case P8: readIndexRunT<P8>(data, bp, bw, x, y, count, out); break;
+-        case P8H: readIndexRunT<P8H>(data, bp, bw, x, y, count, out); break;
+-        case P4: readIndexRunT<P4>(data, bp, bw, x, y, count, out); break;
+-        case P4HL: readIndexRunT<P4HL>(data, bp, bw, x, y, count, out); break;
+-        case P4HH: readIndexRunT<P4HH>(data, bp, bw, x, y, count, out); break;
++        case P8: readIndexRunT<P8>(PageTableP8, data, bp, bw, x, y, count, out); break;
++        case P8H: readIndexRunT<P8H>(PageTableC32, data, bp, bw, x, y, count, out); break;
++        case P4: readIndexRunT<P4>(PageTableP4, data, bp, bw, x, y, count, out); break;
++        case P4HL: readIndexRunT<P4HL>(PageTableC32, data, bp, bw, x, y, count, out); break;
++        case P4HH: readIndexRunT<P4HH>(PageTableC32, data, bp, bw, x, y, count, out); break;
+         default: std::memset(out, 0, count); break;
+         }
+     }
+diff --git a/ps2xTest/src/ps2_gs_tests.cpp b/ps2xTest/src/ps2_gs_tests.cpp
+index 088c1bd..68ef960 100644
+--- a/ps2xTest/src/ps2_gs_tests.cpp
++++ b/ps2xTest/src/ps2_gs_tests.cpp
+@@ -423,6 +423,42 @@ void register_ps2_gs_tests()
+                      "block and column shifts should hit the same pixel as the page LUT");
+         });
+ 
++        tc.Run("index row runs read the same texels as per-pixel reads", [](TestCase &t)
++        {
++            // The GL backend decodes index textures with ReadIndexRun (page LUT); it must match the swizzle reads.
++            std::vector<uint8_t> vram(GSMem::MEMORY_SIZE);
++            uint32_t seed = 0x1234567u;
++            for (uint8_t &b : vram)
++            {
++                seed = seed * 1664525u + 1013904223u;
++                b = static_cast<uint8_t>(seed >> 24);
++            }
++            const uint32_t psms[] = {GS_PSM_T8, GS_PSM_T8H, GS_PSM_T4, GS_PSM_T4HL, GS_PSM_T4HH};
++            for (uint32_t psm : psms)
++            {
++                for (uint32_t y : {0u, 5u, 63u, 130u})
++                {
++                    uint8_t run[200];
++                    GSMem::ReadIndexRun(vram.data(), psm, 0x1A40u, 4u, 3u, y, 200u, run);
++                    bool same = true;
++                    for (uint32_t i = 0; i < 200u && same; ++i)
++                    {
++                        uint32_t one = 0;
++                        switch (psm)
++                        {
++                        case GS_PSM_T8: one = GSMem::PixelStorageTraits<GSMem::P8>::Read(vram.data(), 0x1A40u, 4u, 3u + i, y); break;
++                        case GS_PSM_T8H: one = GSMem::PixelStorageTraits<GSMem::P8H>::Read(vram.data(), 0x1A40u, 4u, 3u + i, y); break;
++                        case GS_PSM_T4: one = GSMem::PixelStorageTraits<GSMem::P4>::Read(vram.data(), 0x1A40u, 4u, 3u + i, y); break;
++                        case GS_PSM_T4HL: one = GSMem::PixelStorageTraits<GSMem::P4HL>::Read(vram.data(), 0x1A40u, 4u, 3u + i, y); break;
++                        default: one = GSMem::PixelStorageTraits<GSMem::P4HH>::Read(vram.data(), 0x1A40u, 4u, 3u + i, y); break;
++                        }
++                        same = run[i] == static_cast<uint8_t>(one);
++                    }
++                    t.IsTrue(same, "ReadIndexRun should match PixelStorageTraits::Read for every index format");
++                }
++            }
++        });
++
+         tc.Run("magnified sprite samples match per-texel colours", [](TestCase &t)
+         {
+             // 32x32 CT32. Screen sprites cover UV 4..12 over 48 pixels, so neighbouring pixels share texels

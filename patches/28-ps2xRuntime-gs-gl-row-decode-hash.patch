@@ -1,0 +1,15 @@
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index a48a46f..1da5981 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -1026,6 +1026,10 @@ struct GSHwBackend::Impl
+                 g.BindTexture(kTexture2D, tex.id);
+                 g.PixelStorei(kUnpackAlignment, 1);
+                 g.TexSubImage2D(kTexture2D, 0, 0, static_cast<GLint>(y0), tex.width, y1 - y0, 0x1903 /*RED*/, kUnsignedByte, rows.data());
++                // Tekken 4 port: the texture now holds the current memory, so its hash must too. With the hash of the last
++                // full decode the fight's name plates (both drawn from one area at 0x3b60, re-uploaded per name) were
++                // revalidated with the other name's rows: player 1 showed "LAW" instead of "KAZUYA".
++                tex.contentHash = hashBlocks(t.tbp0, t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height));
+             }
+             return tex;
+         }

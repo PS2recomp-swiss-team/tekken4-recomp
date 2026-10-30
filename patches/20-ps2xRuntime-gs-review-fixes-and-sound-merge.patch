@@ -1,0 +1,508 @@
+diff --git a/ps2xIOP/CMakeLists.txt b/ps2xIOP/CMakeLists.txt
+index e84ea30..c1f58ba 100644
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -63,6 +63,12 @@ if(PS2X_IOP_BUILD_TESTS)
+     target_include_directories(ps2_iop_import_version_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+     add_test(NAME ps2_iop_import_version_tests COMMAND ps2_iop_import_version_tests)
+ 
++    # Proves the sysmem bump stays bottom-up unless TEKKEN4_SOUND=1. Compiles iop_memory.cpp alone.
++    add_executable(ps2_iop_heap_direction_tests src/emulator/core/iop_memory.cpp)
++    target_compile_features(ps2_iop_heap_direction_tests PRIVATE cxx_std_20)
++    target_compile_definitions(ps2_iop_heap_direction_tests PRIVATE PS2X_IOP_HEAP_DIRECTION_TEST)
++    add_test(NAME ps2_iop_heap_direction_tests COMMAND ps2_iop_heap_direction_tests)
++
+ endif()
+ 
+ install(TARGETS ps2_iop
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.cpp b/ps2xIOP/src/emulator/core/iop_memory.cpp
+index a4151b0..27628b1 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -416,3 +416,37 @@ namespace ps2x::iop::detail
+         return result;
+     }
+ }
++
++#ifdef PS2X_IOP_HEAP_DIRECTION_TEST
++// Standalone: default heap stays bottom-up at HeapBase; TEKKEN4_SOUND=1 bumps down from HeapLimit
++// so AllocSysMemory(0xE9400) still fits above SoundHeapFloor. Not linked into the library.
++int main()
++{
++    using ps2x::iop::detail::IopMemory;
++    _putenv_s("TEKKEN4_SOUND", "");
++    IopMemory bottom;
++    const uint32_t first = bottom.allocate(0x880u, 64u);
++    const uint32_t second = bottom.allocate(0x100u, 64u);
++    const uint32_t big = bottom.allocate(0xE9400u, 16u);
++    if (first != IopMemory::HeapBase || second != IopMemory::HeapBase + 0x880u || big != 0u)
++    {
++        std::fprintf(stderr, "bottom-up first=%08x second=%08x big=%08x\n", first, second, big);
++        return 1;
++    }
++    _putenv_s("TEKKEN4_SOUND", "1");
++    IopMemory top;
++    const uint32_t topFirst = top.allocate(0x880u, 64u);
++    const uint32_t topBig = top.allocate(0xE9400u, 16u);
++    if (topFirst != 0x001EF780u || topBig < IopMemory::SoundHeapFloor || topBig + 0xE9400u != topFirst)
++    {
++        std::fprintf(stderr, "top-down first=%08x big=%08x\n", topFirst, topBig);
++        return 2;
++    }
++    _putenv_s("TEKKEN4_SOUND", "");
++    IopMemory again;
++    if (again.allocate(0x10u, 16u) != IopMemory::HeapBase)
++        return 3;
++    std::printf("heap-direction ok bottom=%08x top=%08x big=%08x\n", first, topFirst, topBig);
++    return 0;
++}
++#endif
+diff --git a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+index e7bc677..11484d5 100644
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+@@ -9,6 +9,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <cctype>
++#include <cstdlib>
+ #include <cstring>
+ #include <filesystem>
+ #include <limits>
+@@ -702,6 +703,14 @@ namespace ps2x::iop::detail
+             const uint64_t byteCount64 = static_cast<uint64_t>(sectors) * kSectorSize;
+             if (byteCount64 > IopMemory::RamSize || !memory.ownsRamRange(destination, static_cast<size_t>(byteCount64)))
+             {
++                // Always logged: a rejected read is silent to the driver (v0=0, no callback) and later
++                // banks then never reach the SPU. The success log below stays capped.
++                const bool owned = destination < IopMemory::RamSize &&
++                                   memory.ownsRamRange(destination, static_cast<size_t>(std::min<uint64_t>(byteCount64, 1u)));
++                std::ostringstream out;
++                out << "[cdvd] sceCdRead FAIL lsn=" << lsn << " sectors=" << sectors << " dst=0x" << std::hex
++                    << destination << std::dec << " bytes=" << byteCount64 << (owned ? " span-unowned" : " dst-unowned");
++                host.log(LogLevel::Warning, out.str());
+                 lastError = kCdvdErrorRead;
+                 return false;
+             }
+@@ -729,9 +738,16 @@ namespace ps2x::iop::detail
+             if (!imagePath.empty())
+             {
+                 static int logged = 0;
+-                if (logged < 6)
++                // Failures are not capped: a later bank read (character select) was invisible once six
++                // boot reads had been printed. Successes stay at six unless TEKKEN4_SOUND_TRACE=1.
++                static const bool trace = [] {
++                    const char *value = std::getenv("TEKKEN4_SOUND_TRACE");
++                    return value != nullptr && value[0] == '1' && value[1] == '\0';
++                }();
++                if (!read || trace || logged < 6)
+                 {
+-                    ++logged;
++                    if (read && !trace)
++                        ++logged;
+                     std::ostringstream out;
+                     out << "[cdvd] sceCdRead lsn=" << lsn << " sectors=" << sectors << " dst=0x" << std::hex
+                         << destination << std::dec << (read ? " ok" : " FAIL");
+diff --git a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+index 82f5281..453590a 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+@@ -37,6 +37,9 @@ public:
+ 
+     uint32_t ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const override;
+     void WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value) override;
++    // Page indexes (modulo 512) MakePageRect marks for one texel. Matches PixelStorageTraits::PageId.
++    static uint32_t PagesCoveringTexel(uint32_t blockBase, uint32_t bufferWidth, uint32_t psm, int x, int y,
++                                       uint16_t *pages, uint32_t cap);
+     void SnapshotVram(std::vector<uint8_t> &out) const override;
+     GSTransferSnapshot GetTransferSnapshot() const override;
+ 
+@@ -129,7 +132,9 @@ private:
+     size_t m_localToHostReadPos = 0;
+ 
+     // Drawing threads (PS2X_GS_THREADS=<n> or "auto"; off by default). Every primitive is queued for all workers
+-    // and each one draws only the rows of its own 16-row bands, so no two threads write the same byte. Reads and
++    // and each one draws only the rows of its own 16-row bands, so no two threads write the same byte. A primitive
++    // whose texture pages overlap the frame or Z pages it writes is drawn on the submitting thread instead: the
++    // bands would otherwise sample rows another band has not finished. Reads and
+     // direct writes of GS memory, local transfers and presentation first wait until everything queued is drawn.
+     // CLUT loads wait only when they read pages a queued primitive draws into. An image upload into pages a
+     // queued primitive draws into waits; an upload into pages a queued primitive only samples does not: the old
+@@ -263,3 +268,7 @@ private:
+     mutable std::unique_ptr<GSPageShadows> m_pageShadows;
+     std::atomic<bool> m_stopWorkers{false};
+ };
++
++// How many primitives were drawn on the submitting thread since the last call because their texture
++// pages overlapped the frame or Z pages of that same primitive. Zero when drawing threads are off.
++uint32_t GS_TakeSelfOverlapSerialDraws();
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+index a2309b3..b301c9e 100644
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -23,6 +23,11 @@
+ 
+ using namespace GSInternal;
+ 
++namespace
++{
++std::atomic<uint32_t> g_gsSelfOverlapSerial{0u};
++}
++
+ // The helpers below run for every pixel or texel; left to the compiler they stay calls.
+ #if defined(_MSC_VER)
+ #define GS_FORCE_INLINE __forceinline
+@@ -1111,7 +1116,8 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
+     }
+     RetireFinishedJobs();
+ 
+-    // The bands run ahead of each other, so a queued draw and a queued sample must not share a GS page.
++    // The bands run ahead of each other, so a queued draw and a queued sample must not share a GS page,
++    // and one primitive must not sample a page it is itself still writing from another band.
+     // Drawn pages are the rectangle the rasterizer visits. Sampled pages are the texels that rectangle can
+     // read (the whole texture only when the UV range is not a safe subset: Q crosses 0, REGION_REPEAT over
+     // a long span, or a 12.4 coordinate that can wrap through the uint16 cast).
+@@ -1163,6 +1169,23 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
+                   << " stq0=" << batch.vertices[0].s << "," << batch.vertices[0].t << "," << batch.vertices[0].q
+                   << std::endl;
+     };
++    // Own frame/Z pages are not in the queued masks yet. Split across bands, a lower band can sample a row
++    // an upper band has not written. Drain first, then draw every row on this thread (its band count is 1).
++    PageMask ownPages{};
++    MarkPages(ownPages, frame);
++    MarkPages(ownPages, z);
++    bool selfHit = false;
++    for (int i = 0; i < sampledCount && !selfHit; ++i)
++        selfHit = AnyPages(ownPages, sampled[i]);
++    if (selfHit)
++    {
++        logConflict("self");
++        WaitForWorkersUnlocked(DrainReason::SampleConflict);
++        g_gsSelfOverlapSerial.fetch_add(1u, std::memory_order_relaxed);
++        DrawPrimitive(batch);
++        ++m_memoryStamp;
++        return;
++    }
+     if (sampleHit)
+     {
+         logConflict("sample");
+@@ -1283,6 +1306,33 @@ GSCpuBackend::PageRect GSCpuBackend::MakePageRect(uint32_t blockBase, uint32_t b
+     return rect;
+ }
+ 
++uint32_t GSCpuBackend::PagesCoveringTexel(uint32_t blockBase, uint32_t bufferWidth, uint32_t psm, int x, int y,
++                                         uint16_t *pages, uint32_t cap)
++{
++    if (!pages || cap == 0u)
++        return 0u;
++    const PageRect rect = MakePageRect(blockBase, bufferWidth, psm, x, y, x, y);
++    if (rect.empty)
++        return 0u;
++    uint8_t seen[kPageCount] = {};
++    uint32_t count = 0u;
++    for (uint32_t row = rect.row0; row <= rect.row1; ++row)
++    {
++        const uint32_t first = rect.base + row * rect.stride + rect.col0;
++        const uint32_t end = std::min(rect.base + row * rect.stride + rect.col1 + 1u + rect.extra, first + kPageCount);
++        for (uint32_t page = first; page < end; ++page)
++        {
++            const uint32_t index = page % kPageCount;
++            if (seen[index])
++                continue;
++            seen[index] = 1u;
++            if (count < cap)
++                pages[count++] = static_cast<uint16_t>(index);
++        }
++    }
++    return count;
++}
++
+ void GSCpuBackend::MarkPages(PageMask &mask, const PageRect &rect)
+ {
+     if (rect.empty)
+@@ -1540,6 +1590,11 @@ void GSCpuBackend::ReleasePageShadows() const
+         m_pageShadows->freeNodes.push_back(node.get());
+ }
+ 
++uint32_t GS_TakeSelfOverlapSerialDraws()
++{
++    return g_gsSelfOverlapSerial.exchange(0u, std::memory_order_relaxed);
++}
++
+ GSCpuBackend::~GSCpuBackend()
+ {
+     StopWorkers();
+diff --git a/ps2xTest/src/ps2_gs_tests.cpp b/ps2xTest/src/ps2_gs_tests.cpp
+index 4fdf925..088c1bd 100644
+--- a/ps2xTest/src/ps2_gs_tests.cpp
++++ b/ps2xTest/src/ps2_gs_tests.cpp
+@@ -4,6 +4,7 @@
+ #include "ps2_stubs.h"
+ #include "ps2_syscalls.h"
+ #include "runtime/gs/gs_frontend.h"
++#include "runtime/gs/gs_cpu_backend.h"
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/gs/ps2_gs_memory.h"
+ #include "runtime/gs/ps2_gs_psmct32.h"
+@@ -2419,6 +2420,261 @@ void register_ps2_gs_tests()
+                      "the far UV queued across an upload of that texel must keep the old colour");
+         });
+ 
++        tc.Run("a sprite that samples its own frame matches the serial draw on four threads", [](TestCase &t)
++        {
++            // The sprite writes y=32..95 and samples v=0..64 of the same frame. y=64 reads the row y=32,
++            // which an earlier band of this same primitive writes. Four threads must match one thread,
++            // and that draw must not be split across bands.
++            auto render = [](const char *threads) -> std::vector<uint8_t>
++            {
++#ifdef _WIN32
++                _putenv_s("PS2X_GS_THREADS", threads);
++#else
++                setenv("PS2X_GS_THREADS", threads, 1);
++#endif
++                std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
++                for (uint32_t y = 0; y < 100u; ++y)
++                    for (uint32_t x = 0; x < 64u; ++x)
++                        writeReferencePSMCT32Pixel(vram, 0u, 10u, x, y, 0xFF808080u);
++                GSRegisters regs{};
++                regs.pmode = 0x0001ull;
++                regs.dispfb1 = 0ull | (10ull << 9) | (static_cast<uint64_t>(GS_PSM_CT32) << 15);
++                regs.display1 = (639ull << 32) | (447ull << 44);
++                {
++                    GS gs;
++                    gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
++                    gs.writeRegister(GS_REG_FRAME_1, (10ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
++                    gs.writeRegister(GS_REG_ZBUF_1, 1ull << 32);
++                    gs.writeRegister(GS_REG_SCISSOR_1, (639ull << 16) | (447ull << 48));
++                    gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
++                    gs.writeRegister(GS_REG_TEST_1, 0x30000ull);
++                    gs.writeRegister(GS_REG_TEX1_1, 0ull);
++                    gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE));
++                    gs.writeRegister(GS_REG_RGBAQ, 0xFF0000FFu);
++                    gs.writeRegister(GS_REG_XYZ2, 0ull);
++                    gs.writeRegister(GS_REG_XYZ2, (64ull << 4) | (32ull << 20));
++                    gs.writeRegister(GS_REG_TEX0_1, (10ull << 14) | (static_cast<uint64_t>(GS_PSM_CT32) << 20) |
++                                                        (10ull << 26) | (9ull << 30) | (1ull << 34));
++                    gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 8));
++                    gs.writeRegister(GS_REG_RGBAQ, 0x80808080ull);
++                    gs.writeRegister(GS_REG_UV, (8ull << 4));
++                    gs.writeRegister(GS_REG_XYZ2, (8ull << 4) | (32ull << 20));
++                    gs.writeRegister(GS_REG_UV, (40ull << 4) | (64ull << 20));
++                    gs.writeRegister(GS_REG_XYZ2, (40ull << 4) | (96ull << 20));
++                    gs.latchHostPresentationFrame();
++                }
++#ifdef _WIN32
++                _putenv_s("PS2X_GS_THREADS", "");
++#else
++                unsetenv("PS2X_GS_THREADS");
++#endif
++                return vram;
++            };
++            const std::vector<uint8_t> serial = render("");
++            (void)GS_TakeSelfOverlapSerialDraws();
++            const std::vector<uint8_t> threaded = render("4");
++            const uint32_t serialDraws = GS_TakeSelfOverlapSerialDraws();
++            t.Equals(serialDraws, 1u, "the feedback sprite should be drawn on the submitting thread");
++            t.IsTrue(serial == threaded, "a sprite sampling its own frame should match the serial GS");
++            const std::vector<uint8_t> again = render("4");
++            t.Equals(GS_TakeSelfOverlapSerialDraws(), 1u, "a second threaded run should serialise it too");
++            t.IsTrue(serial == again, "a second threaded run should match too");
++            t.Equals(readReferenceFramePSMCT32Pixel(serial, 0u, 10u, 10u, 0u), 0xFF0000FFu,
++                     "the source row should be the flat red sprite");
++            t.Equals(readReferenceFramePSMCT32Pixel(serial, 0u, 10u, 10u, 32u), 0xFF0000FFu,
++                     "the top of the feedback sprite should copy the red source");
++            t.Equals(readReferenceFramePSMCT32Pixel(serial, 0u, 10u, 10u, 64u), 0xFF0000FFu,
++                     "the lower band should see the row this sprite already wrote");
++            t.Equals(readReferenceFramePSMCT32Pixel(serial, 0u, 10u, 50u, 50u), 0xFF808080u,
++                     "pixels outside the sprite should keep the prefill");
++        });
++
++        tc.Run("T8 and T4 page stride matches GS PageId for an odd buffer width", [](TestCase &t)
++        {
++            // PageId uses (bw * 64) / pageWidth, truncating. TBW=1 on PSMT8/PSMT4 is 0, not 1.
++            // TBW=3 is 1. TBW=5 is 2. Rounding up, or forcing a stride of at least 1, marks a different page.
++            struct Sample
++            {
++                uint32_t psm;
++                uint32_t bw;
++                int x;
++                int y;
++                GSMem::PixelStorageMode mode;
++            };
++            const Sample samples[] = {
++                {GS_PSM_T8, 1u, 0, 0, GSMem::P8},
++                {GS_PSM_T8, 1u, 0, 63, GSMem::P8},
++                {GS_PSM_T8, 1u, 0, 64, GSMem::P8},
++                {GS_PSM_T8, 1u, 0, 70, GSMem::P8},
++                {GS_PSM_T8, 1u, 60, 200, GSMem::P8},
++                {GS_PSM_T8, 3u, 0, 0, GSMem::P8},
++                {GS_PSM_T8, 3u, 0, 64, GSMem::P8},
++                {GS_PSM_T8, 3u, 100, 64, GSMem::P8},
++                {GS_PSM_T8, 5u, 0, 128, GSMem::P8},
++                {GS_PSM_T4, 1u, 0, 0, GSMem::P4},
++                {GS_PSM_T4, 1u, 0, 128, GSMem::P4},
++                {GS_PSM_T4, 1u, 40, 300, GSMem::P4},
++                {GS_PSM_T4, 3u, 0, 128, GSMem::P4},
++                {GS_PSM_T4, 3u, 140, 140, GSMem::P4},
++                {GS_PSM_T4, 5u, 0, 128, GSMem::P4},
++                {GS_PSM_CT32, 10u, 10, 32, GSMem::C32},
++            };
++            const uint32_t bases[] = {0u, 0x2000u, 0x3FC0u};
++            for (uint32_t base : bases)
++            {
++                for (const Sample &s : samples)
++                {
++                    uint16_t pages[4] = {};
++                    const uint32_t n = GSCpuBackend::PagesCoveringTexel(base, s.bw, s.psm, s.x, s.y, pages, 4u);
++                    uint32_t expect = 0u;
++                    switch (s.mode)
++                    {
++                    case GSMem::P8:
++                        expect = static_cast<uint32_t>(GSMem::PixelStorageTraits<GSMem::P8>::PageId(
++                            base, s.bw, static_cast<uint32_t>(s.x), static_cast<uint32_t>(s.y)));
++                        break;
++                    case GSMem::P4:
++                        expect = static_cast<uint32_t>(GSMem::PixelStorageTraits<GSMem::P4>::PageId(
++                            base, s.bw, static_cast<uint32_t>(s.x), static_cast<uint32_t>(s.y)));
++                        break;
++                    default:
++                        expect = static_cast<uint32_t>(GSMem::PixelStorageTraits<GSMem::C32>::PageId(
++                            base, s.bw, static_cast<uint32_t>(s.x), static_cast<uint32_t>(s.y)));
++                        break;
++                    }
++                    t.Equals(n, 1u, "an aligned texel should mark one page");
++                    t.Equals(static_cast<uint32_t>(pages[0]), expect % 512u, "page stride should match PageId");
++                }
++            }
++            uint16_t p0[2] = {}, p1[2] = {};
++            GSCpuBackend::PagesCoveringTexel(0x2000u, 1u, GS_PSM_T8, 0, 0, p0, 2u);
++            GSCpuBackend::PagesCoveringTexel(0x2000u, 1u, GS_PSM_T8, 0, 70, p1, 2u);
++            t.Equals(p0[0], p1[0], "PSMT8 TBW=1 should keep y=70 on the same page as y=0");
++            GSCpuBackend::PagesCoveringTexel(0x2000u, 3u, GS_PSM_T4, 0, 0, p0, 2u);
++            GSCpuBackend::PagesCoveringTexel(0x2000u, 3u, GS_PSM_T4, 0, 128, p1, 2u);
++            t.Equals(static_cast<uint32_t>(p1[0]), static_cast<uint32_t>(p0[0]) + 1u,
++                     "PSMT4 TBW=3 should step one page per row, not two");
++        });
++
++        tc.Run("texture page marks follow REPEAT, CLAMP, REGION_CLAMP and REGION_REPEAT", [](TestCase &t)
++        {
++            // Each mode reads a texel whose page is not the page of the raw UV. An upload of that page
++            // while the sprite is queued must leave the queued sprite on the old texel.
++            auto render = [](const char *threads) -> std::vector<uint8_t>
++            {
++#ifdef _WIN32
++                _putenv_s("PS2X_GS_THREADS", threads);
++#else
++                setenv("PS2X_GS_THREADS", threads, 1);
++#endif
++                std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
++                constexpr uint32_t kTex = 0x3400u;
++                writeReferencePSMCT32Pixel(vram, kTex, 2u, 4u, 4u, 0xFF00FF00u);
++                writeReferencePSMCT32Pixel(vram, kTex, 2u, 127u, 4u, 0xFF0000FFu);
++                writeReferencePSMCT32Pixel(vram, kTex, 2u, 90u, 4u, 0xFF0000FFu);
++                writeReferencePSMCT32Pixel(vram, kTex, 2u, 96u, 4u, 0xFF00FFFFu);
++                writeReferencePSMCT32Pixel(vram, kTex, 2u, 4u, 40u, 0xFFFF0000u);
++                GSRegisters regs{};
++                regs.pmode = 0x0001ull;
++                regs.dispfb1 = 0ull | (10ull << 9) | (static_cast<uint64_t>(GS_PSM_CT32) << 15);
++                regs.display1 = (639ull << 32) | (447ull << 44);
++                {
++                    GS gs;
++                    gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
++                    auto upload = [&gs](uint32_t x, uint32_t y, uint32_t w, uint32_t h)
++                    {
++                        gs.writeRegister(GS_REG_BITBLTBUF, (static_cast<uint64_t>(kTex) << 32) | (2ull << 48) |
++                                                               (static_cast<uint64_t>(GS_PSM_CT32) << 56));
++                        gs.writeRegister(GS_REG_TRXPOS, (static_cast<uint64_t>(x) << 32) | (static_cast<uint64_t>(y) << 48));
++                        gs.writeRegister(GS_REG_TRXREG, static_cast<uint64_t>(w) | (static_cast<uint64_t>(h) << 32));
++                        gs.writeRegister(GS_REG_TRXDIR, 0ull);
++                        std::vector<uint8_t> bytes(static_cast<size_t>(w) * h * 4u, 0xFFu);
++                        std::vector<uint8_t> packet;
++                        appendU64(packet, makeGifTag(static_cast<uint16_t>(bytes.size() / 16u), GIF_FMT_IMAGE, 0u, true));
++                        appendU64(packet, 0ull);
++                        packet.insert(packet.end(), bytes.begin(), bytes.end());
++                        gs.processGIFPacket(packet.data(), static_cast<uint32_t>(packet.size()));
++                    };
++                    auto sprite = [&gs](uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t u0, uint32_t v0,
++                                        uint32_t u1, uint32_t v1)
++                    {
++                        gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 8));
++                        gs.writeRegister(GS_REG_RGBAQ, 0x80808080ull);
++                        gs.writeRegister(GS_REG_UV, (static_cast<uint64_t>(u0) << 4) | (static_cast<uint64_t>(v0) << 20));
++                        gs.writeRegister(GS_REG_XYZ2, (static_cast<uint64_t>(x) << 4) | (static_cast<uint64_t>(y) << 20));
++                        gs.writeRegister(GS_REG_UV, (static_cast<uint64_t>(u1) << 4) | (static_cast<uint64_t>(v1) << 20));
++                        gs.writeRegister(GS_REG_XYZ2, (static_cast<uint64_t>(x + w) << 4) | (static_cast<uint64_t>(y + h) << 20));
++                    };
++                    gs.writeRegister(GS_REG_FRAME_1, (10ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
++                    gs.writeRegister(GS_REG_ZBUF_1, 1ull << 32);
++                    gs.writeRegister(GS_REG_SCISSOR_1, (639ull << 16) | (447ull << 48));
++                    gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
++                    gs.writeRegister(GS_REG_TEST_1, 0x30000ull);
++                    gs.writeRegister(GS_REG_TEX1_1, 0ull);
++                    gs.writeRegister(GS_REG_TEX0_1, (static_cast<uint64_t>(kTex) << 0) | (2ull << 14) |
++                                                        (static_cast<uint64_t>(GS_PSM_CT32) << 20) | (7ull << 26) |
++                                                        (6ull << 30) | (1ull << 34));
++                    // Same backlog the upload-vs-queued-sprite test uses, so the sampling sprites are still
++                    // queued when the uploads land. A finished sprite would keep the old texel either way.
++                    for (uint32_t i = 0; i < 400u; ++i)
++                    {
++                        gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE));
++                        gs.writeRegister(GS_REG_RGBAQ, 0xFF404040u);
++                        gs.writeRegister(GS_REG_XYZ2, 0ull);
++                        gs.writeRegister(GS_REG_XYZ2, (160ull << 4) | (48ull << 20));
++                    }
++                    // REPEAT: u=100..140 on a 128-wide texture wraps onto texel 4 (x=32 -> u=132).
++                    gs.writeRegister(GS_REG_CLAMP_1, 1ull << 2);
++                    sprite(0u, 210u, 40u, 8u, 100u, 4u, 140u, 4u);
++                    upload(0u, 0u, 16u, 8u);
++                    sprite(0u, 260u, 8u, 8u, 4u, 4u, 4u, 4u);
++                    // CLAMP: u=200..220 holds at texel 127.
++                    gs.writeRegister(GS_REG_CLAMP_1, 1ull | (1ull << 2));
++                    sprite(16u, 230u, 8u, 8u, 200u, 4u, 220u, 4u);
++                    upload(120u, 0u, 8u, 8u);
++                    sprite(16u, 260u, 8u, 8u, 127u, 4u, 127u, 4u);
++                    // REGION_CLAMP: MINU=90 MAXU=100, raw u=0..8, samples texel 90.
++                    gs.writeRegister(GS_REG_CLAMP_1, 2ull | (1ull << 2) | (90ull << 4) | (100ull << 14));
++                    sprite(48u, 230u, 8u, 8u, 0u, 4u, 8u, 4u);
++                    upload(88u, 0u, 8u, 8u);
++                    sprite(48u, 260u, 8u, 8u, 90u, 4u, 90u, 4u);
++                    // REGION_REPEAT: (U & 0) | 96. UMSK=0, UFIX=96.
++                    gs.writeRegister(GS_REG_CLAMP_1, 3ull | (1ull << 2) | (96ull << 14));
++                    sprite(80u, 230u, 8u, 8u, 0u, 4u, 8u, 4u);
++                    upload(92u, 0u, 8u, 8u);
++                    sprite(80u, 260u, 8u, 8u, 96u, 4u, 96u, 4u);
++                    // REGION_REPEAT on V: (V & 0) | 40, raw v=0..2, samples y=40.
++                    gs.writeRegister(GS_REG_CLAMP_1, 1ull | (3ull << 2) | (40ull << 34));
++                    sprite(112u, 230u, 8u, 8u, 4u, 0u, 4u, 2u);
++                    upload(0u, 36u, 16u, 8u);
++                    sprite(112u, 260u, 8u, 8u, 4u, 40u, 4u, 40u);
++                    gs.latchHostPresentationFrame();
++                }
++#ifdef _WIN32
++                _putenv_s("PS2X_GS_THREADS", "");
++#else
++                unsetenv("PS2X_GS_THREADS");
++#endif
++                return vram;
++            };
++            const std::vector<uint8_t> serial = render("");
++            const std::vector<uint8_t> threaded = render("4");
++            t.IsTrue(serial == threaded, "clamp-mode page marks should match the serial GS");
++            const std::vector<uint8_t> again = render("4");
++            t.IsTrue(serial == again, "a second threaded run should match too");
++            auto px = [&](uint32_t x, uint32_t y) { return readReferenceFramePSMCT32Pixel(serial, 0u, 10u, x, y); };
++            t.Equals(px(32u, 212u), 0xFF00FF00u, "REPEAT should keep the wrapped texel from before the upload");
++            t.Equals(px(2u, 262u), 0xFFFFFFFFu, "a sprite after the REPEAT upload should see the new texel");
++            t.Equals(px(18u, 232u), 0xFF0000FFu, "CLAMP should keep the edge texel from before the upload");
++            t.Equals(px(18u, 262u), 0xFFFFFFFFu, "a sprite after the CLAMP upload should see the new edge texel");
++            t.Equals(px(50u, 232u), 0xFF0000FFu, "REGION_CLAMP should keep MINU/MAXU texel 90");
++            t.Equals(px(50u, 262u), 0xFFFFFFFFu, "a sprite after the REGION_CLAMP upload should see the new texel");
++            t.Equals(px(82u, 232u), 0xFF00FFFFu, "REGION_REPEAT should keep (U & UMSK) | UFIX");
++            t.Equals(px(82u, 262u), 0xFFFFFFFFu, "a sprite after the REGION_REPEAT upload should see the new texel");
++            t.Equals(px(114u, 232u), 0xFFFF0000u, "REGION_REPEAT on V should keep (V & VMSK) | VFIX");
++            t.Equals(px(114u, 262u), 0xFFFFFFFFu, "a sprite after the V REGION_REPEAT upload should see the new texel");
++        });
++
+         tc.Run("a draw into the CLUT buffer is visible to the next load of the same TEX0", [](TestCase &t)
+         {
+             // Same TEX0 twice. Between the loads a primitive overwrites the palette in GS memory.

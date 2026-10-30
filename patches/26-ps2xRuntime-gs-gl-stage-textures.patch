@@ -1,0 +1,189 @@
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index c450392..f478189 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -163,13 +163,31 @@ vec4 reinterpretTexel(ivec2 p)
+ // Paletted textures (T8/T4 and their H variants): uTex holds the indices (R8, cached per VRAM upload), the colour comes
+ // from uIdxPalette (256x1, cached per CLUT); filtering is done on the looked-up colours like the GS.
+ uniform int uIndexed, uLinear;
+-uniform ivec4 uWrap; // per axis (x, y): 0 repeat, 1 clamp
++// Tekken 4 port: per axis (x, y) the GS CLAMP mode (WMS, WMT): 0 repeat, 1 clamp, 2 region clamp, 3 region repeat, with
++// uRegion = (MINU, MAXU, MINV, MAXV) (region clamp bounds; UMSK/UFIX for region repeat). Tekken's stage textures are
++// sub-rectangles of 1024x1024 T4/T8 pages picked this way; treating 2/3 as clamp drew them as flat colours.
++uniform ivec4 uWrap;
++uniform ivec4 uRegion;
+ uniform sampler2D uIdxPalette;
++int wrapAxis(int c, int size, int mode, int lo, int hi)
++{
++    if (mode == 0) return ((c % size) + size) % size;
++    if (mode == 2) c = clamp(c, lo, hi);
++    else if (mode == 3) c = (c & lo) | hi;
++    return clamp(c, 0, size - 1);
++}
++// the region modes on the axes that use them (the others are left to the sampler's wrap)
++ivec2 regionTexel(ivec2 p, ivec2 size)
++{
++    if (uWrap.x >= 2) p.x = wrapAxis(p.x, size.x, uWrap.x, uRegion.x, uRegion.y);
++    if (uWrap.y >= 2) p.y = wrapAxis(p.y, size.y, uWrap.y, uRegion.z, uRegion.w);
++    return p;
++}
+ vec4 indexedTexel(ivec2 p)
+ {
+     ivec2 size = max(ivec2(uTexDim), ivec2(1));
+-    p.x = (uWrap.x == 0) ? ((p.x % size.x) + size.x) % size.x : clamp(p.x, 0, size.x - 1);
+-    p.y = (uWrap.y == 0) ? ((p.y % size.y) + size.y) % size.y : clamp(p.y, 0, size.y - 1);
++    p.x = wrapAxis(p.x, size.x, uWrap.x, uRegion.x, uRegion.y);
++    p.y = wrapAxis(p.y, size.y, uWrap.y, uRegion.z, uRegion.w);
+     int idx = int(texelFetch(uTex, p, 0).r * 255.0 + 0.5);
+     return texelFetch(uIdxPalette, ivec2(idx, 0), 0);
+ }
+@@ -267,8 +285,11 @@ void main()
+             else
+                 t = vec4(float(zi & 255u), float((zi >> 8) & 255u), float((zi >> 16) & 255u), 128.0);
+         }
+-        else if (uLinear == 0)
++        else if (uLinear == 0 || uWrap.x >= 2 || uWrap.y >= 2)
+         {
++            // Tekken 4 port: region clamp/repeat picks the texel in the shader (point sampled, also when filtering is on)
++            if (uWrap.x >= 2 || uWrap.y >= 2)
++                uv = vec2(regionTexel(ivec2(floor(uv)), max(ivec2(uTexDim), ivec2(1)))) + 0.5;
+             // the centre of the host texel (render targets are scaled) inside texel floor(u): never on a texel edge
+             vec2 host = vec2(textureSize(uTex, 0));
+             t = texture(uTex, (floor(uv * host / uTexSize + 0.001) + 0.5) / host) * 255.0;
+@@ -458,6 +479,10 @@ void main()
+         uint64_t lastDepthSeq = 0; // writeSeq of the last draw that wrote this target's depth (memory at zbp)
+         uint32_t usedW = 0, usedH = 0; // PS2 pixels touched by draws (scissor extents)
+         int lastDrawPresent = -1; // Tekken 4 port: presentCount at its last draw
++        // Tekken 4 port: writeSeq of the last upload into each block of its memory (index = block - fbp * 32). The upload
++        // log forgets: Tekken's stage textures are uploaded once into a 640x448 target of the menus (fbp 290) and the
++        // per-frame character uploads pushed them out of the log, so the fight sampled the stage from that old picture.
++        std::vector<uint64_t> blockUploadSeq;
+     };
+ 
+     uint32_t pageRowsFor(uint32_t psm)
+@@ -494,7 +519,7 @@ struct GSHwBackend::Impl
+     GLint locInvSize = -1, locTex = -1, locTexSize = -1, locTexDim = -1, locTme = -1, locFst = -1, locTfx = -1, locTcc = -1, locIip = -1,
+           locAte = -1, locFailTint = -1, locAtst = -1, locAref = -1, locPass = -1, locBlendScale = -1, locRtTex24 = -1, locTa0 = -1, locTa1 = -1, locReinterp = -1, locDate = -1, locDatm = -1, locDest = -1, locZTex = -1, locZMax = -1, locTables = -1, locRtColor = -1, locPalette = -1, locTexFmt = -1, locTexFmt2 = -1,
+           locRtFmt = -1, locRtFmt2 = -1, locTex0 = -1, locRtPx = -1, locAem = -1;
+-    GLint locIndexed = -1, locLinear = -1, locWrap = -1, locIdxPalette = -1;
++    GLint locIndexed = -1, locLinear = -1, locWrap = -1, locRegion = -1, locIdxPalette = -1;
+     GLint locSwBlend = -1, locColClamp = -1, locAbcd = -1, locFix = -1, locZAlias = -1, locZAliasWrite = -1, locZAliasMax = -1;
+ 
+     GLuint tableTex = 0, paletteTex = 0;
+@@ -684,7 +709,7 @@ struct GSHwBackend::Impl
+         locReinterp = loc("uReinterp"); locDate = loc("uDate"); locDatm = loc("uDatm"); locDest = loc("uDest"); locZTex = loc("uZTex"); locZMax = loc("uZMax"); locTables = loc("uTables"); locRtColor = loc("uRtColor"); locPalette = loc("uPalette");
+         locTexFmt = loc("uTexFmt"); locTexFmt2 = loc("uTexFmt2"); locRtFmt = loc("uRtFmt"); locRtFmt2 = loc("uRtFmt2");
+         locTex0 = loc("uTex0"); locRtPx = loc("uRtPx");
+-        locIndexed = loc("uIndexed"); locLinear = loc("uLinear"); locWrap = loc("uWrap"); locIdxPalette = loc("uIdxPalette");
++        locIndexed = loc("uIndexed"); locLinear = loc("uLinear"); locWrap = loc("uWrap"); locRegion = loc("uRegion"); locIdxPalette = loc("uIdxPalette");
+         locSwBlend = loc("uSwBlend"); locColClamp = loc("uColClamp"); locAbcd = loc("uAbcd"); locFix = loc("uFix");
+         locZAlias = loc("uZAlias"); locZAliasWrite = loc("uZAliasWrite"); locZAliasMax = loc("uZAliasMax");
+         locRtTex24 = loc("uRtTex24"); locTa0 = loc("uTa0"); locTa1 = loc("uTa1"); locAem = loc("uAem");
+@@ -1231,8 +1256,26 @@ struct GSHwBackend::Impl
+         return false;
+     }
+ 
++    // Tekken 4 port: records an upload (or local copy) into blocks [lo, hi) on every target whose memory it overlaps.
++    void noteUploadOnTargets(uint32_t lo, uint32_t hi, uint64_t seq)
++    {
++        for (RenderTarget &t : targets)
++        {
++            const uint32_t tlo = t.fbp * 32u, thi = tlo + spanBlocks(t.psm, t.fbw, t.pxH);
++            const uint32_t a = std::max(lo, tlo), b = std::min(hi, thi);
++            if (a >= b)
++                continue;
++            if (t.blockUploadSeq.size() < thi - tlo)
++                t.blockUploadSeq.resize(thi - tlo, 0u);
++            std::fill(t.blockUploadSeq.begin() + (a - tlo), t.blockUploadSeq.begin() + (b - tlo), seq);
++        }
++    }
++
+     bool uploadedSinceDraw(const RenderTarget &t, uint32_t tbp) const
+     {
++        const uint32_t tlo = t.fbp * 32u;
++        if (tbp >= tlo && tbp - tlo < t.blockUploadSeq.size() && t.blockUploadSeq[tbp - tlo] > t.lastDrawSeq)
++            return true;
+         // Tekken 4 port: the log is in writeSeq order, so only its tail after the target's last draw can match (the full
+         // scan of up to 4096 records per textured draw was 18% of the GL thread in a fight).
+         for (auto u = uploadLog.rbegin(); u != uploadLog.rend() && u->seq > t.lastDrawSeq; ++u)
+@@ -1996,6 +2039,19 @@ struct GSHwBackend::Impl
+                          c.tex0.tbp0, c.tex0.tbw, c.tex0.psm, s.textureWidth, s.textureHeight, c.tex0.cbp, (unsigned long long)c.test,
+                          (unsigned long long)c.alpha, s.prim.abe ? 1 : 0, c.frame.fbmsk, firstRawZ, v0.x, v0.y, v0.z, v0.r, v0.g, v0.b, v0.a, v0.u, v0.v,
+                          c.scissor.x0, c.scissor.x1, c.scissor.y0, c.scissor.y1);
++            if (s.prim.tme)
++            {
++                // Tekken 4 port: texture addressing of the batch (CLAMP, TEX1, texel coordinate range)
++                float u0 = 1e30f, u1 = -1e30f, w0 = 1e30f, w1 = -1e30f;
++                for (const HwVertex &v : verts)
++                {
++                    const float q = std::fabs(v.q) < 1e-30f ? 1e-30f : v.q;
++                    const float u = s.prim.fst ? v.u : v.s / q * s.textureWidth, w = s.prim.fst ? v.v : v.t / q * s.textureHeight;
++                    u0 = std::min(u0, u), u1 = std::max(u1, u), w0 = std::min(w0, w), w1 = std::max(w1, w);
++                }
++                std::fprintf(stderr, "[gs-hw-dump-tex] #%d clamp=%llx tex1=%llx fst=%d u=%.1f..%.1f v=%.1f..%.1f\n", dumped,
++                             (unsigned long long)c.clamp, (unsigned long long)c.tex1, s.prim.fst ? 1 : 0, u0, u1, w0, w1);
++            }
+         }
+         RenderTarget &rt = target(c.frame.fbp, c.frame.fbw);
+         attachDepth(rt, c.zbuf.zbp);
+@@ -2175,18 +2231,35 @@ struct GSHwBackend::Impl
+             RenderTarget *rsrc = nullptr;
+             if (!src && !zsrc)
+                 rsrc = findReinterpretSource(c.tex0.tbp0, c.tex0.psm);
++            if (rsrc && statsEnabled)
++            {
++                // Tekken 4 port: which textures are read from which target's memory (first sighting of each pair)
++                static std::vector<uint64_t> seen;
++                const uint64_t pair = (static_cast<uint64_t>(c.tex0.tbp0) << 32) | (static_cast<uint64_t>(c.tex0.psm) << 16) | rsrc->fbp;
++                if (seen.size() < 64u && std::find(seen.begin(), seen.end(), pair) == seen.end())
++                {
++                    seen.push_back(pair);
++                    std::fprintf(stderr, "[gs-hw] reinterpret tbp=%x tpsm=%u from fbp=%u fbw=%u psm=%u used %ux%u\n", c.tex0.tbp0,
++                                 c.tex0.psm, rsrc->fbp, rsrc->fbw, rsrc->psm, rsrc->usedW, rsrc->usedH);
++                }
++            }
+             if (rsrc == &rt)
+                 g.TextureBarrier();
+             const bool indexed = !(src || rsrc || zsrc) && isIndexed(c.tex0.psm) && vram != nullptr;
+             Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s) : textureFor(s);
+             g.Uniform1i(locIndexed, indexed ? 1 : 0);
+             g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
++            // Tekken 4 port: the CLAMP modes as they are (region modes for every texture source but depth/reinterpret)
++            const bool regionOk = !zsrc && !rsrc;
++            const GLint wms = static_cast<GLint>(c.clamp & 3u), wmt = static_cast<GLint>((c.clamp >> 2) & 3u);
++            g.Uniform4i(locWrap, regionOk || wms < 2 ? wms : 1, regionOk || wmt < 2 ? wmt : 1, 0, 0);
++            g.Uniform4i(locRegion, static_cast<GLint>((c.clamp >> 4) & 0x3FFu), static_cast<GLint>((c.clamp >> 14) & 0x3FFu),
++                        static_cast<GLint>((c.clamp >> 24) & 0x3FFu), static_cast<GLint>((c.clamp >> 34) & 0x3FFu));
+             if (indexed)
+             {
+                 g.ActiveTexture(kTexture0 + 5);
+                 g.BindTexture(kTexture2D, pendingPalette ? pendingPalette : paletteFor(s));
+                 g.Uniform1i(locIdxPalette, 5);
+-                g.Uniform4i(locWrap, (c.clamp & 3u) == 0u ? 0 : 1, ((c.clamp >> 2) & 3u) == 0u ? 0 : 1, 0, 0);
+             }
+             g.ActiveTexture(kTexture0);
+             g.BindTexture(kTexture2D, zsrc ? zsrc->depth : src ? src->color : rsrc ? rsrc->color : tex.id);
+@@ -2331,12 +2404,14 @@ struct GSHwBackend::Impl
+         static const char *rtRange = std::getenv("GOW_GS_HW_RTDUMPRANGE");
+         static const int rtDumpLo = rtRange ? std::atoi(rtRange) : 26;
+         static const int rtDumpHi = rtRange && std::strchr(rtRange, '-') ? std::atoi(std::strchr(rtRange, '-') + 1) : 46;
++        // Tekken 4 port: GOW_GS_HW_RTDUMPSTEP=<n>: only every n-th batch of that range (watch a whole frame build up)
++        static const int rtDumpStep = std::getenv("GOW_GS_HW_RTDUMPSTEP") ? std::max(1, std::atoi(std::getenv("GOW_GS_HW_RTDUMPSTEP"))) : 1;
+         // GOW_GS_HW_RTDUMPFBP=<n>: dump that render target instead of fbp 0 / 208
+         static const long rtDumpFbp = std::getenv("GOW_GS_HW_RTDUMPFBP") ? std::strtol(std::getenv("GOW_GS_HW_RTDUMPFBP"), nullptr, 0) : -1;
+         static std::vector<bool> rtDumped(1024, false); // with the GOW_GS_HW_DUMP window: the first frame that reaches a batch wins
+         if (rtDumpSec >= 0.0 && rtDumpPresent < 0 && frameBatch == 1 && std::chrono::duration<double>(std::chrono::steady_clock::now() - rtT0).count() >= rtDumpSec)
+             rtDumpPresent = presentCount;
+-        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount >= rtDumpPresent && presentCount <= rtDumpPresent + 1) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rtDumpFbp >= 0 ? static_cast<long>(rt.fbp) == rtDumpFbp : (rt.fbp == 0 || rt.fbp == 208)) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi)
++        if (((rtDumpAt >= 0 && presentCount == rtDumpAt) || (rtDumpPresent >= 0 && presentCount >= rtDumpPresent && presentCount <= rtDumpPresent + 1) || (rtRange && dumpPresents >= 0 && presentCount >= dumpPresents && presentCount < dumpPresents + 3 && !rtDumped[frameBatch & 1023])) && (rtDumpFbp >= 0 ? static_cast<long>(rt.fbp) == rtDumpFbp : (rt.fbp == 0 || rt.fbp == 208)) && frameBatch >= rtDumpLo && frameBatch <= rtDumpHi && (frameBatch - rtDumpLo) % rtDumpStep == 0)
+         {
+             std::vector<uint8_t> px(static_cast<size_t>(rt.glW) * rt.glH * 4u);
+             g.BindFramebuffer(kFramebuffer, rt.fbo);
+@@ -2555,6 +2630,7 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
+         if (d.uploadLog.size() > 4096u)
+             d.uploadLog.erase(d.uploadLog.begin(), d.uploadLog.begin() + 2048);
+         d.uploadLog.push_back({lo, hi, ++d.writeSeq});
++        d.noteUploadOnTargets(lo, hi, d.writeSeq);
+     }
+ }
+ 

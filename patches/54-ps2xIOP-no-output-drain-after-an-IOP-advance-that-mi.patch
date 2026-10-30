@@ -1,0 +1,53 @@
+From b5a894b523d6384b1c9bbff60fa70f999bfa079a Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 06:34:10 +0100
+Subject: [PATCH 54/55] ps2xIOP: no output drain after an IOP advance that
+ mixed no sample
+
+drainMixedAudio ran after every IOP advance (the EE's checkpoints, ~100k per
+fight frame): drainOutput locked the output mutex and returned 0 almost every
+time (~8% of the game thread with sound on). Only a mixer step adds output
+samples, so the drain (and the debug dump check) is skipped when the mixer did
+not advance; serviceSpu2Irq still runs every time. Output identical.
+Airport (Practice): 54 -> 60 fps, Building 50 -> 57.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/src/emulator/core/sound_engine.h | 1 +
+ ps2xIOP/src/emulator/iop_emulator.cpp    | 6 ++++++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.h b/ps2xIOP/src/emulator/core/sound_engine.h
+index d9691e8..97682b4 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.h
++++ b/ps2xIOP/src/emulator/core/sound_engine.h
+@@ -67,6 +67,7 @@ namespace ps2x::iop::detail
+ 
+         // time: one stereo sample every CyclesPerSample IOP cycles
+         void advanceTo(uint64_t iopCycle);
++        uint64_t mixedUpTo() const { return m_lastCycle; } // IOP cycle of the last sample mixed
+ 
+         // stereo samples produced so far (producer: IOP thread, consumer: host audio thread)
+         [[nodiscard]] size_t pendingFrames() const;
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index b087416..4df8218 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -722,8 +722,14 @@ namespace ps2x::iop::detail
+         {
+             if (!soundRouteOn())
+                 return;
++            const uint64_t mixedBefore = m_sound.mixedUpTo();
+             m_sound.advanceTo(totalCycles);
+             serviceSpu2Irq();
++            // Tekken 4 port (perf): called after every IOP advance (the EE's checkpoints, ~100k a fight frame); only a
++            // step of the mixer adds output samples, so without one there is nothing to drain (drainOutput locked and
++            // returned 0: ~8% of the game thread).
++            if (m_sound.mixedUpTo() == mixedBefore)
++                return;
+             debugDumpRam();
+             int16_t block[1024 * 2];
+             for (;;)
+-- 
+2.55.0.windows.3
+

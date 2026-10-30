@@ -1,0 +1,730 @@
+From 1e0290270be40a3e8bc93996d1842ede7a9f06ab Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:09:51 +0100
+Subject: [PATCH 46/55] GL backend: redundant state filter, batch key without
+ unused registers, vertex ring
+
+Three cuts of the GL thread's per-batch cost (~1000-1300 batches per fight frame):
+- gs_gl_state_cache: the Api copy the renderer uses drops GL calls that would not
+  change state (enables, blend, depth, viewport/scissor, program, uniforms per
+  program, texture bindings per unit, texture parameters per texture, VAO/VBO,
+  pixel store). Deletions forget what they held. PS2X_GL_STATE_CACHE=0: off.
+- batchKey: primitives that differ only in registers the batch draw does not use
+  (XYOFFSET is applied per vertex; fog colour, PRIM type/FGE/AA1/FIX/CTXT, PABE,
+  SCANMSK, DIMX, DTHE, FBA, TEXCLUT, MIPTBP; texture registers of untextured
+  primitives) join one batch. PS2X_GL_BATCH_KEY=0: whole-state match as before.
+- vertices go to a persistently mapped 64 MB ring (four fenced quarters) instead
+  of a glBufferData per batch. PS2X_GL_VERTEX_RING=0: glBufferData as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/CMakeLists.txt                    |   1 +
+ .../src/lib/gs/gpu/gs_gl_state_cache.cpp      | 451 ++++++++++++++++++
+ .../src/lib/gs/gpu/gs_gl_state_cache.h        |  22 +
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp  | 125 ++++-
+ 4 files changed, 593 insertions(+), 6 deletions(-)
+ create mode 100644 ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.cpp
+ create mode 100644 ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.h
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 571fc98..d51b996 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -518,6 +518,7 @@ if(WIN32)
+         src/lib/gs/gs_swizzle.cpp
+         src/lib/gs/gpu/gs_gl.cpp
+         src/lib/gs/gpu/gs_hw_backend.cpp
++        src/lib/gs/gpu/gs_gl_state_cache.cpp
+         src/lib/gs/gpu/gs_texture_store.cpp)
+     target_compile_definitions(ps2_runtime PRIVATE PS2X_GS_GL=1)
+     target_link_libraries(ps2_runtime PRIVATE opengl32 gdi32)
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.cpp
+new file mode 100644
+index 0000000..71f69db
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.cpp
+@@ -0,0 +1,451 @@
++// Tekken 4 port (perf): see gs_gl_state_cache.h.
++#include "gs_gl_state_cache.h"
++
++#include <array>
++#include <cstdlib>
++#include <cstring>
++#include <unordered_map>
++#include <vector>
++
++namespace GSGL
++{
++    namespace GLStateCache
++    {
++        namespace
++        {
++            constexpr GLenum kFramebufferTarget = 0x8D40, kReadFramebuffer = 0x8CA8, kDrawFramebuffer = 0x8CA9;
++            constexpr GLenum kArrayBufferTarget = 0x8892;
++            constexpr GLenum kTex2D = 0x0DE1;
++            constexpr GLenum kTextureUnit0 = 0x84C0;
++            constexpr int kUnits = 16;
++
++            Api g_real;
++
++            // Every cached value starts unknown (valid = false): the first call always reaches GL.
++            template <typename T>
++            struct Slot
++            {
++                bool valid = false;
++                T value{};
++                bool same(const T &v) const { return valid && std::memcmp(&value, &v, sizeof(T)) == 0; }
++                void set(const T &v) { valid = true, value = v; }
++            };
++
++            // capabilities the renderer toggles (others pass through uncached)
++            struct Caps
++            {
++                Slot<bool> blend, depth, scissor, cull;
++                Slot<bool> *find(GLenum cap)
++                {
++                    switch (cap)
++                    {
++                    case 0x0BE2: return &blend;
++                    case 0x0B71: return &depth;
++                    case 0x0C11: return &scissor;
++                    case 0x0B44: return &cull;
++                    default: return nullptr;
++                    }
++                }
++            } g_caps;
++
++            Slot<GLuint> g_readFb, g_drawFb, g_program, g_vao, g_arrayBuffer;
++            Slot<GLenum> g_activeUnit, g_depthFunc;
++            Slot<GLboolean> g_depthMask;
++            Slot<std::array<GLint, 4>> g_viewport, g_scissor;
++            Slot<std::array<GLboolean, 4>> g_colorMask;
++            Slot<std::array<GLenum, 2>> g_blendEq;
++            Slot<std::array<GLenum, 4>> g_blendFunc;
++            Slot<std::array<float, 4>> g_blendColor;
++            Slot<GLint> g_unpackAlign, g_packAlign;
++            std::array<Slot<GLuint>, kUnits> g_tex2d;
++
++            // texture object parameters (min, mag, wrap s, wrap t) by texture id
++            std::unordered_map<GLuint, std::array<Slot<GLint>, 4>> g_texParams;
++            int texParamIndex(GLenum pname)
++            {
++                switch (pname)
++                {
++                case 0x2801: return 0; // MIN_FILTER
++                case 0x2800: return 1; // MAG_FILTER
++                case 0x2802: return 2; // WRAP_S
++                case 0x2803: return 3; // WRAP_T
++                default: return -1;
++                }
++            }
++
++            // uniform values by program, then location
++            struct UniformValue
++            {
++                uint32_t type = 0; // 0 = unknown
++                uint32_t words[4] = {0, 0, 0, 0};
++            };
++            std::unordered_map<GLuint, std::vector<UniformValue>> g_uniforms;
++            std::vector<UniformValue> *g_currentUniforms = nullptr;
++
++            void selectProgramUniforms(GLuint program)
++            {
++                g_currentUniforms = program ? &g_uniforms[program] : nullptr;
++            }
++
++            // true when the call must reach GL (and the cache now holds the new value)
++            bool uniformChanged(GLint location, uint32_t type, const void *values, size_t bytes)
++            {
++                if (location < 0 || !g_currentUniforms || location >= 4096)
++                    return location >= 0;
++                std::vector<UniformValue> &u = *g_currentUniforms;
++                if (static_cast<size_t>(location) >= u.size())
++                    u.resize(static_cast<size_t>(location) + 1u);
++                UniformValue &slot = u[static_cast<size_t>(location)];
++                UniformValue next;
++                next.type = type;
++                std::memcpy(next.words, values, bytes);
++                if (slot.type == type && std::memcmp(slot.words, next.words, sizeof(next.words)) == 0)
++                    return false;
++                slot = next;
++                return true;
++            }
++
++            GLuint boundTexture()
++            {
++                const GLenum unit = g_activeUnit.valid ? g_activeUnit.value : kTextureUnit0;
++                const size_t index = unit - kTextureUnit0;
++                if (index >= g_tex2d.size() || !g_tex2d[index].valid)
++                    return ~0u; // unknown
++                return g_tex2d[index].value;
++            }
++
++            void Enable(GLenum cap)
++            {
++                Slot<bool> *slot = g_caps.find(cap);
++                if (slot && slot->same(true))
++                    return;
++                if (slot)
++                    slot->set(true);
++                g_real.Enable(cap);
++            }
++            void Disable(GLenum cap)
++            {
++                Slot<bool> *slot = g_caps.find(cap);
++                if (slot && slot->same(false))
++                    return;
++                if (slot)
++                    slot->set(false);
++                g_real.Disable(cap);
++            }
++            void BindFramebuffer(GLenum target, GLuint fb)
++            {
++                if (target == kFramebufferTarget)
++                {
++                    if (g_readFb.same(fb) && g_drawFb.same(fb))
++                        return;
++                    g_readFb.set(fb), g_drawFb.set(fb);
++                }
++                else if (target == kReadFramebuffer)
++                {
++                    if (g_readFb.same(fb))
++                        return;
++                    g_readFb.set(fb);
++                }
++                else if (target == kDrawFramebuffer)
++                {
++                    if (g_drawFb.same(fb))
++                        return;
++                    g_drawFb.set(fb);
++                }
++                g_real.BindFramebuffer(target, fb);
++            }
++            void DeleteFramebuffers(GLsizei n, const GLuint *ids)
++            {
++                for (GLsizei i = 0; i < n; ++i)
++                {
++                    if (g_readFb.same(ids[i]))
++                        g_readFb.valid = false;
++                    if (g_drawFb.same(ids[i]))
++                        g_drawFb.valid = false;
++                }
++                g_real.DeleteFramebuffers(n, ids);
++            }
++            void Viewport(GLint x, GLint y, GLsizei w, GLsizei h)
++            {
++                const std::array<GLint, 4> v{x, y, w, h};
++                if (g_viewport.same(v))
++                    return;
++                g_viewport.set(v);
++                g_real.Viewport(x, y, w, h);
++            }
++            void Scissor(GLint x, GLint y, GLsizei w, GLsizei h)
++            {
++                const std::array<GLint, 4> v{x, y, w, h};
++                if (g_scissor.same(v))
++                    return;
++                g_scissor.set(v);
++                g_real.Scissor(x, y, w, h);
++            }
++            void DepthFunc(GLenum f)
++            {
++                if (g_depthFunc.same(f))
++                    return;
++                g_depthFunc.set(f);
++                g_real.DepthFunc(f);
++            }
++            void DepthMask(GLboolean m)
++            {
++                if (g_depthMask.same(m))
++                    return;
++                g_depthMask.set(m);
++                g_real.DepthMask(m);
++            }
++            void ColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a)
++            {
++                const std::array<GLboolean, 4> v{r, g, b, a};
++                if (g_colorMask.same(v))
++                    return;
++                g_colorMask.set(v);
++                g_real.ColorMask(r, g, b, a);
++            }
++            void BlendEquationSeparate(GLenum rgb, GLenum alpha)
++            {
++                const std::array<GLenum, 2> v{rgb, alpha};
++                if (g_blendEq.same(v))
++                    return;
++                g_blendEq.set(v);
++                g_real.BlendEquationSeparate(rgb, alpha);
++            }
++            void BlendFuncSeparate(GLenum a, GLenum b, GLenum c, GLenum d)
++            {
++                const std::array<GLenum, 4> v{a, b, c, d};
++                if (g_blendFunc.same(v))
++                    return;
++                g_blendFunc.set(v);
++                g_real.BlendFuncSeparate(a, b, c, d);
++            }
++            void BlendColor(float r, float g, float b, float a)
++            {
++                const std::array<float, 4> v{r, g, b, a};
++                if (g_blendColor.same(v))
++                    return;
++                g_blendColor.set(v);
++                g_real.BlendColor(r, g, b, a);
++            }
++            void UseProgram(GLuint program)
++            {
++                if (g_program.same(program))
++                    return;
++                g_program.set(program);
++                selectProgramUniforms(program);
++                g_real.UseProgram(program);
++            }
++            void LinkProgram(GLuint program)
++            {
++                g_uniforms.erase(program); // locations and values start over
++                if (g_program.same(program))
++                    selectProgramUniforms(program);
++                g_real.LinkProgram(program);
++            }
++            void ProgramBinary(GLuint program, GLenum format, const void *binary, GLsizei length)
++            {
++                g_uniforms.erase(program);
++                if (g_program.same(program))
++                    selectProgramUniforms(program);
++                g_real.ProgramBinary(program, format, binary, length);
++            }
++            void DeleteProgram(GLuint program)
++            {
++                g_uniforms.erase(program);
++                if (g_program.same(program))
++                    g_program.valid = false, g_currentUniforms = nullptr;
++                g_real.DeleteProgram(program);
++            }
++            void Uniform1i(GLint loc, GLint v)
++            {
++                if (uniformChanged(loc, 1, &v, sizeof(v)))
++                    g_real.Uniform1i(loc, v);
++            }
++            void Uniform1f(GLint loc, float v)
++            {
++                if (uniformChanged(loc, 2, &v, sizeof(v)))
++                    g_real.Uniform1f(loc, v);
++            }
++            void Uniform2f(GLint loc, float a, float b)
++            {
++                const float v[2] = {a, b};
++                if (uniformChanged(loc, 3, v, sizeof(v)))
++                    g_real.Uniform2f(loc, a, b);
++            }
++            void Uniform4f(GLint loc, float a, float b, float c, float d)
++            {
++                const float v[4] = {a, b, c, d};
++                if (uniformChanged(loc, 4, v, sizeof(v)))
++                    g_real.Uniform4f(loc, a, b, c, d);
++            }
++            void Uniform4i(GLint loc, GLint a, GLint b, GLint c, GLint d)
++            {
++                const GLint v[4] = {a, b, c, d};
++                if (uniformChanged(loc, 5, v, sizeof(v)))
++                    g_real.Uniform4i(loc, a, b, c, d);
++            }
++            void Uniform1ui(GLint loc, GLuint v)
++            {
++                if (uniformChanged(loc, 6, &v, sizeof(v)))
++                    g_real.Uniform1ui(loc, v);
++            }
++            void Uniform4ui(GLint loc, GLuint a, GLuint b, GLuint c, GLuint d)
++            {
++                const GLuint v[4] = {a, b, c, d};
++                if (uniformChanged(loc, 7, v, sizeof(v)))
++                    g_real.Uniform4ui(loc, a, b, c, d);
++            }
++            void Uniform1uiv(GLint loc, GLsizei count, const GLuint *v)
++            {
++                // arrays: forget the location's cached value, always pass through
++                if (g_currentUniforms && loc >= 0 && static_cast<size_t>(loc) < g_currentUniforms->size())
++                    (*g_currentUniforms)[static_cast<size_t>(loc)].type = 0;
++                g_real.Uniform1uiv(loc, count, v);
++            }
++            void ActiveTexture(GLenum unit)
++            {
++                if (g_activeUnit.same(unit))
++                    return;
++                g_activeUnit.set(unit);
++                g_real.ActiveTexture(unit);
++            }
++            void BindTexture(GLenum target, GLuint id)
++            {
++                const GLenum unit = g_activeUnit.valid ? g_activeUnit.value : kTextureUnit0;
++                const size_t index = unit - kTextureUnit0;
++                if (target == kTex2D && index < g_tex2d.size())
++                {
++                    if (g_activeUnit.valid && g_tex2d[index].same(id))
++                        return;
++                    if (g_activeUnit.valid)
++                        g_tex2d[index].set(id);
++                }
++                g_real.BindTexture(target, id);
++            }
++            void TexParameteri(GLenum target, GLenum pname, GLint value)
++            {
++                const int index = texParamIndex(pname);
++                const GLuint tex = boundTexture();
++                if (target == kTex2D && index >= 0 && tex != ~0u && tex != 0u)
++                {
++                    Slot<GLint> &slot = g_texParams[tex][static_cast<size_t>(index)];
++                    if (slot.same(value))
++                        return;
++                    slot.set(value);
++                }
++                g_real.TexParameteri(target, pname, value);
++            }
++            void DeleteTextures(GLsizei n, const GLuint *ids)
++            {
++                for (GLsizei i = 0; i < n; ++i)
++                {
++                    g_texParams.erase(ids[i]);
++                    for (Slot<GLuint> &unit : g_tex2d) // GL unbinds a deleted texture from every unit
++                        if (unit.same(ids[i]))
++                            unit.set(0u);
++                }
++                g_real.DeleteTextures(n, ids);
++            }
++            void BindVertexArray(GLuint vao)
++            {
++                if (g_vao.same(vao))
++                    return;
++                g_vao.set(vao);
++                g_real.BindVertexArray(vao);
++            }
++            void DeleteVertexArrays(GLsizei n, const GLuint *ids)
++            {
++                for (GLsizei i = 0; i < n; ++i)
++                    if (g_vao.same(ids[i]))
++                        g_vao.set(0u);
++                g_real.DeleteVertexArrays(n, ids);
++            }
++            void BindBuffer(GLenum target, GLuint buffer)
++            {
++                if (target == kArrayBufferTarget)
++                {
++                    if (g_arrayBuffer.same(buffer))
++                        return;
++                    g_arrayBuffer.set(buffer);
++                }
++                g_real.BindBuffer(target, buffer);
++            }
++            void DeleteBuffers(GLsizei n, const GLuint *ids)
++            {
++                for (GLsizei i = 0; i < n; ++i)
++                    if (g_arrayBuffer.same(ids[i]))
++                        g_arrayBuffer.set(0u);
++                g_real.DeleteBuffers(n, ids);
++            }
++            void PixelStorei(GLenum pname, GLint value)
++            {
++                Slot<GLint> *slot = pname == 0x0CF5 ? &g_unpackAlign : pname == 0x0D05 ? &g_packAlign : nullptr;
++                if (slot && slot->same(value))
++                    return;
++                if (slot)
++                    slot->set(value);
++                g_real.PixelStorei(pname, value);
++            }
++        }
++
++        bool Enabled()
++        {
++            static const bool on = []
++            {
++                const char *value = std::getenv("PS2X_GL_STATE_CACHE");
++                return !value || *value != '0';
++            }();
++            return on;
++        }
++
++        Api Install(const Api &real)
++        {
++            g_real = real;
++            Api api = real;
++            if (real.ActiveTexture)
++            {
++                real.ActiveTexture(kTextureUnit0); // a known texture unit for the binding cache
++                g_activeUnit.set(kTextureUnit0);
++            }
++            const auto shim = [](auto &field, auto function)
++            {
++                if (field)
++                    field = function;
++            };
++            shim(api.Enable, &Enable);
++            shim(api.Disable, &Disable);
++            shim(api.BindFramebuffer, &BindFramebuffer);
++            shim(api.DeleteFramebuffers, &DeleteFramebuffers);
++            shim(api.Viewport, &Viewport);
++            shim(api.Scissor, &Scissor);
++            shim(api.DepthFunc, &DepthFunc);
++            shim(api.DepthMask, &DepthMask);
++            shim(api.ColorMask, &ColorMask);
++            shim(api.BlendEquationSeparate, &BlendEquationSeparate);
++            shim(api.BlendFuncSeparate, &BlendFuncSeparate);
++            shim(api.BlendColor, &BlendColor);
++            shim(api.UseProgram, &UseProgram);
++            shim(api.LinkProgram, &LinkProgram);
++            shim(api.ProgramBinary, &ProgramBinary);
++            shim(api.DeleteProgram, &DeleteProgram);
++            shim(api.Uniform1i, &Uniform1i);
++            shim(api.Uniform1f, &Uniform1f);
++            shim(api.Uniform2f, &Uniform2f);
++            shim(api.Uniform4f, &Uniform4f);
++            shim(api.Uniform4i, &Uniform4i);
++            shim(api.Uniform1ui, &Uniform1ui);
++            shim(api.Uniform4ui, &Uniform4ui);
++            shim(api.Uniform1uiv, &Uniform1uiv);
++            shim(api.ActiveTexture, &ActiveTexture);
++            shim(api.BindTexture, &BindTexture);
++            shim(api.TexParameteri, &TexParameteri);
++            shim(api.DeleteTextures, &DeleteTextures);
++            shim(api.BindVertexArray, &BindVertexArray);
++            shim(api.DeleteVertexArrays, &DeleteVertexArrays);
++            shim(api.BindBuffer, &BindBuffer);
++            shim(api.DeleteBuffers, &DeleteBuffers);
++            shim(api.PixelStorei, &PixelStorei);
++            return api;
++        }
++    }
++}
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.h b/ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.h
+new file mode 100644
+index 0000000..5f271e2
+--- /dev/null
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl_state_cache.h
+@@ -0,0 +1,22 @@
++// Tekken 4 port (perf): redundant GL state call elimination for the render-target renderer's context.
++//
++// The renderer sets its whole pipeline state for every batch (~40 GL calls: enables, blend, depth, program uniforms,
++// texture bindings and parameters, buffers). Most of it repeats the previous batch. GLStateCache::Install replaces the
++// state-setting entry points of an Api copy with shims that remember the last value of each piece of state and drop
++// a call that would not change it. Every GL call of that context goes through the same Api (one thread), so the cache
++// always knows the real state; deletions (textures, programs, buffers, vertex arrays, framebuffers) forget what they
++// held. The draws, uploads and readbacks themselves pass through untouched. PS2X_GL_STATE_CACHE=0 turns it off.
++#pragma once
++
++#include "gs_gl.h"
++
++namespace GSGL
++{
++    namespace GLStateCache
++    {
++        // Returns a copy of `real` with the caching shims installed (the shims call `real`'s functions). Process-wide:
++        // one GL context (the GS worker's) may use it.
++        Api Install(const Api &real);
++        bool Enabled();
++    }
++}
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index e25f55d..e433659 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -3,6 +3,7 @@
+ #include "gs_texture_store.h"
+ #include "runtime/gs/gs_swizzle.h"
+ #include "gs_gl.h"
++#include "gs_gl_state_cache.h"
+ #include "../gs_gpu_helpers.h"
+ #include "runtime/gs/gs_shared_present.h"
+ #include "runtime/ps2_perf_stats.h"
+@@ -594,6 +595,103 @@ struct GSHwBackend::Impl
+         }
+     }
+     GSDrawState pendingState{};
++    // Tekken 4 port (perf): batch vertices go into a persistently mapped ring buffer (vbo) instead of a glBufferData
++    // per batch (a driver-side allocation for every one of ~1000 batches a frame). Four fenced quarters: a quarter is
++    // written again only after the GPU finished the draws that read it. PS2X_GL_VERTEX_RING=0: glBufferData as before.
++    static constexpr size_t kRingBytes = 64u << 20, kRingQuarter = kRingBytes / 4u;
++    uint8_t *ringPtr = nullptr;
++    size_t ringHead = 0;
++    GLsync ringFence[4] = {};
++    void setupRing(const Api &g)
++    {
++        const char *value = std::getenv("PS2X_GL_VERTEX_RING");
++        if ((value && *value == '0') || !g.BufferStorage || !g.MapBufferRange || !g.FenceSync || !g.ClientWaitSync || !g.DeleteSync)
++            return;
++        const GLbitfield flags = kMapWriteBit | kMapPersistentBit | kMapCoherentBit;
++        g.BufferStorage(kArrayBuffer, static_cast<GLsizeiptr>(kRingBytes), nullptr, flags);
++        ringPtr = static_cast<uint8_t *>(g.MapBufferRange(kArrayBuffer, 0, static_cast<GLsizeiptr>(kRingBytes), flags));
++    }
++    // Copies the vertices into the ring (vbo bound) and returns the index of the first one.
++    size_t ringQuarter = 0; // the quarter ringHead is in
++    void ringWaitQuarter(const Api &g, size_t q)
++    {
++        if (!ringFence[q])
++            return;
++        while (g.ClientWaitSync(ringFence[q], kSyncFlushCommandsBit, 1000000000ull) == kTimeoutExpired)
++        {
++        }
++        g.DeleteSync(ringFence[q]);
++        ringFence[q] = nullptr;
++    }
++    GLint ringWrite(const Api &g, const void *data, size_t bytes)
++    {
++        if (bytes > kRingQuarter)
++        {
++            // never seen (a quarter holds 262144 vertices): wait for every draw and start over at 0
++            if (!ringFence[ringQuarter])
++                ringFence[ringQuarter] = g.FenceSync(kSyncGpuCommandsComplete, 0u);
++            for (size_t q = 0; q < 4u; ++q)
++                ringWaitQuarter(g, q);
++            ringHead = 0;
++            ringQuarter = 0;
++        }
++        const size_t at = ringHead + bytes > kRingBytes ? 0u : ringHead;
++        const size_t last = (at + bytes - 1u) / kRingQuarter;
++        // crossing into the next quarter(s): fence the one left behind, wait until the GPU finished the next one
++        while (ringQuarter != last)
++        {
++            ringFence[ringQuarter] = g.FenceSync(kSyncGpuCommandsComplete, 0u);
++            ringQuarter = (ringQuarter + 1u) % 4u;
++            ringWaitQuarter(g, ringQuarter);
++        }
++        std::memcpy(ringPtr + at, data, bytes);
++        ringHead = at + bytes;
++        return static_cast<GLint>(at / sizeof(HwVertex));
++    }
++    GSDrawState pendingKey{}; // batchKey(pendingState)
++
++    // Tekken 4 port (perf): the part of a primitive's state the batch draw uses. Registers the renderer does not
++    // implement or applies per vertex (XYOFFSET, fog colour, PRIM type/FGE/AA1/FIX/CTXT, PABE, SCANMSK, DIMX, DTHE, FBA,
++    // TEXCLUT, MIPTBP) and, for untextured primitives, the texture registers are zeroed: primitives that differ only
++    // there join one batch (the cage of the Arena / airport fences: XYOFFSET or TEX0 changes between flat-coloured
++    // primitives). PS2X_GL_BATCH_KEY=0: the whole state must match, as before.
++    static GSDrawState batchKey(const GSDrawState &s)
++    {
++        static const bool loose = []
++        {
++            const char *value = std::getenv("PS2X_GL_BATCH_KEY");
++            return !value || *value != '0';
++        }();
++        if (!loose)
++            return s;
++        GSDrawState k{};
++        k.context.frame = s.context.frame;
++        k.context.scissor = s.context.scissor;
++        k.context.zbuf = s.context.zbuf;
++        k.context.alpha = s.context.alpha;
++        k.context.test = s.context.test;
++        k.prim.iip = s.prim.iip;
++        k.prim.tme = s.prim.tme;
++        k.prim.abe = s.prim.abe;
++        k.prim.fst = s.prim.fst;
++        k.colclamp = s.colclamp;
++        if (s.prim.tme)
++        {
++            k.context.tex0 = s.context.tex0;
++            k.context.tex1 = s.context.tex1;
++            k.context.clamp = s.context.clamp;
++            k.texa = s.texa;
++            k.textureWidth = s.textureWidth;
++            k.textureHeight = s.textureHeight;
++            k.linearFilter = s.linearFilter;
++        }
++        else
++        {
++            // TFX/TCC are uniforms the shader reads only for textured primitives
++            k.textureWidth = k.textureHeight = 1;
++        }
++        return k;
++    }
+     bool havePending = false;
+     double firstRawZ = 0.0;
+ 
+@@ -671,7 +769,10 @@ struct GSHwBackend::Impl
+             ++stats.stateDiff[23];
+     }
+ 
+-    const Api &gl() const { return context.gl(); }
++    // GL entry points: the context's, or the redundant-state-call filter over them (gs_gl_state_cache.h)
++    Api cachedApi;
++    bool cachedApiReady = false;
++    const Api &gl() const { return cachedApiReady ? cachedApi : context.gl(); }
+ 
+     GLuint compile(GLenum type, const char *src) { return compile(type, {src}); }
+     GLuint compile(GLenum type, std::initializer_list<const char *> parts)
+@@ -706,6 +807,11 @@ struct GSHwBackend::Impl
+             failed = true;
+             return false;
+         }
++        if (GSGL::GLStateCache::Enabled())
++        {
++            cachedApi = GSGL::GLStateCache::Install(context.gl());
++            cachedApiReady = true;
++        }
+         const Api &g = gl();
+         const GLuint v = compile(GSGL::kVertexShader, kVsSource);
+         const GLuint f = compile(GSGL::kFragmentShader, {kFsSource, kReinterpretSource, kFsTail});
+@@ -745,6 +851,7 @@ struct GSHwBackend::Impl
+         g.BindVertexArray(vao);
+         g.GenBuffers(1, &vbo);
+         g.BindBuffer(kArrayBuffer, vbo);
++        setupRing(g);
+         const GLsizei stride = sizeof(HwVertex);
+         g.VertexAttribPointer(0, 2, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, x)));
+         g.VertexAttribPointer(1, 1, kFloat, kFalse, stride, reinterpret_cast<const void *>(offsetof(HwVertex, z)));
+@@ -1869,7 +1976,8 @@ struct GSHwBackend::Impl
+                 return;
+             }
+         const bool usesClut = s.prim.tme && isIndexed(s.context.tex0.psm);
+-        if (havePending && !sameState(pendingState, s))
++        const GSDrawState key = batchKey(s);
++        if (havePending && !sameState(pendingKey, key))
+         {
+             if (statsEnabled)
+                 noteStateDiff(pendingState, s);
+@@ -1880,6 +1988,7 @@ struct GSHwBackend::Impl
+         if (!havePending)
+         {
+             pendingState = s;
++            pendingKey = key;
+             havePending = true;
+             pendingClutHash = clutHash;
+             pendingPalette = (usesClut && vram) ? paletteFor(s) : 0u;
+@@ -2413,7 +2522,11 @@ struct GSHwBackend::Impl
+         }
+         g.BindVertexArray(vao);
+         g.BindBuffer(kArrayBuffer, vbo);
+-        g.BufferData(kArrayBuffer, static_cast<GLsizeiptr>(dverts.size() * sizeof(HwVertex)), dverts.data(), kStreamDraw);
++        GLint first = 0;
++        if (ringPtr)
++            first = ringWrite(g, dverts.data(), dverts.size() * sizeof(HwVertex));
++        else
++            g.BufferData(kArrayBuffer, static_cast<GLsizeiptr>(dverts.size() * sizeof(HwVertex)), dverts.data(), kStreamDraw);
+ 
+         const bool ate = (c.test & 1u) != 0u;
+         const uint32_t atst = static_cast<uint32_t>((c.test >> 1) & 7u), aref = static_cast<uint32_t>((c.test >> 4) & 0xFFu);
+@@ -2480,11 +2593,11 @@ struct GSHwBackend::Impl
+             {
+                 if (i != 0)
+                     g.TextureBarrier();
+-                g.DrawArrays(kTriangles, static_cast<GLint>(i), 3);
++                g.DrawArrays(kTriangles, first + static_cast<GLint>(i), 3);
+             }
+         }
+         else
+-            g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(verts.size()));
++            g.DrawArrays(kTriangles, first, static_cast<GLsizei>(verts.size()));
+         if (volBox[1] >= volBox[0] && volBox[3] >= volBox[2])
+         {
+             const int w = volBox[1] - volBox[0] + 1, h = volBox[3] - volBox[2] + 1;
+@@ -2506,7 +2619,7 @@ struct GSHwBackend::Impl
+             if (afail == 1u) { g.DepthMask(kFalse); }
+             else if (afail == 2u) { g.ColorMask(kFalse, kFalse, kFalse, kFalse); }
+             else { g.DepthMask(kFalse); g.ColorMask(mr, mg, mb, kFalse); }
+-            g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(verts.size()));
++            g.DrawArrays(kTriangles, first, static_cast<GLsizei>(verts.size()));
+         }
+         ++stats.batches, PS2_PERF_COUNT(glBatches);
+         g.Disable(kScissorTest);
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,616 @@
+diff --git a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+--- a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
++++ b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+@@ -30,7 +30,10 @@ public:
+ 
+     void setProcessPacketFn(ProcessPacketFn fn) { m_processFn = std::move(fn); }
+ 
+-    void submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl = false);
++    // drainImmediately: the caller drains before another path can queue. An empty queue has nothing to arbitrate,
++    // so the GS sees the caller's bytes with no heap copy. A non-empty queue still copies so drain() can sort.
++    void submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl = false,
++                bool drainImmediately = false);
+ 
+     void drain();
+     bool empty() const { return m_queue.empty(); }
+diff --git a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+--- a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
++++ b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+@@ -1,7 +1,55 @@
+ #include "runtime/gs/ps2_gif_arbiter.h"
+ #include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ 
++namespace
++{
++// TEKKEN4_GT_STATS=1. Counts only; the GS still sees the same bytes.
++struct GifCopyStats
++{
++    bool on = false;
++    uint64_t submits = 0;
++    uint64_t immediate = 0;
++    uint64_t copied = 0;
++    uint64_t bytes = 0;
++
++    GifCopyStats()
++    {
++        const char *env = std::getenv("TEKKEN4_GT_STATS");
++        on = env != nullptr && env[0] != '\0' && env[0] != '0';
++    }
++
++    void note(bool direct, uint32_t sizeBytes)
++    {
++        if (!on)
++            return;
++        ++submits;
++        bytes += sizeBytes;
++        if (direct)
++            ++immediate;
++        else
++            ++copied;
++        if ((submits & 0x3FFFu) == 0u)
++            dump("snap");
++    }
++
++    void dump(const char *tag) const
++    {
++        if (!on)
++            return;
++        std::fprintf(stderr, "[gt-stats] gif %s submits=%llu immediate=%llu copied=%llu bytes=%llu\n", tag,
++                     static_cast<unsigned long long>(submits), static_cast<unsigned long long>(immediate),
++                     static_cast<unsigned long long>(copied), static_cast<unsigned long long>(bytes));
++    }
++
++    ~GifCopyStats() { dump("final"); }
++};
++
++GifCopyStats g_gifCopyStats;
++} // namespace
++
+ GifArbiter::GifArbiter(ProcessPacketFn processFn)
+     : m_processFn(std::move(processFn))
+ {
+@@ -18,11 +66,19 @@ bool GifArbiter::isImagePacket(const uint8_t *data, uint32_t sizeBytes)
+     return flg == 2u;
+ }
+ 
+-void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl)
++void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl,
++                       bool drainImmediately)
+ {
+     if (!data || sizeBytes < 16 || !m_processFn)
+         return;
+ 
++    if (drainImmediately && m_queue.empty())
++    {
++        m_processFn(data, sizeBytes);
++        g_gifCopyStats.note(true, sizeBytes);
++        return;
++    }
++
+     GifArbiterPacket pkt;
+     pkt.pathId = pathId;
+     pkt.path2DirectHl = (pathId == GifPathId::Path2) && path2DirectHl;
+@@ -30,6 +86,7 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
+     pkt.data.resize(sizeBytes);
+     std::memcpy(pkt.data.data(), data, sizeBytes);
+     m_queue.push_back(std::move(pkt));
++    g_gifCopyStats.note(false, sizeBytes);
+ }
+ 
+ void GifArbiter::drain()
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -1,7 +1,51 @@
+ // Based on Blackline Interactive implementation
+ #include "runtime/ps2_memory.h"
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ 
++namespace
++{
++// TEKKEN4_GT_STATS=1. UNPACK mix: fast4 is V4-32, mask off, mode 0/3, cl==wl.
++struct UnpackStats
++{
++    bool on = false;
++    uint64_t fast4 = 0;
++    uint64_t fastOther = 0;
++    uint64_t slow = 0;
++    uint64_t cmds = 0;
++
++    UnpackStats()
++    {
++        const char *env = std::getenv("TEKKEN4_GT_STATS");
++        on = env != nullptr && env[0] != '\0' && env[0] != '0';
++    }
++
++    void note(uint64_t &bucket, uint32_t vectors)
++    {
++        if (!on)
++            return;
++        bucket += vectors;
++        ++cmds;
++        if ((cmds & 0x3FFFu) == 0u)
++            dump("snap");
++    }
++
++    void dump(const char *tag) const
++    {
++        if (!on)
++            return;
++        std::fprintf(stderr, "[gt-stats] unpack %s fast4=%llu fast_other=%llu slow=%llu cmds=%llu\n", tag,
++                     static_cast<unsigned long long>(fast4), static_cast<unsigned long long>(fastOther),
++                     static_cast<unsigned long long>(slow), static_cast<unsigned long long>(cmds));
++    }
++
++    ~UnpackStats() { dump("final"); }
++};
++
++UnpackStats g_unpackStats;
++} // namespace
++
+ enum VIFCmd : uint8_t
+ {
+     VIF_NOP = 0x00,
+@@ -687,6 +731,62 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+             {
+                 const uint8_t *srcBase = data + pos;
++                if (g_unpackStats.on)
++                {
++                    const bool eligible = vl == 0u && !maskEnable &&
++                                          (vif1_regs.mode == 0u || vif1_regs.mode == 3u) && cl >= wl;
++                    if (eligible && vn == 3u && cl == wl)
++                        g_unpackStats.note(g_unpackStats.fast4, writeVectorCount);
++                    else if (eligible)
++                        g_unpackStats.note(g_unpackStats.fastOther, writeVectorCount);
++                    else
++                        g_unpackStats.note(g_unpackStats.slow, writeVectorCount);
++                }
++                // 32-bit, mask off, mode 0/3, cl>=wl: every write consumes one source vector and adds no ROW.
++                // V4 with cl==wl is one contiguous VU span (wrap once at vector 1024). Narrower formats keep
++                // the unread lanes. destVec&0x3FF stays inside the 16KB VU mem, same as the slow loop.
++                if (vl == 0u && !maskEnable &&
++                    (vif1_regs.mode == 0u || vif1_regs.mode == 3u) && cl >= wl)
++                {
++                    const uint32_t srcStride = static_cast<uint32_t>(components) * 4u;
++                    if (components == 4 && cl == wl)
++                    {
++                        uint32_t remaining = writeVectorCount;
++                        uint32_t srcOff = 0u;
++                        uint32_t dest = vuAddr;
++                        while (remaining > 0u)
++                        {
++                            const uint32_t room = 0x400u - dest;
++                            const uint32_t n = (remaining < room) ? remaining : room;
++                            std::memcpy(m_vu1Data + dest * 16u, srcBase + srcOff, static_cast<size_t>(n) * 16u);
++                            srcOff += n * 16u;
++                            remaining -= n;
++                            dest = 0u;
++                        }
++                    }
++                    else
++                    {
++                        for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
++                        {
++                            const uint32_t cyclePos = writeIndex % wl;
++                            const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + cyclePos) & 0x3FFu;
++                            const uint8_t *srcVec = srcBase + static_cast<size_t>(writeIndex) * srcStride;
++                            if (components == 1)
++                            {
++                                uint32_t scalar = 0u;
++                                std::memcpy(&scalar, srcVec, 4u);
++                                const uint32_t lanes[4] = {scalar, scalar, scalar, scalar};
++                                std::memcpy(m_vu1Data + destVec * 16u, lanes, 16u);
++                            }
++                            else
++                            {
++                                std::memcpy(m_vu1Data + destVec * 16u, srcVec, srcStride);
++                            }
++                        }
++                    }
++                    pos += totalBytes;
++                    continue;
++                }
+                 uint32_t srcIndex = 0u;
+                 for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+                 {
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -3,6 +3,8 @@
+ #include "runtime/gs/gs_frontend.h"
+ #include "ps2_log.h"
+ #include <atomic>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
+@@ -228,7 +230,86 @@ namespace
+         return nreg == 0u ? 16u : nreg;
+     }
+ 
+-}
++} // namespace
++
++// TEKKEN4_GT_STATS=1. IRQ bits are the mask advanceEeTimers returns (TIM0..TIM3).
++namespace
++{
++    struct GameThreadStats
++    {
++        bool on = false;
++        uint64_t timerCalls = 0;
++        uint64_t timerCycles = 0;
++        uint64_t timerIrqReturns = 0;
++        uint64_t timerIrqBits = 0;
++        uint64_t timerLate = 0;
++        uint64_t timerFlush = 0;
++        uint64_t sprCalls = 0;
++        uint64_t sprQwords = 0;
++        uint64_t mfifoDrains = 0;
++        uint64_t mfifoBytes = 0;
++
++        GameThreadStats()
++        {
++            const char *env = std::getenv("TEKKEN4_GT_STATS");
++            on = env != nullptr && env[0] != '\0' && env[0] != '0';
++        }
++
++        static uint32_t popcount4(uint32_t mask)
++        {
++            uint32_t n = 0;
++            for (uint32_t bit = 1u; bit <= 8u; bit <<= 1u)
++            {
++                if ((mask & bit) != 0u)
++                    ++n;
++            }
++            return n;
++        }
++
++        void noteTimer(uint64_t cycles, uint32_t irqMask)
++        {
++            if (!on)
++                return;
++            ++timerCalls;
++            timerCycles += cycles;
++            if (irqMask != 0u)
++            {
++                ++timerIrqReturns;
++                timerIrqBits += popcount4(irqMask);
++            }
++            if ((timerCalls & 0x3FFFFFu) == 0u)
++                dump("snap");
++        }
++
++        void noteFlush(uint32_t irqMask)
++        {
++            if (!on)
++                return;
++            ++timerFlush;
++            if (irqMask != 0u)
++                ++timerLate;
++        }
++
++        void dump(const char *tag) const
++        {
++            if (!on)
++                return;
++            std::fprintf(stderr,
++                         "[gt-stats] mem %s timer_calls=%llu timer_cycles=%llu timer_irq_returns=%llu timer_irq_bits=%llu "
++                         "spr_calls=%llu spr_qwords=%llu mfifo_drains=%llu mfifo_bytes=%llu "
++                         "timer_late=%llu timer_flush=%llu\n",
++                         tag, static_cast<unsigned long long>(timerCalls), static_cast<unsigned long long>(timerCycles),
++                         static_cast<unsigned long long>(timerIrqReturns), static_cast<unsigned long long>(timerIrqBits),
++                         static_cast<unsigned long long>(sprCalls), static_cast<unsigned long long>(sprQwords),
++                         static_cast<unsigned long long>(mfifoDrains), static_cast<unsigned long long>(mfifoBytes),
++                         static_cast<unsigned long long>(timerLate), static_cast<unsigned long long>(timerFlush));
++        }
++
++        ~GameThreadStats() { dump("final"); }
++    };
++
++    GameThreadStats g_gtStats;
++} // namespace
+ 
+ // Helpers for GS VRAM addressing (PSMCT32 path).
+ static inline uint32_t gs_vram_offset(uint32_t basePage, uint32_t x, uint32_t y, uint32_t fbw)
+@@ -403,21 +484,14 @@ bool PS2Memory::initialize(size_t ramSize)
+ void PS2Memory::resetEeTimers() noexcept
+ {
+     m_eeTimers = {};
++    m_eeTimerDebt = 0;
++    m_eeTimerLimit = 1;
++    m_latchedTimerIrq = 0;
++    m_gifFqcPending = false;
+ }
+ 
+-uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
++uint32_t PS2Memory::applyEeTimerTicks(uint64_t eeCycles) noexcept
+ {
+-    if (eeCycles == 0u)
+-    {
+-        return 0u;
+-    }
+-
+-    constexpr uint32_t kGifStat = 0x10003020u;
+-    constexpr uint32_t kGifFqcMask = 0x1F000000u;
+-    auto gifStatIt = m_ioRegisters.find(kGifStat);
+-    if (gifStatIt != m_ioRegisters.end())
+-        gifStatIt->second &= ~kGifFqcMask;
+-
+     uint32_t interruptMask = 0u;
+     for (size_t index = 0; index < m_eeTimers.size(); ++index)
+     {
+@@ -481,6 +555,48 @@ uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
+     return interruptMask;
+ }
+ 
++void PS2Memory::flushEeTimerDebt() noexcept
++{
++    if (m_eeTimerDebt == 0u)
++        return;
++    const uint32_t mask = applyEeTimerTicks(m_eeTimerDebt);
++    m_eeTimerDebt = 0;
++    const uint64_t next = cyclesUntilNextEeTimerInterrupt();
++    m_eeTimerLimit = (next == std::numeric_limits<uint64_t>::max()) ? next : std::max<uint64_t>(1u, next);
++    g_gtStats.noteFlush(mask);
++    if (mask != 0u)
++        m_latchedTimerIrq |= mask;
++}
++
++uint32_t PS2Memory::advanceEeTimers(uint64_t eeCycles) noexcept
++{
++    if (eeCycles == 0u)
++    {
++        g_gtStats.noteTimer(0u, 0u);
++        return 0u;
++    }
++
++    if (m_gifFqcPending)
++    {
++        constexpr uint32_t kGifStat = 0x10003020u;
++        constexpr uint32_t kGifFqcMask = 0x1F000000u;
++        auto gifStatIt = m_ioRegisters.find(kGifStat);
++        if (gifStatIt != m_ioRegisters.end())
++            gifStatIt->second &= ~kGifFqcMask;
++        m_gifFqcPending = false;
++    }
++
++    // Ticks are applied on every call: batching them up to the next compare/overflow broke the EE Timer2
++    // compare-IRQ tests (patch 15 review), so m_eeTimerDebt stays 0 and flushEeTimerDebt has nothing to do.
++    m_eeTimerDebt += eeCycles;
++    uint32_t interruptMask = m_latchedTimerIrq;
++    m_latchedTimerIrq = 0u;
++    interruptMask |= applyEeTimerTicks(m_eeTimerDebt);
++    m_eeTimerDebt = 0;
++    g_gtStats.noteTimer(eeCycles, interruptMask);
++    return interruptMask;
++}
++
+ uint64_t PS2Memory::cyclesUntilNextEeTimerInterrupt() const noexcept
+ {
+     uint64_t nearest = std::numeric_limits<uint64_t>::max();
+@@ -1129,6 +1245,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+     uint32_t timerOffset = 0u;
+     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
+     {
++        flushEeTimerDebt();
+         EeTimer &timer = m_eeTimers[timerIndex];
+         switch (timerOffset)
+         {
+@@ -1645,13 +1762,30 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
+         // MFIFO: fromSPR's destination is the ring, MADR wraps inside it (RBOR + (addr & RBSR)).
+         uint32_t dst = mfifoWrap(originalMadr);
+         uint32_t scratchOffset = originalSadr;
+-        for (uint32_t done = 0u; done < byteCount; done += 16u)
++        if (g_gtStats.on)
++        {
++            ++g_gtStats.sprCalls;
++            g_gtStats.sprQwords += qwc;
++        }
++        uint32_t bytesLeft = byteCount;
++        while (bytesLeft != 0u)
+         {
+             const uint32_t phys = dst & (PS2_RAM_SIZE - 1u);
+-            std::memcpy(m_rdram + phys, m_scratchpad + scratchOffset, 16u);
+-            markModified(phys, 16u);
+-            scratchOffset = (scratchOffset + 16u) & (PS2_SCRATCHPAD_SIZE - 1u);
+-            dst = mfifoWrap(dst + 16u);
++            const uint32_t scratchQw = (PS2_SCRATCHPAD_SIZE - scratchOffset) >> 4u;
++            const uint32_t leftQw = bytesLeft >> 4u;
++            uint32_t n = mfifoContigQwords(dst);
++            if (scratchQw < n)
++                n = scratchQw;
++            if (leftQw < n)
++                n = leftQw;
++            if (n == 0u)
++                break;
++            const uint32_t nBytes = n * 16u;
++            std::memcpy(m_rdram + phys, m_scratchpad + scratchOffset, nBytes);
++            markModified(phys, nBytes);
++            scratchOffset = (scratchOffset + nBytes) & (PS2_SCRATCHPAD_SIZE - 1u);
++            dst = mfifoWrap(dst + nBytes);
++            bytesLeft -= nBytes;
+         }
+         m_ioRegisters[channelBase + 0x10u] = dst;
+         m_ioRegisters[channelBase + 0x20u] = 0u;
+@@ -1858,6 +1992,24 @@ uint32_t PS2Memory::mfifoWrap(uint32_t address)
+     return rbor + (address & rbsr);
+ }
+ 
++uint32_t PS2Memory::mfifoContigQwords(uint32_t addr)
++{
++    const uint32_t rbor = m_ioRegisters[0x1000E050u] & 0x7FFFFFF0u;
++    const uint32_t rbsr = m_ioRegisters[0x1000E040u] & 0x7FFFFFF0u;
++    // mfifoWrap is rbor + (addr & rbsr). That is a linear span only when rbor sits on a mask boundary.
++    if (rbsr == 0u || (rbor & rbsr) != 0u || addr < rbor)
++        return 1u;
++    const uint32_t off = addr - rbor;
++    if (off > rbsr)
++        return 1u;
++    uint32_t n = ((rbsr - off) >> 4u) + 1u;
++    const uint32_t phys = addr & (PS2_RAM_SIZE - 1u);
++    const uint32_t ramQw = (PS2_RAM_SIZE - phys) >> 4u;
++    if (ramQw < n)
++        n = ramQw;
++    return n == 0u ? 1u : n;
++}
++
+ void PS2Memory::drainMfifo()
+ {
+     const uint32_t channel = mfifoDrainChannel();
+@@ -1878,15 +2030,31 @@ void PS2Memory::drainMfifo()
+     uint32_t madr = m_ioRegisters[channel + 0x10u];
+     uint32_t lastTagUpper = chcr >> 16u;
+     bool ended = false;
+-    std::vector<uint8_t> out;
++    // One buffer for the whole CNT/NEXT/END packet. DIRECT does not use m_vif1Carry, so this stays one
++    // processVIF1Data. clear() keeps the capacity from the previous drain.
++    m_mfifoPacket.clear();
+ 
++    auto appendSpan = [&](const uint8_t *src, uint32_t bytes)
++    {
++        if (src == nullptr || bytes == 0u)
++            return;
++        const size_t old = m_mfifoPacket.size();
++        m_mfifoPacket.resize(old + bytes);
++        std::memcpy(m_mfifoPacket.data() + old, src, bytes);
++    };
+     auto copyRing = [&](uint32_t from, uint32_t qwCount)
+     {
+-        for (uint32_t i = 0u; i < qwCount; ++i)
++        uint32_t left = qwCount;
++        while (left != 0u)
+         {
+-            const uint8_t *src = m_rdram + (from & (PS2_RAM_SIZE - 1u));
+-            out.insert(out.end(), src, src + 16u);
+-            from = mfifoWrap(from + 16u);
++            uint32_t n = mfifoContigQwords(from);
++            if (left < n)
++                n = left;
++            if (n == 0u)
++                break;
++            appendSpan(m_rdram + (from & (PS2_RAM_SIZE - 1u)), n * 16u);
++            from = mfifoWrap(from + n * 16u);
++            left -= n;
+         }
+         return from;
+     };
+@@ -1909,7 +2077,7 @@ void PS2Memory::drainMfifo()
+         const uint32_t limit = scratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+         const uint32_t bytes = qwCount * 16u;
+         if (phys < limit)
+-            out.insert(out.end(), base + phys, base + phys + std::min(bytes, limit - phys));
++            appendSpan(base + phys, std::min(bytes, limit - phys));
+         return from + bytes;
+     };
+ 
+@@ -1931,7 +2099,7 @@ void PS2Memory::drainMfifo()
+ 
+         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
+         if (transferTag)
+-            out.insert(out.end(), tp + 8u, tp + 16u);
++            appendSpan(tp + 8u, 8u);
+ 
+         const uint32_t dataStart = mfifoWrap(tadr + 16u);
+         switch (id)
+@@ -1971,17 +2139,22 @@ void PS2Memory::drainMfifo()
+     m_ioRegisters[channel + 0x10u] = madr;
+     m_ioRegisters[channel] = (m_ioRegisters[channel] & 0x0000FFFFu) | (lastTagUpper << 16u);
+ 
+-    if (!out.empty())
++    if (!m_mfifoPacket.empty())
+     {
++        if (g_gtStats.on)
++        {
++            ++g_gtStats.mfifoDrains;
++            g_gtStats.mfifoBytes += m_mfifoPacket.size();
++        }
+         if (isVif)
+         {
+-            processVIF1Data(out.data(), static_cast<uint32_t>(out.size()));
++            processVIF1Data(m_mfifoPacket.data(), static_cast<uint32_t>(m_mfifoPacket.size()));
+         }
+         else
+         {
+             m_seenGifCopy = true;
+             m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
+-            submitGifPacket(GifPathId::Path3, out.data(), static_cast<uint32_t>(out.size()), false);
++            submitGifPacket(GifPathId::Path3, m_mfifoPacket.data(), static_cast<uint32_t>(m_mfifoPacket.size()), false);
+         }
+         if (m_gifArbiter)
+             m_gifArbiter->drain();
+@@ -2012,6 +2185,7 @@ void PS2Memory::processPendingTransfers()
+         constexpr uint32_t kGifFqcMask = 0x1F000000u;
+         uint32_t &gifStat = m_ioRegisters[kGifStat];
+         gifStat = (gifStat & ~kGifFqcMask) | (observedGifQwc << 24u);
++        m_gifFqcPending = true;
+     }
+ 
+     for (size_t idx = 0; idx < m_pendingGifTransfers.size(); ++idx)
+@@ -2294,7 +2468,7 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+     }
+ 
+     if (m_gifArbiter)
+-        m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl);
++        m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl, drainImmediately);
+     else if (m_gifPacketCallback)
+         m_gifPacketCallback(data, sizeBytes);
+ 
+@@ -2619,6 +2793,7 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+     uint32_t timerOffset = 0u;
+     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
+     {
++        flushEeTimerDebt();
+         const EeTimer &timer = m_eeTimers[timerIndex];
+         switch (timerOffset)
+         {
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -312,6 +312,10 @@ public:
+     uint32_t advanceEeTimers(uint64_t eeCycles) noexcept;
+     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
+     void resetEeTimers() noexcept;
++    // Applies eeCycles to the four EE timers. Same tick math as a direct advanceEeTimers call.
++    uint32_t applyEeTimerTicks(uint64_t eeCycles) noexcept;
++    // Guest timer reads and writes must see counts from every checkpoint, including ones that were batched.
++    void flushEeTimerDebt() noexcept;
+ 
+     using GifPacketCallback = std::function<void(const uint8_t *, uint32_t)>;
+     void setGifPacketCallback(GifPacketCallback cb) { m_gifPacketCallback = std::move(cb); }
+@@ -459,6 +463,13 @@ public:
+     };
+ 
+     std::array<EeTimer, 4> m_eeTimers{};
++    // Checkpoints smaller than the next compare/overflow are summed and applied in one tick update.
++    // A timer read or write flushes first, so the guest sees the same count. An IRQ discovered on that
++    // flush is latched and returned by the next advanceEeTimers (one checkpoint later).
++    uint64_t m_eeTimerDebt = 0;
++    uint64_t m_eeTimerLimit = 1;
++    uint32_t m_latchedTimerIrq = 0;
++    bool m_gifFqcPending = false;
+     bool tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr);
+     bool processSprToChain(uint32_t chcr);
+     void completeDmacChannel(uint32_t channelBase, uint32_t cause);
+@@ -468,11 +479,15 @@ public:
+     // channel, started in chain mode, consumes tags from the ring as they arrive instead of all at once.
+     uint32_t mfifoDrainChannel();
+     uint32_t mfifoWrap(uint32_t address);
++    // Qwords that stay contiguous in both the MFIFO ring and the RAM mirror. 1 when the ring is not a plain mask.
++    uint32_t mfifoContigQwords(uint32_t addr);
+     void drainMfifo();
+     bool m_mfifoDraining = false;
+     // The MFIFO drain channel while it waits for the ring to fill (STR set, no END / REFE reached yet). Transfers
+     // otherwise finish synchronously, so this is the only DMA channel that can be running when the EE writes CHCR.
+     uint32_t m_mfifoWaitingChannel = 0u;
++    // Reused across drains. clear() keeps the capacity so a fight does not reallocate the VIF packet.
++    std::vector<uint8_t> m_mfifoPacket;
+ };
+ 
+ #endif // PS2_MEMORY_H

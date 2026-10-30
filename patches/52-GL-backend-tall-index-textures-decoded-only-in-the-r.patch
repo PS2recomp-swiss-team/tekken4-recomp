@@ -1,0 +1,275 @@
+From fdc3c8150ad229803530b6c0d73d718100720722 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:54:28 +0100
+Subject: [PATCH 52/55] GL backend: tall index textures decoded only in the
+ rows the draws sample
+
+The game declares big texture sizes (T8/T4 1024x1024, 128x1024) and samples a
+small part; every new upload into such an area re-decoded the whole declared
+size (Arena: ~41 decodes per frame of up to 1M texels, ReadIndexRun ~49% of the
+GL thread). draw() derives the rows its vertices can sample (texel or STQ
+coordinates, CLAMP/REGION_CLAMP; REPEAT only when nothing wraps, REGION_REPEAT
+never); a texture of 128+ rows whose sampled rows are at most half of it is
+decoded only there and grows when a later draw samples more. Partial textures
+are never revalidated by hash. PS2X_GL_DECODE_LOG=1 logs the most-decoded slots.
+PS2X_GL_PARTIAL_ROWS=0: off. Arena (Practice): 35 -> 50 fps.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 192 ++++++++++++++++++-
+ 1 file changed, 190 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index 8126e34..dcdee2d 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -477,6 +477,9 @@ void main()
+             uint64_t lastUse = 0;
+         };
+         std::vector<Version> versions;
++        // Tekken 4 port (perf): a partial index texture holds only rows [rowLo, rowHi) (the rest is not decoded yet)
++        bool partial = false;
++        uint32_t rowLo = 0, rowHi = 0;
+     };
+ 
+     struct RenderTarget
+@@ -712,6 +715,43 @@ struct GSHwBackend::Impl
+ 
+     std::unordered_map<uint64_t, Texture> textures;
+     std::vector<uint8_t> decodeScratch;
++    // PS2X_GL_DECODE_LOG=1: every 5 s, the texture slots decoded most often (tbp, format, size, decodes, distinct contents)
++    struct DecodeLogEntry
++    {
++        uint64_t count = 0;
++        std::vector<uint64_t> hashes;
++    };
++    std::unordered_map<uint64_t, DecodeLogEntry> decodeLog;
++    void noteDecode(uint32_t tbp, uint32_t psm, uint32_t w, uint32_t h, bool indexed, uint64_t contentHash)
++    {
++        static const bool on = std::getenv("PS2X_GL_DECODE_LOG") != nullptr;
++        if (!on)
++            return;
++        const uint64_t key = tbp | (static_cast<uint64_t>(psm) << 16) | (static_cast<uint64_t>(w) << 24) |
++                             (static_cast<uint64_t>(h) << 40) | (indexed ? 1ull << 60 : 0ull);
++        DecodeLogEntry &e = decodeLog[key];
++        ++e.count;
++        if (e.hashes.size() < 64u && std::find(e.hashes.begin(), e.hashes.end(), contentHash) == e.hashes.end())
++            e.hashes.push_back(contentHash);
++        static auto last = std::chrono::steady_clock::now();
++        const auto now = std::chrono::steady_clock::now();
++        if (now - last < std::chrono::seconds(5))
++            return;
++        last = now;
++        std::vector<std::pair<uint64_t, uint64_t>> top;
++        for (const auto &kv : decodeLog)
++            top.emplace_back(kv.second.count, kv.first);
++        std::sort(top.rbegin(), top.rend());
++        for (size_t i = 0; i < top.size() && i < 12u; ++i)
++        {
++            const uint64_t k = top[i].second;
++            std::fprintf(stderr, "[gs-decode] tbp=%llx psm=%llx %llux%llu %s decodes=%llu contents=%zu\n",
++                         static_cast<unsigned long long>(k & 0xFFFFu), static_cast<unsigned long long>((k >> 16) & 0xFFu),
++                         static_cast<unsigned long long>((k >> 24) & 0xFFFFu), static_cast<unsigned long long>((k >> 40) & 0xFFFFu),
++                         (k >> 60) ? "index" : "direct", static_cast<unsigned long long>(top[i].first), decodeLog[k].hashes.size());
++        }
++        decodeLog.clear();
++    }
+     static bool indexVersions()
+     {
+         static const bool on = []
+@@ -1072,6 +1112,7 @@ struct GSHwBackend::Impl
+             return tex;
+         }
+         ++stats.texDecodes, PS2_PERF_COUNT(texDecodes);
++        noteDecode(t.tbp0, t.psm, s.textureWidth, s.textureHeight, false, key);
+         classifyTexture(s);
+         const Api &g = gl();
+         std::vector<uint32_t> pixels;
+@@ -1162,13 +1203,150 @@ struct GSHwBackend::Impl
+ 
+     // Index texture of a paletted format: the raw indices, read from GS memory with the swizzle tables. Independent of
+     // the CLUT, so palette changes (animated CLUTs, the same image with several palettes) cost nothing.
+-    Texture &indexTextureFor(const GSDrawState &s)
++    // Tekken 4 port (perf): rows of an index texture decoded on demand. The game declares big texture sizes (T8 1024x1024,
++    // 128x1024) and samples a small part of them; every new upload into such an area re-decoded the whole declared
++    // size (Arena: ~41 decodes of up to 1M texels per frame, GSMem::ReadIndexRun ~49% of the GL thread). draw() passes
++    // the rows its vertices can sample (needLo/needHi, all rows when unknown or when the addressing wraps); a tall
++    // texture is then decoded only there and grown when a later draw needs more. PS2X_GL_PARTIAL_ROWS=0: off.
++    static bool partialRows()
++    {
++        static const bool on = []
++        {
++            const char *value = std::getenv("PS2X_GL_PARTIAL_ROWS");
++            return !value || *value != '0';
++        }();
++        return on;
++    }
++
++    // The texture rows the batch's vertices can sample: [lo, hi). All rows (lo 0, hi ~0) when the addressing may wrap or
++    // the coordinates are not finite. Perspective-correct interpolation stays inside the vertices' range.
++    static void sampledRows(const GSDrawState &s, const std::vector<HwVertex> &verts, uint32_t &lo, uint32_t &hi)
++    {
++        lo = 0u, hi = ~0u;
++        if (verts.empty())
++            return;
++        const float texH = static_cast<float>(std::max<uint16_t>(s.textureHeight, 1));
++        float v0 = 1e30f, v1 = -1e30f;
++        for (const HwVertex &v : verts)
++        {
++            float tv;
++            if (s.prim.fst || v.cu0 > -1e29f) // sprites carry texel coordinates
++                tv = v.v;
++            else
++            {
++                const float q = std::fabs(v.q) < 1e-30f ? 1e-30f : v.q;
++                tv = v.t / q * texH;
++            }
++            if (!(tv == tv) || std::fabs(tv) > 1e7f)
++                return;
++            v0 = std::min(v0, tv), v1 = std::max(v1, tv);
++        }
++        const uint32_t wmt = static_cast<uint32_t>((s.context.clamp >> 2) & 3u);
++        float a = std::floor(v0) - 2.0f, b = std::floor(v1) + 3.0f; // filtering and rounding margin
++        if (wmt == 0u) // REPEAT: only when nothing wraps
++        {
++            if (v0 < 0.0f || v1 >= texH)
++                return;
++            a = std::max(a, 0.0f), b = std::min(b, texH);
++        }
++        else if (wmt == 1u) // CLAMP
++            a = std::max(a, 0.0f), b = std::min(b, texH);
++        else if (wmt == 2u) // REGION_CLAMP: inside [MINV, MAXV]
++        {
++            const float minv = static_cast<float>((s.context.clamp >> 24) & 0x3FFu), maxv = static_cast<float>((s.context.clamp >> 34) & 0x3FFu);
++            a = std::max(std::min(a, maxv), minv), b = std::min(std::max(b, minv + 1.0f), maxv + 1.0f);
++            a = std::max(a, 0.0f), b = std::min(b, texH);
++        }
++        else
++            return; // REGION_REPEAT
++        if (b <= a)
++            return;
++        lo = static_cast<uint32_t>(a), hi = static_cast<uint32_t>(b);
++    }
++
++    void decodeIndexRows(Texture &tex, const GSTex0Reg &t, uint32_t y0, uint32_t y1)
++    {
++        if (y1 <= y0)
++            return;
++        std::vector<uint8_t> &rows = decodeScratch;
++        rows.resize(static_cast<size_t>(tex.width) * (y1 - y0));
++        for (uint32_t y = y0; y < y1; ++y)
++            GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width, rows.data() + static_cast<size_t>(y - y0) * tex.width);
++        const Api &g = gl();
++        g.BindTexture(kTexture2D, tex.id);
++        g.PixelStorei(kUnpackAlignment, 1);
++        g.TexSubImage2D(kTexture2D, 0, 0, static_cast<GLint>(y0), tex.width, y1 - y0, 0x1903 /*RED*/, kUnsignedByte, rows.data());
++    }
++
++    Texture &indexTextureFor(const GSDrawState &s, uint32_t needLo = 0u, uint32_t needHi = ~0u)
+     {
+         const GSTex0Reg &t = s.context.tex0;
+         const uint64_t key = (1ull << 63) | t.tbp0 | (static_cast<uint64_t>(t.tbw) << 14) | (static_cast<uint64_t>(t.psm & 63) << 20) |
+                              (static_cast<uint64_t>(s.textureWidth) << 26) | (static_cast<uint64_t>(s.textureHeight) << 38);
+         Texture &tex = textures[key];
+         tex.lastUse = ++useCounter;
++        const uint32_t fullH = std::max<uint32_t>(1u, s.textureHeight), fullW = std::max<uint32_t>(1u, s.textureWidth);
++        needHi = std::min(needHi, fullH);
++        needLo = std::min(needLo, needHi);
++        const bool wantPartial = partialRows() && fullH >= 128u && needHi > needLo && (needHi - needLo) * 2u <= fullH;
++        if (tex.valid && tex.partial)
++        {
++            // rows uploaded again since (same layout): re-decode those that are decoded
++            if (tex.dirtyY1 > tex.dirtyY0)
++            {
++                ++stats.texRowDecodes, PS2_PERF_COUNT(texRowDecodes);
++                decodeIndexRows(tex, t, std::max(tex.dirtyY0, tex.rowLo), std::min(tex.dirtyY1, tex.rowHi));
++                tex.dirtyY0 = tex.dirtyY1 = 0;
++            }
++            // grow the decoded range to cover the rows this draw samples (and the gap between)
++            const uint32_t lo = std::min(needLo, tex.rowLo), hi = std::max(needHi, tex.rowHi);
++            if (lo < tex.rowLo || hi > tex.rowHi)
++            {
++                PS2_PERF_COUNT(texRowDecodes);
++                decodeIndexRows(tex, t, lo, tex.rowLo);
++                decodeIndexRows(tex, t, tex.rowHi, hi);
++                tex.rowLo = lo, tex.rowHi = hi;
++            }
++            ++stats.texHits;
++            return tex;
++        }
++        if (!tex.valid && wantPartial)
++        {
++            ++stats.texDecodes, PS2_PERF_COUNT(texDecodes);
++            noteDecode(t.tbp0, t.psm, s.textureWidth, s.textureHeight, true, 0u);
++            const Api &g = gl();
++            const bool sameLayout = tex.id && tex.indexed && tex.width == fullW && tex.height == fullH;
++            for (const Texture::Version &v : tex.versions)
++                g.DeleteTextures(1, &v.id);
++            tex.versions.clear();
++            tex.width = fullW;
++            tex.height = fullH;
++            tex.contentHash = 0u; // partial content is never revalidated by hash
++            tex.indexed = true;
++            tex.tbp = t.tbp0;
++            tex.tbw = t.tbw;
++            tex.psm = static_cast<uint8_t>(t.psm & 63u);
++            tex.dirtyY0 = tex.dirtyY1 = 0;
++            tex.blockLo = t.tbp0;
++            tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
++            if (!tex.id)
++                g.GenTextures(1, &tex.id);
++            if (!sameLayout)
++            {
++                g.BindTexture(kTexture2D, tex.id);
++                g.TexImage2D(kTexture2D, 0, 0x8229 /*R8*/, tex.width, tex.height, 0, 0x1903 /*RED*/, kUnsignedByte, nullptr);
++                g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
++                g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
++            }
++            decodeIndexRows(tex, t, needLo, needHi);
++            tex.partial = true;
++            tex.rowLo = needLo;
++            tex.rowHi = needHi;
++            markValid(tex);
++            if (textures.size() > 6000u)
++                evictOld();
++            return tex;
++        }
+         if (tex.valid && tex.dirtyY1 > tex.dirtyY0)
+         {
+             ++stats.texRowDecodes, PS2_PERF_COUNT(texRowDecodes);
+@@ -1199,6 +1377,12 @@ struct GSHwBackend::Impl
+         // Tekken 4 port: invalidated by an upload of the same bytes (the game re-uploads its character textures every
+         // frame): the raw blocks hash as before, so the decoded indices are still right.
+         const uint64_t contentHash = hashBlocks(t.tbp0, t.tbp0 + spanBlocks(t.psm, t.tbw, std::max<uint32_t>(1u, s.textureHeight)));
++        // (a partial texture left behind is decoded whole below: never revalidated, never kept as a version)
++        if (tex.partial)
++            tex.contentHash = 0u;
++        tex.partial = false;
++        tex.rowLo = 0u;
++        tex.rowHi = fullH;
+         if (contentHash != 0u && tex.id && tex.contentHash == contentHash && tex.indexed &&
+             tex.width == std::max<uint32_t>(1u, s.textureWidth) && tex.height == std::max<uint32_t>(1u, s.textureHeight))
+         {
+@@ -1252,6 +1436,7 @@ struct GSHwBackend::Impl
+             tex.versions.clear();
+         }
+         ++stats.texDecodes, PS2_PERF_COUNT(texDecodes);
++        noteDecode(t.tbp0, t.psm, s.textureWidth, s.textureHeight, true, contentHash);
+         classifyTexture(s);
+         tex.width = std::max<uint32_t>(1u, s.textureWidth);
+         tex.height = std::max<uint32_t>(1u, s.textureHeight);
+@@ -2580,7 +2765,10 @@ struct GSHwBackend::Impl
+             if (rsrc == &rt)
+                 g.TextureBarrier();
+             const bool indexed = !(src || rsrc || zsrc) && isIndexed(c.tex0.psm) && vram != nullptr;
+-            Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s) : textureFor(s);
++            uint32_t needLo = 0u, needHi = ~0u;
++            if (indexed)
++                sampledRows(s, verts, needLo, needHi);
++            Texture &tex = (src || rsrc || zsrc) ? dummy : indexed ? indexTextureFor(s, needLo, needHi) : textureFor(s);
+             g.Uniform1i(locIndexed, indexed ? 1 : 0);
+             g.Uniform1i(locLinear, s.linearFilter ? 1 : 0);
+             // Tekken 4 port: the CLAMP modes as they are (region modes for every texture source but depth/reinterpret)
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,171 @@
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index f478189..a48a46f 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -613,6 +613,8 @@ struct GSHwBackend::Impl
+         uint64_t draws = 0, batches = 0, skippedPsm = 0, unsupportedBlend = 0, texDecodes = 0, texRowDecodes = 0, texRevalidated = 0, texHits = 0, skippedPrim = 0, clutReadbacks = 0, clutRtHits = 0;
+         // Tekken 4 port: what ended each batch (FlushWhy) and, for state changes, which part of the state differed
+         uint64_t flushWhy[10] = {};
++        uint64_t rtUploads = 0; // Tekken 4 port: uploads also written into a render target
++        std::map<std::string, uint64_t> transfers; // Tekken 4 port: "dir dbp dbw dpsm wxh" -> count per stats window
+         uint64_t stateDiff[24] = {};
+         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+     } stats;
+@@ -1274,14 +1276,67 @@ struct GSHwBackend::Impl
+     bool uploadedSinceDraw(const RenderTarget &t, uint32_t tbp) const
+     {
+         const uint32_t tlo = t.fbp * 32u;
+-        if (tbp >= tlo && tbp - tlo < t.blockUploadSeq.size() && t.blockUploadSeq[tbp - tlo] > t.lastDrawSeq)
+-            return true;
+-        // Tekken 4 port: the log is in writeSeq order, so only its tail after the target's last draw can match (the full
+-        // scan of up to 4096 records per textured draw was 18% of the GL thread in a fight).
+-        for (auto u = uploadLog.rbegin(); u != uploadLog.rend() && u->seq > t.lastDrawSeq; ++u)
+-            if (u->lo <= tbp && tbp < u->hi)
+-                return true;
+-        return false;
++        // Tekken 4 port: the per-block record replaces the scan of the (trimmed) upload log; it is cleared where an upload
++        // was also written into the target (applyRtUpload), so those blocks come from the target again.
++        return tbp >= tlo && tbp - tlo < t.blockUploadSeq.size() && t.blockUploadSeq[tbp - tlo] > t.lastDrawSeq;
++    }
++
++    // Tekken 4 port: a host->local transfer to a render target's base in its own format and width (the intro movie's
++    // pictures go into the back buffer as 16x448 columns) is also written into the target's GL texture, once its data has
++    // arrived (the next flush). Without it the target kept its old picture and the movie stayed black.
++    GSTransferCommand rtUpload{};
++    bool rtUploadPending = false;
++
++    RenderTarget *rtUploadTarget(const GSTransferCommand &c)
++    {
++        const uint32_t dpsm = c.bitbltbuf.dpsm & 0x3Fu;
++        if (dpsm != GS_PSM_CT32 && dpsm != GS_PSM_CT24 && dpsm != GS_PSM_CT16 && dpsm != GS_PSM_CT16S)
++            return nullptr;
++        if ((c.bitbltbuf.dbp % 32u) != 0u)
++            return nullptr;
++        RenderTarget *t = findTarget(c.bitbltbuf.dbp / 32u);
++        // pixel (x, y) maps to target pixel (x, y) for any width up to the target's, like draws (target())
++        if (!t || t->psm != dpsm || t->fbw < c.bitbltbuf.dbw)
++            return nullptr;
++        if (c.trxpos.dsax + c.trxreg.rrw > t->pxW || c.trxpos.dsay + c.trxreg.rrh > t->pxH || scale != 1.0f)
++            return nullptr;
++        return t;
++    }
++
++    void applyRtUpload()
++    {
++        if (!rtUploadPending)
++            return;
++        rtUploadPending = false;
++        const GSTransferCommand &c = rtUpload;
++        RenderTarget *t = initialized && vram ? rtUploadTarget(c) : nullptr;
++        if (!t)
++            return;
++        const uint32_t x0 = c.trxpos.dsax, y0 = c.trxpos.dsay, w = c.trxreg.rrw, h = c.trxreg.rrh;
++        if (w == 0u || h == 0u)
++            return;
++        const bool sixteen = family16(t->psm);
++        std::vector<uint32_t> pixels(static_cast<size_t>(w) * h);
++        for (uint32_t y = 0; y < h; ++y)
++        {
++            uint32_t *line = pixels.data() + static_cast<size_t>(y) * w;
++            GSMem::ReadColorRun(vram, t->psm, c.bitbltbuf.dbp, c.bitbltbuf.dbw, x0, y0 + y, w, line);
++            if (sixteen)
++                for (uint32_t x = 0; x < w; ++x)
++                    line[x] = GSCpuInternal::Rgba5551ToRgba8888(static_cast<uint16_t>(line[x]));
++        }
++        const Api &g = gl();
++        g.BindTexture(kTexture2D, t->color);
++        g.PixelStorei(kUnpackAlignment, 4);
++        g.TexSubImage2D(kTexture2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), w, h, kRgba, kUnsignedByte, pixels.data());
++        t->usedW = std::max(t->usedW, x0 + w);
++        t->usedH = std::max(t->usedH, y0 + h);
++        ++t->version;
++        // the target holds these blocks now
++        const uint32_t tlo = t->fbp * 32u, lo = c.bitbltbuf.dbp, hi = lo + spanBlocks(c.bitbltbuf.dpsm, c.bitbltbuf.dbw, y0 + h);
++        for (uint32_t b = std::max(lo, tlo); b < hi && b - tlo < t->blockUploadSeq.size(); ++b)
++            t->blockUploadSeq[b - tlo] = 0u;
++        ++stats.rtUploads;
+     }
+ 
+     void setupReinterpret(const GSDrawState &s, RenderTarget &rt)
+@@ -1905,6 +1960,7 @@ struct GSHwBackend::Impl
+ 
+     void flushPending(FlushWhy why = WhyOther)
+     {
++        applyRtUpload();
+         ++batchSerial; // the next sprite starts a new batch: no seam with the previous one
+         flushShuffle();
+         if (havePending && !pending.empty())
+@@ -2214,9 +2270,23 @@ struct GSHwBackend::Impl
+             const auto family = [](uint8_t psm) { return (psm == GS_PSM_CT16 || psm == GS_PSM_CT16S) ? 16 : (psm == GS_PSM_CT32 || psm == GS_PSM_CT24) ? 32 : 0; };
+             if (family(c.tex0.psm) != 0 && (c.tex0.tbp0 % 32u) == 0u)
+                 if (RenderTarget *candidate = findTarget(c.tex0.tbp0 / 32u))
++                {
+                     if (family(candidate->psm) == family(c.tex0.psm) && !uploadedSinceDraw(*candidate, c.tex0.tbp0) &&
+                         !overwrittenByDepth(*candidate))
+                         src = candidate;
++                    if (statsEnabled)
++                    {
++                        // Tekken 4 port: textures at a target's base, sampled from it or from the store (first sighting)
++                        static std::vector<uint64_t> seenRt;
++                        const uint64_t key = (static_cast<uint64_t>(c.tex0.tbp0) << 8) | (src ? 1u : 0u);
++                        if (seenRt.size() < 64u && std::find(seenRt.begin(), seenRt.end(), key) == seenRt.end())
++                        {
++                            seenRt.push_back(key);
++                            std::fprintf(stderr, "[gs-hw] rt texture tbp=%x tpsm=%u target fbp=%u psm=%u -> %s\n", c.tex0.tbp0, c.tex0.psm,
++                                         candidate->fbp, candidate->psm, src ? "target" : "store");
++                        }
++                    }
++                }
+             if (src == &rt)
+                 g.TextureBarrier();
+             Texture dummy;
+@@ -2513,7 +2583,8 @@ struct GSHwBackend::Impl
+                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
+                      (unsigned long long)stats.unsupportedBlend, textures.size());
+         {
+-            std::string why = "[gs-hw] batch ends:";
++            std::string why = "[gs-hw] rtUploads=" + std::to_string(stats.rtUploads) + " batch ends:";
++            stats.rtUploads = 0;
+             char item[48];
+             for (int i = 0; i < 10; ++i)
+                 if (stats.flushWhy[i])
+@@ -2524,6 +2595,13 @@ struct GSHwBackend::Impl
+                     std::snprintf(item, sizeof(item), " %s=%llu", kStateDiffNames[i], (unsigned long long)stats.stateDiff[i]), why += item;
+             std::fprintf(stderr, "%s\n", why.c_str());
+             std::memset(stats.flushWhy, 0, sizeof(stats.flushWhy));
++            std::vector<std::pair<uint64_t, std::string>> top;
++            for (const auto &kv : stats.transfers)
++                top.emplace_back(kv.second, kv.first);
++            std::sort(top.rbegin(), top.rend());
++            for (size_t i = 0; i < top.size() && i < 12u; ++i)
++                std::fprintf(stderr, "[gs-hw] transfers x%llu %s\n", (unsigned long long)top[i].first, top[i].second.c_str());
++            stats.transfers.clear();
+             std::memset(stats.stateDiff, 0, sizeof(stats.stateDiff));
+         }
+         stats.shuffles = stats.draws = stats.batches = stats.texDecodes = stats.texRowDecodes = stats.texRevalidated = stats.clutReadbacks = stats.clutRtHits = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
+@@ -2605,6 +2683,13 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
+     Impl &d = *m_impl;
+     d.flushPending(Impl::WhyTransfer);
+     d.store.BeginTransfer(command);
++    if (d.statsEnabled && d.stats.transfers.size() < 4096u)
++    {
++        char key[96];
++        std::snprintf(key, sizeof(key), "dir=%u dbp=%x dbw=%u dpsm=%u %ux%u", command.direction, command.bitbltbuf.dbp,
++                      command.bitbltbuf.dbw, command.bitbltbuf.dpsm, command.trxreg.rrw, command.trxreg.rrh);
++        ++d.stats.transfers[key];
++    }
+     d.noteTransfer(command);
+     if (command.direction == 0u || command.direction == 2u)
+     {
+@@ -2631,6 +2716,11 @@ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
+             d.uploadLog.erase(d.uploadLog.begin(), d.uploadLog.begin() + 2048);
+         d.uploadLog.push_back({lo, hi, ++d.writeSeq});
+         d.noteUploadOnTargets(lo, hi, d.writeSeq);
++        if (command.direction == 0u && d.rtUploadTarget(command))
++        {
++            d.rtUpload = command;
++            d.rtUploadPending = true;
++        }
+     }
+ }
+ 

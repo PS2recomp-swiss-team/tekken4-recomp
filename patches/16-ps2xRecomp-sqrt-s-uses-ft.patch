@@ -1,0 +1,28 @@
+diff --git a/ps2xRecomp/src/lib/fpu_translator.cpp b/ps2xRecomp/src/lib/fpu_translator.cpp
+--- a/ps2xRecomp/src/lib/fpu_translator.cpp
++++ b/ps2xRecomp/src/lib/fpu_translator.cpp
+@@ -58,7 +58,8 @@ namespace ps2recomp
+                                    "ctx->f[{}] = FPU_DIV_S(ctx->f[{}], ctx->f[{}]); }}",
+                                    ft, fd, fs, ft);
+             case COP1_S_SQRT:
+-                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, fs);
++                // EE SQRT.S is "SQRT.S fd, ft": the radicand is in the ft field and fs is unused (0).
++                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, ft);
+             case COP1_S_ABS:
+                 return fmt::format("ctx->f[{}] = FPU_ABS_S(ctx->f[{}]);", fd, fs);
+             case COP1_S_MOV:
+diff --git a/ps2xTest/src/ps2_float_semantics_tests.cpp b/ps2xTest/src/ps2_float_semantics_tests.cpp
+--- a/ps2xTest/src/ps2_float_semantics_tests.cpp
++++ b/ps2xTest/src/ps2_float_semantics_tests.cpp
+@@ -223,6 +223,11 @@ void register_ps2_float_semantics_tests()
+             const std::string rsqrt = gen.translateInstruction(makeCop1S(COP1_S_RSQRT, 2, 3, 4));
+             t.IsTrue(rsqrt.find("ctx->f[2] = FPU_RSQRT_S(ctx->f[3], ctx->f[4])") != std::string::npos,
+                      "RSQRT.S should compute fs / sqrt(ft) but got: " + rsqrt);
++
++            // EE SQRT.S fd, ft: the radicand is the ft field (fs is 0 in real code; distinct here to catch a mix-up).
++            const std::string sqrt = gen.translateInstruction(makeCop1S(COP1_S_SQRT, 2, 3, 4));
++            t.IsTrue(sqrt.find("ctx->f[2] = FPU_SQRT_S(ctx->f[4])") != std::string::npos,
++                     "SQRT.S should write sqrt(ft) to fd but got: " + sqrt);
+         });
+     });
+ }

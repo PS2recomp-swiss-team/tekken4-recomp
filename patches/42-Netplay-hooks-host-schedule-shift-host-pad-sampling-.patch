@@ -1,0 +1,167 @@
+From 79de57a4aabfb5c0908f57e697c474c53d584af0 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 04:40:59 +0100
+Subject: [PATCH 42/42] Netplay hooks: host-schedule shift, host pad sampling,
+ OS-level runner sources
+
+EeScheduler::shiftHostDeadlines moves the host time of every pending deadline (the guest sees the same
+cycles and events): a netplay loop that waited for its peer, gave up a frame for time sync, or restored a
+snapshot (whose deadlines carry the capture's host times) puts the pacing back on its own schedule.
+nextVblankHostDeadline: the host time of the next VBlankStart.
+
+ps2_stubs::sampleHostPad: this PC's controls now (keyboard + first gamepad, keyboard only, or the n-th
+gamepad), whatever the pad provider says: the netplay loop samples its player's input at the boundary.
+
+CMake: src/runner/*_net*.cpp (a game's netplay transport: Winsock / windows.h, which clash with raylib)
+compile outside the unity batches and the runtime PCH, and the runner links ws2_32 then.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/CMakeLists.txt                 | 12 +++++++
+ ps2xRuntime/include/runtime/ee_scheduler.h |  4 +++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 22 ++++++++++++
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp   | 42 ++++++++++++++++++++++
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.h     |  3 ++
+ 5 files changed, 83 insertions(+)
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 67eda7e..b077784 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -471,6 +471,18 @@ if(PS2X_ENABLE_RUNNER_UNITY_BUILD)
+     )
+ endif()
+ 
++# Runner sources that use the OS directly (a game's netplay transport: Winsock / windows.h, which clash with raylib
++# in a unity batch or behind the runtime PCH): src/runner/*_net*.cpp compile on their own.
++file(GLOB PS2X_RUNNER_OS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/*_net*.cpp")
++if(PS2X_RUNNER_OS_SOURCES)
++    set_source_files_properties(${PS2X_RUNNER_OS_SOURCES} PROPERTIES
++        SKIP_UNITY_BUILD_INCLUSION ON
++        SKIP_PRECOMPILE_HEADERS ON)
++    if(WIN32)
++        target_link_libraries(ps2EntryRunner PRIVATE ws2_32)
++    endif()
++endif()
++
+ if(PS2X_ENABLE_RUNNER_PCH)
+     set(PS2X_RUNNER_PCH_HEADERS
+         "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_runtime_macros.h"
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 3bfbe45..3c1e9cd 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -388,6 +388,10 @@ public:
+     [[nodiscard]] uint64_t eeCycle() const noexcept { return m_eeCycle; }
+     // Host time the executor spent waiting for pacing deadlines (rollback mode only; 0 otherwise).
+     [[nodiscard]] uint64_t hostWaitNanoseconds() const noexcept { return m_hostWaitNs; }
++    // Netplay pacing: moves the host time of every pending deadline by delta (EE cycles and the guest's view are
++    // unchanged; only when the executor waits for them). The host time of the next VBlankStart, {} if none.
++    void shiftHostDeadlines(std::chrono::steady_clock::duration delta);
++    [[nodiscard]] std::chrono::steady_clock::time_point nextVblankHostDeadline() const;
+ 
+     struct ScheduledEvent
+     {
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 04932bc..6341f0b 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1828,6 +1828,28 @@ void EeScheduler::processPendingEvents()
+     applyPendingPreemption();
+ }
+ 
++void EeScheduler::shiftHostDeadlines(std::chrono::steady_clock::duration delta)
++{
++    std::lock_guard lock(m_eventMutex);
++    for (ScheduledEvent &item : m_deadlines)
++        item.hostDeadline += delta;
++    m_eventCv.notify_all();
++}
++
++std::chrono::steady_clock::time_point EeScheduler::nextVblankHostDeadline() const
++{
++    std::lock_guard lock(m_eventMutex);
++    std::chrono::steady_clock::time_point best{};
++    uint64_t bestCycle = std::numeric_limits<uint64_t>::max();
++    for (const ScheduledEvent &item : m_deadlines)
++        if (item.event.type == EeEventType::VBlankStart && item.deadlineCycle < bestCycle)
++        {
++            bestCycle = item.deadlineCycle;
++            best = item.hostDeadline;
++        }
++    return best;
++}
++
+ void EeScheduler::processDueDeadlines()
+ {
+     for (;;)
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index b8553f9..5b6d965 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -942,6 +942,48 @@ namespace ps2_stubs
+         g_padInputProvider = provider;
+     }
+ 
++    bool sampleHostPad(PS2Runtime *runtime, int device, uint16_t &buttons, uint8_t (&axes)[4])
++    {
++        PadInputState state;
++        bool read = false;
++        if (device == 0)
++        {
++            uint8_t backendData[32]{};
++            if (runtime && runtime->padBackend().readState(0, 0, backendData, sizeof(backendData)))
++            {
++                state.buttons = static_cast<uint16_t>(backendData[2] | (backendData[3] << 8));
++                state.rx = backendData[4];
++                state.ry = backendData[5];
++                state.lx = backendData[6];
++                state.ly = backendData[7];
++                read = true;
++            }
++            else
++            {
++                applyGamepadState(state, findFirstGamepad());
++                applyKeyboardState(state, false);
++                read = IsWindowReady();
++            }
++        }
++        else if (device < 0)
++        {
++            applyKeyboardState(state, false);
++            read = IsWindowReady();
++        }
++        else
++        {
++            const int gamepad = findNthGamepad(device - 1);
++            applyGamepadState(state, gamepad);
++            read = gamepad >= 0;
++        }
++        buttons = state.buttons;
++        axes[0] = state.rx;
++        axes[1] = state.ry;
++        axes[2] = state.lx;
++        axes[3] = state.ly;
++        return read;
++    }
++
+     std::vector<uint8_t> savePadState()
+     {
+         std::lock_guard<std::mutex> lock(g_padStateMutex);
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h
+index b862d56..7454c51 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h
+@@ -44,6 +44,9 @@ namespace ps2_stubs
+     // port is connected when the provider returns true. nullptr restores live input.
+     using PadInputProvider = bool (*)(int port, uint16_t &buttons, uint8_t (&axes)[4]);
+     void setPadInputProvider(PadInputProvider provider);
++    // Netplay: this PC's player's controls now, whatever the provider says (active-low buttons, axes rx ry lx ly).
++    // device 0 = keyboard + first host gamepad (port 1's usual input), -1 = keyboard only, n >= 1 = n-th gamepad.
++    bool sampleHostPad(PS2Runtime *runtime, int device, uint16_t &buttons, uint8_t (&axes)[4]);
+     // Guest-visible pad stub state (port modes, request states, frame count) for rollback snapshots.
+     std::vector<uint8_t> savePadState();
+     void loadPadState(const std::vector<uint8_t> &in);
+-- 
+2.55.0.windows.3
+

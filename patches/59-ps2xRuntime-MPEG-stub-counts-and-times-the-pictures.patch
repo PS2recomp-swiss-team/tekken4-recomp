@@ -1,0 +1,107 @@
+From d578f3c7073dad435b6c8a6bb73b7b524023f577 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 02:41:56 +0100
+Subject: [PATCH] ps2xRuntime: MPEG stub counts and times the pictures it hands
+ out
+
+mpegPicturesServed(): pictures sceMpegGetPicture has handed out since start. mpegServeStats(reset): their wall-clock
+intervals (buckets <20, 20-28, 28-38, 38-45, 45-60, >=60 ms, max, sum). Tekken 4's override starts the movie sound
+with the first picture and measures A/V offset and stutter with them (the player loop runs the whole movie inside
+one call, so the game side has no per-picture hook).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp | 39 +++++++++++++++++++++++
+ ps2xRuntime/src/lib/Kernel/Stubs/MPEG.h   | 12 +++++++
+ 2 files changed, 51 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+index f30d8d4..96bbc80 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+@@ -9,6 +9,8 @@
+ #if PS2X_HAS_FFMPEG
+ extern "C"
+ {
++#include <atomic>
++#include <chrono>
+ #include <libavcodec/avcodec.h>
+ #include <libavutil/error.h>
+ #include <libavutil/log.h>
+@@ -2285,6 +2287,28 @@ namespace ps2_stubs
+         setReturnU32(ctx, getPlaybackState(mpegAddr).decodeMode);
+     }
+ 
++    namespace
++    {
++        std::atomic<uint32_t> g_mpegPicturesServedTotal{0u};
++        std::mutex g_mpegServeMutex;
++        MpegServeStats g_mpegServe;
++        std::chrono::steady_clock::time_point g_mpegLastServe{};
++    }
++
++    uint32_t mpegPicturesServed() noexcept
++    {
++        return g_mpegPicturesServedTotal.load(std::memory_order_relaxed);
++    }
++
++    MpegServeStats mpegServeStats(bool reset)
++    {
++        std::lock_guard<std::mutex> lock(g_mpegServeMutex);
++        const MpegServeStats out = g_mpegServe;
++        if (reset)
++            g_mpegServe = MpegServeStats{};
++        return out;
++    }
++
+     void sceMpegGetPicture(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         const uint32_t mpegAddr = getRegU32(ctx, 4);
+@@ -2371,6 +2395,21 @@ namespace ps2_stubs
+                 height = playback.height;
+                 frameCount = playback.picturesServed;
+                 playback.picturesServed += 1u;
++                g_mpegPicturesServedTotal.fetch_add(1u, std::memory_order_relaxed);
++                {
++                    const auto now = std::chrono::steady_clock::now();
++                    std::lock_guard<std::mutex> statsLock(g_mpegServeMutex);
++                    if (g_mpegServe.count != 0u)
++                    {
++                        const double ms = std::chrono::duration<double, std::milli>(now - g_mpegLastServe).count();
++                        const int bucket = ms < 20.0 ? 0 : ms < 28.0 ? 1 : ms < 38.0 ? 2 : ms < 45.0 ? 3 : ms < 60.0 ? 4 : 5;
++                        ++g_mpegServe.intervals[bucket];
++                        g_mpegServe.maxIntervalMs = std::max(g_mpegServe.maxIntervalMs, ms);
++                        g_mpegServe.spanMs += ms;
++                    }
++                    ++g_mpegServe.count;
++                    g_mpegLastServe = now;
++                }
+                 playback.nextPictureTickQ32 = presentationTargetQ32 + frameIntervalQ32;
+                 playback.presentationEndTickQ32 = playback.nextPictureTickQ32;
+                 haveFrame = true;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.h b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.h
+index c571a63..be01a52 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.h
+@@ -29,6 +29,18 @@ namespace ps2_stubs
+     void sceMpegDispWidth(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMpegGetDecodeMode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMpegGetPicture(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
++    // Pictures sceMpegGetPicture has handed out since start (all movies): a game override can time them.
++    uint32_t mpegPicturesServed() noexcept;
++    // Wall-clock timing of the pictures sceMpegGetPicture handed out (since the last reset): count, intervals
++    // between consecutive pictures in buckets <20, 20-28, 28-38, 38-45, 45-60, >=60 ms, the largest, their sum.
++    struct MpegServeStats
++    {
++        uint32_t count = 0;
++        uint32_t intervals[6] = {};
++        double maxIntervalMs = 0.0;
++        double spanMs = 0.0;
++    };
++    MpegServeStats mpegServeStats(bool reset = false);
+     void sceMpegGetPictureRAW8(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMpegGetPictureRAW8xy(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMpegInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-- 
+2.55.0.windows.3
+

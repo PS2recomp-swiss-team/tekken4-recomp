@@ -1,0 +1,293 @@
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index f597629..c450392 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -576,14 +576,48 @@ struct GSHwBackend::Impl
+     struct UploadRecord { uint32_t lo, hi; uint64_t seq; };
+     std::vector<UploadRecord> uploadLog;
+     uint64_t clutHash = 0;
++    // Tekken 4 port: the CLUT a pending batch was started with and its palette, resolved when the batch starts. A CLUT
++    // load then only ends the batch when the next indexed draw sees a different CLUT, instead of on every TEX0 write
++    // (Tekken writes the same TEX0 with CLD=1 before each strip: 92% of the batches in a fight ended there).
++    uint64_t pendingClutHash = 0;
++    GLuint pendingPalette = 0;
+ 
+     struct Stats
+     {
+         uint64_t shuffles = 0;
+         uint64_t draws = 0, batches = 0, skippedPsm = 0, unsupportedBlend = 0, texDecodes = 0, texRowDecodes = 0, texRevalidated = 0, texHits = 0, skippedPrim = 0, clutReadbacks = 0, clutRtHits = 0;
++        // Tekken 4 port: what ended each batch (FlushWhy) and, for state changes, which part of the state differed
++        uint64_t flushWhy[10] = {};
++        uint64_t stateDiff[24] = {};
+         std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+     } stats;
+     bool statsEnabled = std::getenv("GOW_GS_HW_STATS") != nullptr;
++    enum FlushWhy { WhyOther, WhyState, WhyClut, WhyTransfer, WhyTexFlush, WhyFlush, WhySync, WhyClear, WhyPresent, WhyShuffle };
++    static constexpr const char *kFlushWhyNames[10] = {"other", "state", "clut", "xfer", "texflush", "flush", "sync", "clear", "present", "shuffle"};
++    static constexpr const char *kStateDiffNames[24] = {"frame", "scissor", "tex0", "xyoffset", "zbuf", "tex1", "clamp", "alpha", "test",
++                                                        "fba/mip", "type", "iip", "tme", "fge", "abe", "fst", "ctxt", "aa1/fix", "texa",
++                                                        "texclut", "misc", "fog", "texsize", "padding"};
++    void noteStateDiff(const GSDrawState &a, const GSDrawState &b)
++    {
++        const auto differs = [](const auto &x, const auto &y) { return std::memcmp(&x, &y, sizeof(x)) != 0; };
++        const GSContext &ca = a.context, &cb = b.context;
++        const bool d[23] = {differs(ca.frame, cb.frame), differs(ca.scissor, cb.scissor), differs(ca.tex0, cb.tex0),
++                            differs(ca.xyoffset, cb.xyoffset), differs(ca.zbuf, cb.zbuf), ca.tex1 != cb.tex1, ca.clamp != cb.clamp,
++                            ca.alpha != cb.alpha, ca.test != cb.test,
++                            ca.fba != cb.fba || ca.miptbp1 != cb.miptbp1 || ca.miptbp2 != cb.miptbp2, a.prim.type != b.prim.type,
++                            a.prim.iip != b.prim.iip, a.prim.tme != b.prim.tme, a.prim.fge != b.prim.fge, a.prim.abe != b.prim.abe,
++                            a.prim.fst != b.prim.fst, a.prim.ctxt != b.prim.ctxt, a.prim.aa1 != b.prim.aa1 || a.prim.fix != b.prim.fix,
++                            differs(a.texa, b.texa), differs(a.texclut, b.texclut),
++                            a.pabe != b.pabe || a.scanmsk != b.scanmsk || a.dimx != b.dimx || a.dthe != b.dthe || a.colclamp != b.colclamp,
++                            a.fogR != b.fogR || a.fogG != b.fogG || a.fogB != b.fogB,
++                            a.textureWidth != b.textureWidth || a.textureHeight != b.textureHeight || a.linearFilter != b.linearFilter};
++        bool any = false;
++        for (int i = 0; i < 23; ++i)
++            if (d[i])
++                ++stats.stateDiff[i], any = true;
++        if (!any)
++            ++stats.stateDiff[23];
++    }
+ 
+     const Api &gl() const { return context.gl(); }
+ 
+@@ -1223,7 +1257,13 @@ struct GSHwBackend::Impl
+         case GSSwizzle::Kind::Bits8: kind = 3; texelBits = 8; break;
+         default: kind = 3; texelBits = 4; break;
+         }
+-        if (kind == 3)
++        if (kind == 3 && pendingPalette)
++        {
++            // Tekken 4 port: the palette the batch started with (same BuildPalette colours); the CLUT may have changed since
++            g.ActiveTexture(kTexture0 + 3);
++            g.BindTexture(kTexture2D, pendingPalette);
++        }
++        else if (kind == 3)
+         {
+             uint32_t palette[256];
+             store.BuildPalette(s, palette);
+@@ -1552,7 +1592,7 @@ struct GSHwBackend::Impl
+             }
+         // queue: one GL pass per state run
+         if (havePending)
+-            flushPending();
++            flushPending(WhyShuffle);
+         if (haveShuffle && (!sameState(shuffleState, s) || shuffleDst != dst || shuffleSrc != src || shuffleSrcZ != srcDepth))
+             flushShuffle();
+         if (!haveShuffle)
+@@ -1686,12 +1726,21 @@ struct GSHwBackend::Impl
+                 dumpSkipped(s, b, "view");
+                 return;
+             }
++        const bool usesClut = s.prim.tme && isIndexed(s.context.tex0.psm);
+         if (havePending && !sameState(pendingState, s))
+-            flushPending();
++        {
++            if (statsEnabled)
++                noteStateDiff(pendingState, s);
++            flushPending(WhyState);
++        }
++        else if (havePending && usesClut && pendingClutHash != clutHash)
++            flushPending(WhyClut);
+         if (!havePending)
+         {
+             pendingState = s;
+             havePending = true;
++            pendingClutHash = clutHash;
++            pendingPalette = (usesClut && vram) ? paletteFor(s) : 0u;
+         }
+         const float zmax = zMaxFor(s.context.zbuf.psm);
+         const float texW = static_cast<float>(std::max<uint16_t>(s.textureWidth, 1)), texH = static_cast<float>(std::max<uint16_t>(s.textureHeight, 1));
+@@ -1811,10 +1860,12 @@ struct GSHwBackend::Impl
+         ++stats.draws;
+     }
+ 
+-    void flushPending()
++    void flushPending(FlushWhy why = WhyOther)
+     {
+         ++batchSerial; // the next sprite starts a new batch: no seam with the previous one
+         flushShuffle();
++        if (havePending && !pending.empty())
++            ++stats.flushWhy[why];
+         if (!havePending || pending.empty())
+         {
+             havePending = false;
+@@ -1829,6 +1880,7 @@ struct GSHwBackend::Impl
+         }
+         draw(pendingState, pending);
+         pending.clear();
++        pendingPalette = 0u;
+     }
+ 
+     void blendState(const GSDrawState &s, bool &enabled, GLenum &sf, GLenum &df, float &fixScale, float &constant, GLenum &equation, bool &soft)
+@@ -2132,7 +2184,7 @@ struct GSHwBackend::Impl
+             if (indexed)
+             {
+                 g.ActiveTexture(kTexture0 + 5);
+-                g.BindTexture(kTexture2D, paletteFor(s));
++                g.BindTexture(kTexture2D, pendingPalette ? pendingPalette : paletteFor(s));
+                 g.Uniform1i(locIdxPalette, 5);
+                 g.Uniform4i(locWrap, (c.clamp & 3u) == 0u ? 0 : 1, ((c.clamp >> 2) & 3u) == 0u ? 0 : 1, 0, 0);
+             }
+@@ -2385,6 +2437,20 @@ struct GSHwBackend::Impl
+                      (unsigned long long)stats.shuffles, (unsigned long long)stats.draws, (unsigned long long)stats.batches, (unsigned long long)stats.texDecodes, (unsigned long long)stats.texRowDecodes, (unsigned long long)stats.texRevalidated, (unsigned long long)stats.clutReadbacks, (unsigned long long)stats.clutRtHits,
+                      (unsigned long long)stats.texHits, (unsigned long long)stats.skippedPsm, (unsigned long long)stats.skippedPrim,
+                      (unsigned long long)stats.unsupportedBlend, textures.size());
++        {
++            std::string why = "[gs-hw] batch ends:";
++            char item[48];
++            for (int i = 0; i < 10; ++i)
++                if (stats.flushWhy[i])
++                    std::snprintf(item, sizeof(item), " %s=%llu", kFlushWhyNames[i], (unsigned long long)stats.flushWhy[i]), why += item;
++            why += " | state diffs:";
++            for (int i = 0; i < 24; ++i)
++                if (stats.stateDiff[i])
++                    std::snprintf(item, sizeof(item), " %s=%llu", kStateDiffNames[i], (unsigned long long)stats.stateDiff[i]), why += item;
++            std::fprintf(stderr, "%s\n", why.c_str());
++            std::memset(stats.flushWhy, 0, sizeof(stats.flushWhy));
++            std::memset(stats.stateDiff, 0, sizeof(stats.stateDiff));
++        }
+         stats.shuffles = stats.draws = stats.batches = stats.texDecodes = stats.texRowDecodes = stats.texRevalidated = stats.clutReadbacks = stats.clutRtHits = stats.texHits = stats.skippedPsm = stats.skippedPrim = stats.unsupportedBlend = 0;
+     }
+ 
+@@ -2420,6 +2486,7 @@ void GSHwBackend::Reset()
+     Impl &d = *m_impl;
+     d.flushPending();
+     d.store.Reset();
++    d.clutHash = d.store.ClutHash();
+     d.invertedZ.clear();
+     for (auto &kv : d.textures)
+         kv.second.valid = false;
+@@ -2438,24 +2505,30 @@ void GSHwBackend::Submit(const GSPrimitiveBatch &batch)
+ void GSHwBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
+ {
+     Impl &d = *m_impl;
+-    d.flushPending();
+     // Tekken 4 port: CLUTs come from the uploaded bytes. GoW read a CLUT whose blocks a render target drew over back from
+     // the GPU (synchronous ReadPixels); Tekken's T4 stage textures name CLUTs at cbp 0 (the back buffer) and those
+     // readbacks gave wrong palettes (the stage was invisible) and ~3 pipeline stalls per frame (34.9 -> 38.8 fps).
+     // TEKKEN4_GL_CLUT_RT=1 restores GoW's behaviour.
++    // No flush here: a pending batch keeps the palette it started with, and submit() ends it when the CLUT changed.
+     static const bool clutFromRt = std::getenv("TEKKEN4_GL_CLUT_RT") && std::getenv("TEKKEN4_GL_CLUT_RT")[0] == '1';
+     if (d.initialized && clutFromRt)
++    {
++        d.flushPending(Impl::WhyClut); // the readback must see every draw before it
+         d.store.LoadClut(tex0, texclut, [&d](const GSTex0Reg &t, uint32_t width, const uint16_t *xy, uint32_t count, uint32_t *words)
+                          { return d.clutFromTarget(t, width, xy, count, words); });
+-    else
+-        d.store.LoadClut(tex0, texclut);
+-    d.clutHash = d.store.ClutHash();
++        d.clutHash = d.store.ClutHash();
++        return;
++    }
++    if (!d.vram)
++        d.flushPending(Impl::WhyClut); // textureFor() decodes indexed textures through the current CLUT
++    if (d.store.LoadClut(tex0, texclut))
++        d.clutHash = d.store.ClutHash();
+ }
+ 
+ void GSHwBackend::BeginTransfer(const GSTransferCommand &command)
+ {
+     Impl &d = *m_impl;
+-    d.flushPending();
++    d.flushPending(Impl::WhyTransfer);
+     d.store.BeginTransfer(command);
+     d.noteTransfer(command);
+     if (command.direction == 0u || command.direction == 2u)
+@@ -2510,17 +2583,17 @@ void GSHwBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
+ 
+ void GSHwBackend::Flush()
+ {
+-    m_impl->flushPending();
++    m_impl->flushPending(Impl::WhyFlush);
+ }
+ 
+ void GSHwBackend::TextureFlush()
+ {
+-    m_impl->flushPending(); // textures are re-read from the store when an upload overlaps them, not on TEXFLUSH
++    m_impl->flushPending(Impl::WhyTexFlush); // textures are re-read from the store when an upload overlaps them, not on TEXFLUSH
+ }
+ 
+ void GSHwBackend::Sync(GSSyncReason)
+ {
+-    m_impl->flushPending();
++    m_impl->flushPending(Impl::WhySync);
+ }
+ 
+ bool GSHwBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
+@@ -2528,7 +2601,7 @@ bool GSHwBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
+     Impl &d = *m_impl;
+     if (!d.ensure() || context.frame.fbw == 0u)
+         return false;
+-    d.flushPending();
++    d.flushPending(Impl::WhyClear);
+     const Api &g = d.gl();
+     RenderTarget &rt = d.target(context.frame.fbp, context.frame.fbw);
+     g.BindFramebuffer(kFramebuffer, rt.fbo);
+@@ -2576,7 +2649,7 @@ PresentationFrame GSHwBackend::Present(const GSPresentationRequest &request)
+     PresentationFrame frame;
+     if (!d.ensure())
+         return frame;
+-    d.flushPending();
++    d.flushPending(Impl::WhyPresent);
+     ++d.presentCount;
+     d.dumpAfterSkip = false;
+     d.frameBatch = 0;
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.cpp
+index 0559376..227feb4 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.cpp
+@@ -82,25 +82,25 @@ void GSTextureStore::Reset()
+ 
+ // ---- CLUT ------------------------------------------------------------------------------------------------------------
+ 
+-void GSTextureStore::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const ClutSource &source)
++bool GSTextureStore::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const ClutSource &source)
+ {
+     const bool fourBit = isFourBitIndexedPsm(tex0.psm);
+     if (!m_vram || (!fourBit && !isEightBitIndexedPsm(tex0.psm)))
+-        return;
++        return false;
+     switch (tex0.cld) // CLD: 1 always, 2/3 always + set CBP0/1, 4/5 only when CBP differs from CBP0/1
+     {
+     case 1u: break;
+     case 2u: m_clutCbp[0] = tex0.cbp; break;
+     case 3u: m_clutCbp[1] = tex0.cbp; break;
+-    case 4u: if (m_clutCbp[0] == tex0.cbp) return; m_clutCbp[0] = tex0.cbp; break;
+-    case 5u: if (m_clutCbp[1] == tex0.cbp) return; m_clutCbp[1] = tex0.cbp; break;
+-    default: return;
++    case 4u: if (m_clutCbp[0] == tex0.cbp) return false; m_clutCbp[0] = tex0.cbp; break;
++    case 5u: if (m_clutCbp[1] == tex0.cbp) return false; m_clutCbp[1] = tex0.cbp; break;
++    default: return false;
+     }
+ 
+     const bool sixteenBit = tex0.cpsm == GS_PSM_CT16 || tex0.cpsm == GS_PSM_CT16S;
+     const bool thirtyTwoBit = tex0.cpsm == GS_PSM_CT32 || tex0.cpsm == GS_PSM_CT24;
+     if (!sixteenBit && !thirtyTwoBit)
+-        return;
++        return false;
+     const uint32_t entryCount = fourBit ? 16u : 256u;
+     const uint32_t destinationBase = (static_cast<uint32_t>(tex0.csa) & (sixteenBit ? 0x1Fu : 0x0Fu)) << 4u;
+     // CSM1 with a 32-bit 256-colour CLUT: entries below CSA*16 keep their previous values.
+@@ -142,6 +142,7 @@ void GSTextureStore::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut
+             m_clut[destination + 256u] = static_cast<uint16_t>(raw >> 16u);
+         }
+     }
++    return true;
+ }
+ 
+ uint64_t GSTextureStore::ClutHash() const
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.h b/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.h
+index ed807df..292bc76 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.h
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_texture_store.h
+@@ -26,7 +26,8 @@ public:
+     // TEX0.CBP and writes their raw words; returns false when that memory holds no render target.
+     using ClutSource = std::function<bool(const GSTex0Reg &tex0, uint32_t width, const uint16_t *xy, uint32_t count, uint32_t *words)>;
+     // TEX0 with an indexed PSM: load the CLUT when TEX0.CLD says so, from `source` or else from the uploaded bytes.
+-    void LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const ClutSource &source = {});
++    // Tekken 4 port: true when CLUT memory was written (CLD loads it), false when the TEX0 write left it as it was.
++    bool LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut, const ClutSource &source = {});
+     uint64_t ClutHash() const;
+     // 256-entry RGBA palette for the indexed texture described by `state` (CSA/CSM/CPSM + TEXA applied).
+     void BuildPalette(const GSDrawState &state, uint32_t out[256]) const;

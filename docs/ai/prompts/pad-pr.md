@@ -1,0 +1,8 @@
+OWNS: external/ps2recomp-pr8/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp,external/ps2recomp-pr8/ps2xTest/src/pad_input_tests.cpp
+TASK: turn patches/13-ps2xRuntime-pad-empty-port-disconnected.patch (your pad2-fix) into an upstream-ready PR in worktree external/ps2recomp-pr8 (branch pad-empty-port-disconnected = upstream ran-j/PS2Recomp main eb8688b). Work mode.
+CTX: the patch file; logs/grok/pad2-fix-notes.md; docs/status.md "Grok in the pipeline" (pad-2 finding: scePadGetState returned "stable" for any opened port, so port 2 looked plugged in: PRESS P2 START, VS BATTLE enabled; fixed: port 0 = keyboard + first host gamepad, port 1+ only with another host gamepad, an empty open port reads scePadStateDiscon, scePadRead returns 0 with data 0xFF, info/req calls 0).
+ASK: 1. apply the change to upstream's Pad.cpp (adapt if upstream differs); 2. tests in ps2xTest/src/pad_input_tests.cpp: empty port 1 reads Discon / scePadRead 0 / 0xFF data, port 0 unchanged, port 1 with a second gamepad connected behaves as before (mock what the test harness allows); 3. `cmd /c external\ps2recomp-pr8\build_pr_tests.cmd` (check logs\run.lock first; wait if held), all pass; 4. PR text in logs/grok/pad-pr-notes.md (title; problem; per-file changes; found while: Tekken 4 recomp, PRESS P2 START / VS BATTLE with one pad; verified with; last line "Made by Pablo and assisted with Claude Code and Grok.").
+TOOLS: one simple command per tool call; never chain with ; or && or set $env: inline.
+LIMITS: OWNS files + logs/grok/ only; no git write commands; never touch external/PS2Recomp.
+PACING: do not return the final JSON until the DOD is met or you are blocked after trying.
+DOD: tests pass in pr8 (count); diff = only OWNS files; PR notes; final JSON.

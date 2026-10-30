@@ -1,0 +1,181 @@
+From df392a6b270022e9b7ea1462c1e705504b1ac672 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:38:33 +0100
+Subject: [PATCH 50/55] GL backend: index textures keep up to 8 earlier decodes
+ per VRAM slot by content hash
+
+The game streams several textures through the same VRAM area per frame (Arena:
+~48 index-texture decodes per frame, GSMem::ReadIndexRun 47% of the GL thread).
+An invalidated slot whose raw blocks hash like an earlier decode takes that GL
+texture back instead of decoding again. Decode buffer reused. Perf counter
+texver. PS2X_GL_TEX_VERSIONS=0: off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ps2_perf_stats.h |  1 +
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 69 +++++++++++++++++++-
+ ps2xRuntime/src/lib/ps2_perf_stats.cpp       |  7 +-
+ 3 files changed, 73 insertions(+), 4 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+index aecec20..9d3540d 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf_stats.h
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -25,6 +25,7 @@ namespace ps2_perf_stats
+         std::atomic<uint64_t> glDraws{0};          // primitives
+         std::atomic<uint64_t> texDecodes{0};
+         std::atomic<uint64_t> texRowDecodes{0};
++        std::atomic<uint64_t> texVersionHits{0};   // index textures taken back from an earlier decode of the same bytes
+         std::atomic<uint64_t> rtUploads{0};
+         std::atomic<uint64_t> latches{0};          // presenter latches (one per vsync tick)
+         std::atomic<uint64_t> gsDrainBy[16]{};     // GS worker round trips by caller (kDrainNames)
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index c8c1481..8126e34 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -467,6 +467,16 @@ void main()
+         uint32_t dirtyY0 = 0, dirtyY1 = 0;
+         uint64_t contentHash = 0; // hash of the raw blocks [blockLo, blockHi) it was decoded from (0 = none)
+         bool listed = false;      // in liveTextures
++        // Tekken 4 port (perf): earlier decodes of this index texture slot by content hash. The game streams several
++        // textures through one VRAM area per frame (the Arena: ~48 index decodes a frame, GSMem::ReadIndexRun ~47% of
++        // the GL thread); a slot whose raw blocks hash like an earlier version takes that version's GL texture back.
++        struct Version
++        {
++            uint64_t hash = 0;
++            GLuint id = 0;
++            uint64_t lastUse = 0;
++        };
++        std::vector<Version> versions;
+     };
+ 
+     struct RenderTarget
+@@ -701,6 +711,16 @@ struct GSHwBackend::Impl
+     double firstRawZ = 0.0;
+ 
+     std::unordered_map<uint64_t, Texture> textures;
++    std::vector<uint8_t> decodeScratch;
++    static bool indexVersions()
++    {
++        static const bool on = []
++        {
++            const char *value = std::getenv("PS2X_GL_TEX_VERSIONS");
++            return !value || *value != '0';
++        }();
++        return on;
++    }
+     // Tekken 4 port (perf): the valid textures, so an upload's invalidation walks those instead of the whole cache (up to
+     // 6000 entries, most of them invalid, per upload: several ms per frame in stages with many uploads). The map is
+     // node based: element pointers stay valid until the entry is erased (evictOld rebuilds the list).
+@@ -1187,6 +1207,50 @@ struct GSHwBackend::Impl
+             tex.dirtyY0 = tex.dirtyY1 = 0;
+             return tex;
+         }
++        const bool sameLayout = tex.id && tex.indexed && tex.width == std::max<uint32_t>(1u, s.textureWidth) &&
++                                tex.height == std::max<uint32_t>(1u, s.textureHeight);
++        GLuint reuse = 0; // a GL texture of an evicted version to decode into
++        if (indexVersions() && sameLayout && contentHash != 0u)
++        {
++            for (Texture::Version &v : tex.versions)
++                if (v.hash == contentHash)
++                {
++                    // an earlier decode of the same bytes: swap it in, keep the current one as a version
++                    std::swap(v.hash, tex.contentHash);
++                    std::swap(v.id, tex.id);
++                    v.lastUse = useCounter;
++                    ++stats.texRevalidated;
++                    PS2_PERF_COUNT(texVersionHits);
++                    tex.blockLo = t.tbp0;
++                    tex.blockHi = t.tbp0 + spanBlocks(t.psm, t.tbw, tex.height);
++                    markValid(tex);
++                    tex.dirtyY0 = tex.dirtyY1 = 0;
++                    return tex;
++                }
++            if (tex.contentHash != 0u)
++            {
++                // keep the current decode as a version (at most kIndexVersions; the least recently used one is reused)
++                constexpr size_t kIndexVersions = 8u;
++                if (tex.versions.size() < kIndexVersions)
++                    tex.versions.push_back({tex.contentHash, tex.id, useCounter});
++                else
++                {
++                    auto oldest = std::min_element(tex.versions.begin(), tex.versions.end(),
++                                                   [](const Texture::Version &a, const Texture::Version &b) { return a.lastUse < b.lastUse; });
++                    reuse = oldest->id;
++                    *oldest = {tex.contentHash, tex.id, useCounter};
++                }
++                tex.id = reuse;
++            }
++        }
++        else if (!sameLayout && !tex.versions.empty())
++        {
++            // another layout in this slot: the versions no longer fit it
++            const Api &g = gl();
++            for (const Texture::Version &v : tex.versions)
++                g.DeleteTextures(1, &v.id);
++            tex.versions.clear();
++        }
+         ++stats.texDecodes, PS2_PERF_COUNT(texDecodes);
+         classifyTexture(s);
+         tex.width = std::max<uint32_t>(1u, s.textureWidth);
+@@ -1197,7 +1261,8 @@ struct GSHwBackend::Impl
+         tex.tbw = t.tbw;
+         tex.psm = static_cast<uint8_t>(t.psm & 63u);
+         tex.dirtyY0 = tex.dirtyY1 = 0;
+-        std::vector<uint8_t> indices(static_cast<size_t>(tex.width) * tex.height);
++        std::vector<uint8_t> &indices = decodeScratch; // reused: no allocation per decode
++        indices.resize(static_cast<size_t>(tex.width) * tex.height);
+         for (uint32_t y = 0; y < tex.height; ++y)
+             GSMem::ReadIndexRun(vram, t.psm, t.tbp0, t.tbw, 0u, y, tex.width,
+                                 indices.data() + static_cast<size_t>(y) * tex.width);
+@@ -1298,6 +1363,8 @@ struct GSHwBackend::Impl
+             {
+                 if (it->second.id)
+                     g.DeleteTextures(1, &it->second.id);
++                for (const Texture::Version &v : it->second.versions)
++                    g.DeleteTextures(1, &v.id);
+                 it = textures.erase(it);
+             }
+             else
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+index e2489e5..d432eb9 100644
+--- a/ps2xRuntime/src/lib/ps2_perf_stats.cpp
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -44,7 +44,7 @@ namespace ps2_perf_stats
+                     {
+             struct Snap
+             {
+-                uint64_t t, hostWait, eeGif, pubWait, pubWaits, drainWait, drains, worker, batches, draws, texDec, rowDec, rtUp,
++                uint64_t t, hostWait, eeGif, pubWait, pubWaits, drainWait, drains, worker, batches, draws, texDec, rowDec, verHits, rtUp,
+                     latches, vu1, vif1;
+             };
+             const auto take = [rt]()
+@@ -53,7 +53,7 @@ namespace ps2_perf_stats
+                 const auto r = [](const std::atomic<uint64_t> &a) { return a.load(std::memory_order_relaxed); };
+                 return Snap{nowNs(), rt->eeScheduler().hostWaitNanoseconds(), r(c.eeGifNs), r(c.gsPublishWaitNs),
+                             r(c.gsPublishWaits), r(c.gsDrainWaitNs), r(c.gsDrains), r(c.gsWorkerBusyNs), r(c.glBatches),
+-                            r(c.glDraws), r(c.texDecodes), r(c.texRowDecodes), r(c.rtUploads), r(c.latches),
++                            r(c.glDraws), r(c.texDecodes), r(c.texRowDecodes), r(c.texVersionHits), r(c.rtUploads), r(c.latches),
+                             ps2_rollback::g_hostProfile.vu1Ns, ps2_rollback::g_hostProfile.vif1Ns};
+             };
+             const auto ms = [](uint64_t a, uint64_t b) { return static_cast<double>(b - a) / 1e6; };
+@@ -67,7 +67,7 @@ namespace ps2_perf_stats
+                 const double wall = ms(last.t, now.t);
+                 // EE busy = wall time minus the scheduler's host pacing waits (the game thread is idle there)
+                 std::printf("[perf] t=%.1f vsyncs=%llu ee_busy=%.1f gif=%.1f gs_pubwait=%.1f/%llu gs_drain=%.1f/%llu "
+-                            "gs_worker=%.1f batches=%llu draws=%llu texdec=%llu rowdec=%llu rtup=%llu vu1=%.1f vif1=%.1f\n",
++                            "gs_worker=%.1f batches=%llu draws=%llu texdec=%llu rowdec=%llu texver=%llu rtup=%llu vu1=%.1f vif1=%.1f\n",
+                             static_cast<double>(now.t - t0) / 1e9,
+                             static_cast<unsigned long long>(now.latches - last.latches), wall - ms(last.hostWait, now.hostWait),
+                             ms(last.eeGif, now.eeGif), ms(last.pubWait, now.pubWait),
+@@ -77,6 +77,7 @@ namespace ps2_perf_stats
+                             static_cast<unsigned long long>(now.draws - last.draws),
+                             static_cast<unsigned long long>(now.texDec - last.texDec),
+                             static_cast<unsigned long long>(now.rowDec - last.rowDec),
++                            static_cast<unsigned long long>(now.verHits - last.verHits),
+                             static_cast<unsigned long long>(now.rtUp - last.rtUp), ms(last.vu1, now.vu1), ms(last.vif1, now.vif1));
+                 std::string by;
+                 for (size_t k = 0; k < kDrainKinds; ++k)
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,202 @@
+From c2c138121afe2c6576c70725aa004a21a919e24e Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 05:15:14 +0100
+Subject: [PATCH 47/55] Perf counters: GS worker round trips by caller
+ (drains_by line)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../include/runtime/gs/gs_threaded_backend.h  |  2 +-
+ ps2xRuntime/include/runtime/ps2_perf_stats.h  |  4 +++
+ .../src/lib/gs/gs_threaded_backend.cpp        | 28 ++++++++++---------
+ ps2xRuntime/src/lib/ps2_perf_stats.cpp        | 12 ++++++++
+ 4 files changed, 32 insertions(+), 14 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h b/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h
+index e06a844..9eeb90c 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h
+@@ -74,7 +74,7 @@ private:
+     void Enqueue(Op op, const void *payload, uint32_t size);
+     void PublishLocked();
+     void Drain() const;
+-    void RunOnWorker(const std::function<void()> &function) const;
++    void RunOnWorker(const std::function<void()> &function, int why = 0) const;
+     void WorkerLoop();
+     void Execute(const std::vector<uint8_t> &chunk, GSPrimitiveBatch &draw);
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+index f903023..aecec20 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf_stats.h
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -27,8 +27,12 @@ namespace ps2_perf_stats
+         std::atomic<uint64_t> texRowDecodes{0};
+         std::atomic<uint64_t> rtUploads{0};
+         std::atomic<uint64_t> latches{0};          // presenter latches (one per vsync tick)
++        std::atomic<uint64_t> gsDrainBy[16]{};     // GS worker round trips by caller (kDrainNames)
+     };
+     extern Counters g_counters;
++    constexpr size_t kDrainKinds = 16;
++    inline const char *const kDrainNames[kDrainKinds] = {"other", "init", "reset", "flush", "sync", "present", "clear", "l2h",
++                                                         "readvram", "snapshot", "xfersnap", "state", "", "", "", ""};
+ 
+     inline uint64_t nowNs() noexcept
+     {
+diff --git a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+index 6c217bc..0d0c929 100644
+--- a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+@@ -309,8 +309,10 @@ void GSThreadedBackend::Execute(const std::vector<uint8_t> &chunk, GSPrimitiveBa
+     }
+ }
+ 
+-void GSThreadedBackend::RunOnWorker(const std::function<void()> &function) const
++void GSThreadedBackend::RunOnWorker(const std::function<void()> &function, int why) const
+ {
++    if (ps2_perf_stats::enabled())
++        ps2_perf_stats::add(ps2_perf_stats::g_counters.gsDrainBy[static_cast<size_t>(why) % ps2_perf_stats::kDrainKinds]);
+     auto *self = const_cast<GSThreadedBackend *>(this);
+     const std::function<void()> *pointer = &function;
+     self->Enqueue(Op::Call, &pointer, sizeof(pointer));
+@@ -322,12 +324,12 @@ void GSThreadedBackend::Initialize(uint8_t *vram, uint32_t vramSize)
+     RunOnWorker([&] {
+         m_inner->Initialize(vram, vramSize);
+         m_sharedPresentation.store(m_inner->UsesSharedPresentation(), std::memory_order_release);
+-    });
++    }, 1);
+ }
+ 
+ void GSThreadedBackend::Reset()
+ {
+-    RunOnWorker([&] { m_inner->Reset(); });
++    RunOnWorker([&] { m_inner->Reset(); }, 2);
+ }
+ 
+ void GSThreadedBackend::Submit(const GSPrimitiveBatch &batch)
+@@ -362,7 +364,7 @@ void GSThreadedBackend::Flush()
+     // GOW-Port: barrera para lectura/presentación y llamadas del frontend existente.
+     if (syncDrain())
+     {
+-        RunOnWorker([&] { m_inner->Flush(); });
++        RunOnWorker([&] { m_inner->Flush(); }, 3);
+         return;
+     }
+     Enqueue(Op::Flush, nullptr, 0u);
+@@ -392,7 +394,7 @@ void GSThreadedBackend::Sync(GSSyncReason reason)
+     if (reason == GSSyncReason::Presentation && UsesSharedPresentation())
+         return;
+     // GOW-Port: FINISH solo se publica cuando terminaron los comandos anteriores.
+-    RunOnWorker([&] { m_inner->Sync(reason); });
++    RunOnWorker([&] { m_inner->Sync(reason); }, 4);
+ }
+ 
+ PresentationFrame GSThreadedBackend::Present(const GSPresentationRequest &request)
+@@ -407,7 +409,7 @@ PresentationFrame GSThreadedBackend::Present(const GSPresentationRequest &reques
+         return {};
+     }
+     PresentationFrame frame;
+-    RunOnWorker([&] { frame = m_inner->Present(request); });
++    RunOnWorker([&] { frame = m_inner->Present(request); }, 5);
+     return frame;
+ }
+ 
+@@ -423,7 +425,7 @@ bool GSThreadedBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba
+         return context.frame.fbw != 0u;
+     }
+     bool result = false;
+-    RunOnWorker([&] { result = m_inner->ClearFramebuffer(context, rgba); });
++    RunOnWorker([&] { result = m_inner->ClearFramebuffer(context, rgba); }, 6);
+     return result;
+ }
+ 
+@@ -432,7 +434,7 @@ uint32_t GSThreadedBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBy
+     if (GsInventory::get().enabled())
+         GsInventory::get().consumeL2H();
+     uint32_t result = 0u;
+-    RunOnWorker([&] { result = m_inner->ConsumeLocalToHostBytes(dst, maxBytes); });
++    RunOnWorker([&] { result = m_inner->ConsumeLocalToHostBytes(dst, maxBytes); }, 7);
+     return result;
+ }
+ 
+@@ -441,7 +443,7 @@ uint32_t GSThreadedBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, u
+     if (GsInventory::get().enabled())
+         GsInventory::get().cpuRead();
+     uint32_t result = 0u;
+-    RunOnWorker([&] { result = m_inner->ReadVram(psm, base, bw, x, y); });
++    RunOnWorker([&] { result = m_inner->ReadVram(psm, base, bw, x, y); }, 8);
+     return result;
+ }
+ 
+@@ -457,13 +459,13 @@ void GSThreadedBackend::SnapshotVram(std::vector<uint8_t> &out) const
+ {
+     if (GsInventory::get().enabled())
+         GsInventory::get().snapshot();
+-    RunOnWorker([&] { m_inner->SnapshotVram(out); });
++    RunOnWorker([&] { m_inner->SnapshotVram(out); }, 9);
+ }
+ 
+ GSTransferSnapshot GSThreadedBackend::GetTransferSnapshot() const
+ {
+     GSTransferSnapshot result;
+-    RunOnWorker([&] { result = m_inner->GetTransferSnapshot(); });
++    RunOnWorker([&] { result = m_inner->GetTransferSnapshot(); }, 10);
+     return result;
+ }
+ 
+@@ -473,7 +475,7 @@ bool GSThreadedBackend::ExportState(GSBackendState &out)
+     RunOnWorker([&]
+                 {
+         auto *access = dynamic_cast<GSBackendStateAccess *>(m_inner.get());
+-        result = access && access->ExportState(out); });
++        result = access && access->ExportState(out); }, 11);
+     return result;
+ }
+ 
+@@ -483,6 +485,6 @@ bool GSThreadedBackend::ImportState(const GSBackendState &state)
+     RunOnWorker([&]
+                 {
+         auto *access = dynamic_cast<GSBackendStateAccess *>(m_inner.get());
+-        result = access && access->ImportState(state); });
++        result = access && access->ImportState(state); }, 11);
+     return result;
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+index 555853f..e2489e5 100644
+--- a/ps2xRuntime/src/lib/ps2_perf_stats.cpp
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include <cstdio>
+ #include <cstdlib>
++#include <string>
+ #include <thread>
+ 
+ namespace ps2_perf_stats
+@@ -57,6 +58,7 @@ namespace ps2_perf_stats
+             };
+             const auto ms = [](uint64_t a, uint64_t b) { return static_cast<double>(b - a) / 1e6; };
+             Snap last = take();
++            uint64_t lastBy[kDrainKinds] = {};
+             const uint64_t t0 = last.t;
+             for (int s = 0; s < seconds(); ++s)
+             {
+@@ -76,6 +78,16 @@ namespace ps2_perf_stats
+                             static_cast<unsigned long long>(now.texDec - last.texDec),
+                             static_cast<unsigned long long>(now.rowDec - last.rowDec),
+                             static_cast<unsigned long long>(now.rtUp - last.rtUp), ms(last.vu1, now.vu1), ms(last.vif1, now.vif1));
++                std::string by;
++                for (size_t k = 0; k < kDrainKinds; ++k)
++                {
++                    const uint64_t n = g_counters.gsDrainBy[k].load(std::memory_order_relaxed);
++                    if (n != lastBy[k])
++                        by += std::string(by.empty() ? "" : ",") + kDrainNames[k] + ":" + std::to_string(n - lastBy[k]);
++                    lastBy[k] = n;
++                }
++                if (!by.empty())
++                    std::printf("[perf] t=%.1f drains_by=%s\n", static_cast<double>(now.t - t0) / 1e9, by.c_str());
+                 std::fflush(stdout);
+                 last = now;
+             } })
+-- 
+2.55.0.windows.3
+

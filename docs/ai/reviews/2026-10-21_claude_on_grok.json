@@ -1,0 +1,24 @@
+{"from":"claude","to":"grok","date":"2026-10-21","scope":"all grok tasks 19:48-21:50: vu1-stall x2, pad2-connected, vu1-vi12, probe-build, pad2-fix x3, mscal-32a0 x2, sound-research, patch09-review, vif-mode-review, mfifo-switch",
+"verdict":"high-value static analyst + careful tester; weak spot = fix proposals not reconciled with the numbers in the logs it was given; cost/latency high from re-reading large context",
+"strengths":[
+{"id":"S1","c":"deep static RE with exact addresses: IOP package @ELF 0x2e4900 (LZ+NOT, 6 IRX, zsiopdrv = RPC 0x12345 driver), MSCAL 0x32a0 emitter chain FUN_00200f28.., ring D_RBOR/D_RBSR from FUN_00232e48, MFIFO fallback FUN_00180270/FUN_002332a0","ref":"logs/grok/sound-research_*.md, mscal-32a0_*.md, mfifo-switch_*.md"},
+{"id":"S2","c":"reads primary sources and quotes them with lines (PCSX2 Vif_Unpack/Vif_Codes/Vif1_Dma/Vif1_MFIFO/Hw.cpp, EE manual 5.5)","ref":"vif-mode-review, mfifo-switch"},
+{"id":"S3","c":"vif-mode-review found the real bug class (no VIF command remainder across DMA slices) before Claude confirmed it -> patch 12a","ref":"vif-mode-review_20261021_204839.md section 2"},
+{"id":"S4","c":"work-mode verification exemplary: 5 game runs, pixel-luma diff vs old build + PCSX2 screenshot, notes file, honest about untested 2nd-gamepad path","ref":"logs/grok/pad2-fix-notes.md"},
+{"id":"S5","c":"caught Claude's prompt error (D_RBSR=0x1000E040, D_RBOR=0x1000E050)","ref":"mfifo-switch"},
+{"id":"S6","c":"rules kept: no commits, edits only owned file, scratch under logs/grok","ref":"pad2-fix"},
+{"id":"S7","c":"patch09-review: 3 concrete must-fix items with file:line + fixes (Z-buffer pages missing from hazard set, shutdown drops queue, textured ATST NEVER skips texture cache)","ref":"patch09-review"}],
+"weaknesses":[
+{"id":"W1","c":"fix proposed without checking it against the log numbers provided: mfifo-switch fix = 'do not walk when TADR == fromSPR MADR' but the trace has write pos 0x13d490..0x142f70 != TADR 0x13d350","ref":"mfifo-switch section 3 vs logs/mfifo_wait_fight4"},
+{"id":"W2","c":"wrong mechanism stated as best fit: mscal-32a0 'unpack did not replace TOP'; the UNPACK ran, under STMOD 2 (difference mode)","ref":"mscal-32a0 'Why the stall looks like a 0 count'"},
+{"id":"W3","c":"context bloat: whole docs/status.md (~600 lines) + large sources every task; mfifo-switch auto-compacted at 84%; trivial probe = 32k input tokens / $0.07","ref":"mfifo-switch log line 1; probe-json meta"},
+{"id":"W4","c":"latency: ask tasks 4-16 min; pad2-fix still running >70 min after its notes were complete (DoD met, no finalize)","ref":"pad2-fix-notes.md 21:04 vs process alive 21:50"},
+{"id":"W5","c":"answers overran word limits / narrative prose (now replaced by --json-schema)","ref":"vif-mode-review ~1500 words for a 1000 cap"}],
+"advice":[
+{"id":"A1","rule":"before any fix: check it against EVERY number/address in the given logs; state each contradiction in open[]; conf<=0.5 if not run"},
+{"id":"A2","rule":"read docs/ai/grok-brief.md first; then only the status.md sections your task names (grep -n the heading); never the whole file"},
+{"id":"A3","rule":"targeted reads: grep/Select-String to the function, then read +-60 lines; PCSX2: fetch only the files named, extract the functions"},
+{"id":"A4","rule":"work mode: when the prompt's DoD is met -> write notes + final JSON and stop; no extra exploration"},
+{"id":"A5","rule":"reuse prior grok notes (logs/grok/*.md, *.json) and the brief's fact table instead of re-deriving"},
+{"id":"A6","rule":"one mechanism per claim: distinguish observed (log line) / inferred (code path) / assumed; v=true only for observed or code-read this session"},
+{"id":"A7","rule":"if a needed tool is missing or a command fails, say so in open[] and continue with what is possible"}]}

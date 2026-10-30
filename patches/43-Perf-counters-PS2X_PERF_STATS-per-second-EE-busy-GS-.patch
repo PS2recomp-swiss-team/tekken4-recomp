@@ -1,0 +1,409 @@
+From e5248f2f018113ac7b6414975e066d8b22e6eb3c Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 03:42:51 +0100
+Subject: [PATCH 43/55] Perf counters: PS2X_PERF_STATS per-second EE busy, GS
+ queue waits, GL worker, batches
+
+[perf] line per second (off by default): EE thread busy time (wall minus the
+scheduler's host pacing waits, now measured in every mode), GS packet time on
+the EE thread, GS queue back-pressure and drain waits, GS worker busy time, GL
+batches/draws/texture decodes, VU1/VIF1 host time (PS2X_PERF_STATS_VU=1).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/CMakeLists.txt                    |  1 +
+ ps2xRuntime/include/runtime/ps2_perf_stats.h  | 67 +++++++++++++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 12 +--
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp  | 15 ++--
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        |  2 +
+ .../src/lib/gs/gs_threaded_backend.cpp        | 17 +++-
+ ps2xRuntime/src/lib/ps2_perf_stats.cpp        | 84 +++++++++++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  4 +
+ 8 files changed, 187 insertions(+), 15 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/ps2_perf_stats.h
+ create mode 100644 ps2xRuntime/src/lib/ps2_perf_stats.cpp
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 67eda7e..571fc98 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -391,6 +391,7 @@ add_library(ps2_runtime STATIC
+     src/lib/ps2_vfs.cpp
+     src/lib/ps2_runtime.cpp
+     src/lib/ps2_rollback.cpp
++    src/lib/ps2_perf_stats.cpp
+     src/lib/ps2_vif1_interpreter.cpp
+     src/lib/vu/ps2_vu1_core.cpp
+     src/lib/vu/ps2_vu1_upper.cpp
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+new file mode 100644
+index 0000000..f903023
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -0,0 +1,67 @@
++#pragma once
++// Per-second performance counters (PS2X_PERF_STATS=<seconds>): one "[perf]" line per second on stdout with the frame
++// rate as presented, the EE (game) thread's busy time, the GS worker's queue back-pressure and drain waits, the GL
++// worker's busy time and the GL batch / draw / texture counts. Off by default; when off every counter site is one
++// relaxed load of a static bool.
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++
++class PS2Runtime;
++
++namespace ps2_perf_stats
++{
++    bool enabled() noexcept;
++
++    struct Counters
++    {
++        std::atomic<uint64_t> eeGifNs{0};          // GS packet processing on the EE thread (GS::processGIFPacket)
++        std::atomic<uint64_t> gsPublishWaitNs{0};  // EE waits for room in the GS worker queue (back-pressure)
++        std::atomic<uint64_t> gsPublishWaits{0};
++        std::atomic<uint64_t> gsDrainWaitNs{0};    // waits until the GS worker has run everything queued (sync points)
++        std::atomic<uint64_t> gsDrains{0};
++        std::atomic<uint64_t> gsWorkerBusyNs{0};   // GS worker executing queued commands (GL calls included)
++        std::atomic<uint64_t> glBatches{0};
++        std::atomic<uint64_t> glDraws{0};          // primitives
++        std::atomic<uint64_t> texDecodes{0};
++        std::atomic<uint64_t> texRowDecodes{0};
++        std::atomic<uint64_t> rtUploads{0};
++        std::atomic<uint64_t> latches{0};          // presenter latches (one per vsync tick)
++    };
++    extern Counters g_counters;
++
++    inline uint64_t nowNs() noexcept
++    {
++        return static_cast<uint64_t>(
++            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
++    }
++
++    inline void add(std::atomic<uint64_t> &counter, uint64_t value = 1u) noexcept
++    {
++        counter.fetch_add(value, std::memory_order_relaxed);
++    }
++
++    // Adds the scope's wall time to a counter when the stats are on.
++    class Timer
++    {
++    public:
++        explicit Timer(std::atomic<uint64_t> &slot) noexcept : m_slot(slot), m_start(enabled() ? nowNs() : 0u) {}
++        ~Timer()
++        {
++            if (m_start)
++                m_slot.fetch_add(nowNs() - m_start, std::memory_order_relaxed);
++        }
++        Timer(const Timer &) = delete;
++        Timer &operator=(const Timer &) = delete;
++
++    private:
++        std::atomic<uint64_t> &m_slot;
++        uint64_t m_start;
++    };
++
++    // Starts the reporter thread (once) when PS2X_PERF_STATS is set.
++    void start(PS2Runtime &runtime);
++}
++
++// Counts one event in g_counters.<name> when the stats are on (an expression, usable after a comma).
++#define PS2_PERF_COUNT(name) (::ps2_perf_stats::enabled() ? static_cast<void>(::ps2_perf_stats::g_counters.name.fetch_add(1u, std::memory_order_relaxed)) : static_cast<void>(0))
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 04932bc..617552a 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1906,6 +1906,8 @@ void EeScheduler::processDueDeadlines()
+                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
+                                      { return !m_events.empty() ||
+                                               m_stopRequested.load(std::memory_order_acquire); });
++                m_hostWaitNs += static_cast<uint64_t>(
++                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - now).count());
+                 if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
+                 {
+                     updateNextDeadline();
+@@ -2144,15 +2146,13 @@ void EeScheduler::waitForEvent()
+         }
+     }
+ 
+-    const auto waitStart = m_cycleOrderedEvents ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
++    // Host time the EE thread spends idle (perf counters, rollback profile): measured in every mode.
++    const auto waitStart = std::chrono::steady_clock::now();
+     const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this]()
+                                                { return !m_events.empty() ||
+                                                         m_stopRequested.load(std::memory_order_acquire); });
+-    if (m_cycleOrderedEvents)
+-    {
+-        m_hostWaitNs += static_cast<uint64_t>(
+-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count());
+-    }
++    m_hostWaitNs += static_cast<uint64_t>(
++        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count());
+     if (!signaled)
+     {
+         const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index 1da5981..aac8948 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -5,6 +5,7 @@
+ #include "gs_gl.h"
+ #include "../gs_gpu_helpers.h"
+ #include "runtime/gs/gs_shared_present.h"
++#include "runtime/ps2_perf_stats.h"
+ 
+ #include <map>
+ #include <algorithm>
+@@ -913,7 +914,7 @@ struct GSHwBackend::Impl
+             ++stats.texHits;
+             return tex;
+         }
+-        ++stats.texDecodes;
++        ++stats.texDecodes, PS2_PERF_COUNT(texDecodes);
+         classifyTexture(s);
+         const Api &g = gl();
+         std::vector<uint32_t> pixels;
+@@ -1013,7 +1014,7 @@ struct GSHwBackend::Impl
+         tex.lastUse = ++useCounter;
+         if (tex.valid && tex.dirtyY1 > tex.dirtyY0)
+         {
+-            ++stats.texRowDecodes;
++            ++stats.texRowDecodes, PS2_PERF_COUNT(texRowDecodes);
+             const uint32_t y0 = tex.dirtyY0, y1 = std::min(tex.dirtyY1, tex.height);
+             tex.dirtyY0 = tex.dirtyY1 = 0;
+             if (y1 > y0)
+@@ -1049,7 +1050,7 @@ struct GSHwBackend::Impl
+             tex.dirtyY0 = tex.dirtyY1 = 0;
+             return tex;
+         }
+-        ++stats.texDecodes;
++        ++stats.texDecodes, PS2_PERF_COUNT(texDecodes);
+         classifyTexture(s);
+         tex.width = std::max<uint32_t>(1u, s.textureWidth);
+         tex.height = std::max<uint32_t>(1u, s.textureHeight);
+@@ -1340,7 +1341,7 @@ struct GSHwBackend::Impl
+         const uint32_t tlo = t->fbp * 32u, lo = c.bitbltbuf.dbp, hi = lo + spanBlocks(c.bitbltbuf.dpsm, c.bitbltbuf.dbw, y0 + h);
+         for (uint32_t b = std::max(lo, tlo); b < hi && b - tlo < t->blockUploadSeq.size(); ++b)
+             t->blockUploadSeq[b - tlo] = 0u;
+-        ++stats.rtUploads;
++        ++stats.rtUploads, PS2_PERF_COUNT(rtUploads);
+     }
+ 
+     void setupReinterpret(const GSDrawState &s, RenderTarget &rt)
+@@ -1766,7 +1767,7 @@ struct GSHwBackend::Impl
+         g.ColorMask(kTrue, kTrue, kTrue, kTrue);
+         g.BindVertexArray(vao);
+         g.BindBuffer(kArrayBuffer, vbo);
+-        ++stats.batches;
++        ++stats.batches, PS2_PERF_COUNT(glBatches);
+     }
+ 
+     // GOW_GS_HW_DUMP window: skipped batches are listed in order with the drawn ones
+@@ -1959,7 +1960,7 @@ struct GSHwBackend::Impl
+             lastSprite = {cur, pending.size(), batchSerial};
+             (void)corner;
+         }
+-        ++stats.draws;
++        ++stats.draws, PS2_PERF_COUNT(glDraws);
+     }
+ 
+     void flushPending(FlushWhy why = WhyOther)
+@@ -2468,7 +2469,7 @@ struct GSHwBackend::Impl
+             else { g.DepthMask(kFalse); g.ColorMask(mr, mg, mb, kFalse); }
+             g.DrawArrays(kTriangles, 0, static_cast<GLsizei>(verts.size()));
+         }
+-        ++stats.batches;
++        ++stats.batches, PS2_PERF_COUNT(glBatches);
+         g.Disable(kScissorTest);
+         static const int rtDumpAt = std::getenv("GOW_GS_HW_RTDUMP") ? std::atoi(std::getenv("GOW_GS_HW_RTDUMP")) : -1;
+         static const double rtDumpSec = std::getenv("GOW_GS_HW_RTDUMPAT") ? std::atof(std::getenv("GOW_GS_HW_RTDUMPAT")) : -1.0;
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index f4e62e8..1104402 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -6,6 +6,7 @@
+ #include "ps2_log.h"
+ #include "runtime/ps2_memory.h"
+ #include "runtime/ps2_rollback_cuts.h"
++#include "runtime/ps2_perf_stats.h"
+ #include <atomic>
+ #include <algorithm>
+ #include <cmath>
+@@ -662,6 +663,7 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+ 
+ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+ {
++    ps2_perf_stats::Timer perfTimer(ps2_perf_stats::g_counters.eeGifNs);
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+     if (!data || sizeBytes < 16 || !m_backend)
+         return;
+diff --git a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+index 10338ba..d6a3175 100644
+--- a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+@@ -6,6 +6,7 @@
+ #include "gs_inventory.h"
+ #include "ThreadPriority.h"
+ #include "ThreadNaming.h"
++#include "runtime/ps2_perf_stats.h"
+ 
+ #include <atomic>
+ #include <algorithm>
+@@ -139,8 +140,14 @@ void GSThreadedBackend::PublishLocked()
+     std::vector<uint8_t> next;
+     {
+         std::unique_lock<std::mutex> lock(m_queueMutex);
+-        m_doneCv.wait(lock, [&]
+-                      { return m_stop || m_pending.size() < m_queueChunkLimit; });
++        if (!m_stop && m_pending.size() >= m_queueChunkLimit)
++        {
++            ps2_perf_stats::Timer wait(ps2_perf_stats::g_counters.gsPublishWaitNs);
++            if (ps2_perf_stats::enabled())
++                ps2_perf_stats::add(ps2_perf_stats::g_counters.gsPublishWaits);
++            m_doneCv.wait(lock, [&]
++                          { return m_stop || m_pending.size() < m_queueChunkLimit; });
++        }
+         m_pending.push_back(std::move(m_open));
+         ++m_published;
+         if (!m_spare.empty())
+@@ -167,6 +174,11 @@ void GSThreadedBackend::Drain() const
+         target = m_published;
+     }
+     std::unique_lock<std::mutex> lock(m_queueMutex);
++    if (m_completed >= target || m_stop)
++        return;
++    ps2_perf_stats::Timer wait(ps2_perf_stats::g_counters.gsDrainWaitNs);
++    if (ps2_perf_stats::enabled())
++        ps2_perf_stats::add(ps2_perf_stats::g_counters.gsDrains);
+     m_doneCv.wait(lock, [&]
+                   { return m_completed >= target || m_stop; });
+ }
+@@ -193,6 +205,7 @@ void GSThreadedBackend::WorkerLoop()
+         }
+         {
+             std::lock_guard<std::mutex> exec(m_execMutex);
++            ps2_perf_stats::Timer busy(ps2_perf_stats::g_counters.gsWorkerBusyNs);
+             Execute(chunk, draw);
+         }
+         {
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+new file mode 100644
+index 0000000..555853f
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -0,0 +1,84 @@
++#include "runtime/ps2_perf_stats.h"
++#include "ps2_runtime.h"
++#include "runtime/ee_scheduler.h"
++#include "runtime/ps2_rollback_cuts.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <thread>
++
++namespace ps2_perf_stats
++{
++    Counters g_counters;
++
++    namespace
++    {
++        int seconds()
++        {
++            static const int value = []
++            {
++                const char *env = std::getenv("PS2X_PERF_STATS");
++                return env && *env ? std::atoi(env) : 0;
++            }();
++            return value;
++        }
++    }
++
++    bool enabled() noexcept
++    {
++        static const bool on = seconds() > 0;
++        return on;
++    }
++
++    void start(PS2Runtime &runtime)
++    {
++        static std::atomic<bool> started{false};
++        if (!enabled() || started.exchange(true))
++            return;
++        // VU1 / VIF1 host time come from the rollback profile counters (two clock reads per VU1 run / VIF1 packet).
++        if (const char *vu = std::getenv("PS2X_PERF_STATS_VU"); vu && *vu == '1')
++            ps2_rollback::g_hostProfile.on = true;
++        PS2Runtime *rt = &runtime;
++        std::thread([rt]()
++                    {
++            struct Snap
++            {
++                uint64_t t, hostWait, eeGif, pubWait, pubWaits, drainWait, drains, worker, batches, draws, texDec, rowDec, rtUp,
++                    latches, vu1, vif1;
++            };
++            const auto take = [rt]()
++            {
++                const Counters &c = g_counters;
++                const auto r = [](const std::atomic<uint64_t> &a) { return a.load(std::memory_order_relaxed); };
++                return Snap{nowNs(), rt->eeScheduler().hostWaitNanoseconds(), r(c.eeGifNs), r(c.gsPublishWaitNs),
++                            r(c.gsPublishWaits), r(c.gsDrainWaitNs), r(c.gsDrains), r(c.gsWorkerBusyNs), r(c.glBatches),
++                            r(c.glDraws), r(c.texDecodes), r(c.texRowDecodes), r(c.rtUploads), r(c.latches),
++                            ps2_rollback::g_hostProfile.vu1Ns, ps2_rollback::g_hostProfile.vif1Ns};
++            };
++            const auto ms = [](uint64_t a, uint64_t b) { return static_cast<double>(b - a) / 1e6; };
++            Snap last = take();
++            const uint64_t t0 = last.t;
++            for (int s = 0; s < seconds(); ++s)
++            {
++                std::this_thread::sleep_for(std::chrono::seconds(1));
++                const Snap now = take();
++                const double wall = ms(last.t, now.t);
++                // EE busy = wall time minus the scheduler's host pacing waits (the game thread is idle there)
++                std::printf("[perf] t=%.1f vsyncs=%llu ee_busy=%.1f gif=%.1f gs_pubwait=%.1f/%llu gs_drain=%.1f/%llu "
++                            "gs_worker=%.1f batches=%llu draws=%llu texdec=%llu rowdec=%llu rtup=%llu vu1=%.1f vif1=%.1f\n",
++                            static_cast<double>(now.t - t0) / 1e9,
++                            static_cast<unsigned long long>(now.latches - last.latches), wall - ms(last.hostWait, now.hostWait),
++                            ms(last.eeGif, now.eeGif), ms(last.pubWait, now.pubWait),
++                            static_cast<unsigned long long>(now.pubWaits - last.pubWaits), ms(last.drainWait, now.drainWait),
++                            static_cast<unsigned long long>(now.drains - last.drains), ms(last.worker, now.worker),
++                            static_cast<unsigned long long>(now.batches - last.batches),
++                            static_cast<unsigned long long>(now.draws - last.draws),
++                            static_cast<unsigned long long>(now.texDec - last.texDec),
++                            static_cast<unsigned long long>(now.rowDec - last.rowDec),
++                            static_cast<unsigned long long>(now.rtUp - last.rtUp), ms(last.vu1, now.vu1), ms(last.vif1, now.vif1));
++                std::fflush(stdout);
++                last = now;
++            } })
++            .detach();
++    }
++}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 1873b5d..2f37799 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -15,6 +15,7 @@
+ #include "ps2_iop_host.h"
+ #include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_rollback_cuts.h"
++#include "runtime/ps2_perf_stats.h"
+ 
+ #include <iostream>
+ #include <stdexcept>
+@@ -398,6 +399,8 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     {
+         ps2_input_latency::onLatchBegin(currentTick);
+         rt->gs().latchHostPresentationFrame();
++        if (ps2_perf_stats::enabled())
++            ps2_perf_stats::add(ps2_perf_stats::g_counters.latches);
+         s_lastPresentationTick = currentTick;
+         s_hasLatchedInitialFrame = true;
+     }
+@@ -2410,6 +2413,7 @@ void PS2Runtime::run()
+     UnloadImage(blank);
+ 
+     std::atomic<bool> gameThreadFinished{false};
++    ps2_perf_stats::start(*this);
+ 
+     std::thread gameThread([&]()
+                            {
+-- 
+2.55.0.windows.3
+

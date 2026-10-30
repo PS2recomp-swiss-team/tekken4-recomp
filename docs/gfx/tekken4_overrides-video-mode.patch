@@ -1,0 +1,67 @@
+--- a/runtime/tekken4_overrides.cpp
++++ b/runtime/tekken4_overrides.cpp
+@@ -1222,8 +1222,64 @@
+                                                        << " buffered " << w(0x01ccac58u) << "\n");
+     }
+ 
++    // Progressive scan (480p). The video-mode setup FUN_0022a598(keep, index) takes entry <index> of the 6-byte table at
++    // 0x31e970 (interlace flag, omode, double-buffer psm, display FBP): 1/2 = NTSC interlaced (CT24 640x224 field
++    // buffer at FBP 0xd2), 3/4 = PAL, 5 = DTV480P (omode 0x50, CT24 640x448 display buffer at FBP 0x8c), 6/7 = 480p
++    // with a CT16 display buffer. It calls sceGsResetGraph(0, inter, omode, FFMD 1), sets the 480p flag (0x1ccafb4) and
++    // picks the vsync copy packets per index (table 0x2ce550): index 1 copies the even or odd lines of the 640x448
++    // back buffer into the 224-line field buffer depending on CSR.FIELD, index 5 copies the whole 448-line frame with
++    // the same packet every vsync. The US game only ever asks for 1 (the PAL release has a "Progressive Scan" menu entry
++    // for 5..7). TEKKEN4_PROGRESSIVE=1 (default) maps the NTSC interlaced entries to 5: full frames, no fields, no line
++    // doubling; =0 keeps interlaced FRAME mode. Netplay always uses the default so both peers run the same mode (the mode
++    // index, its flag and the copy packets live in RDRAM, which the desync check hashes).
++    constexpr uint32_t kVideoModeSetup = 0x0022a598u;
++    constexpr uint32_t kVideoModeProgressive = 5u;
++    bool g_progressive = true;
++    void videoModeSetup(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const uint32_t index = getRegU32(ctx, 5);
++        if (g_progressive && (index == 1u || index == 2u))
++        {
++            static bool logged = false;
++            if (!logged)
++                RUNTIME_LOG("[tekken4] video mode " << index << " (NTSC interlaced) -> " << kVideoModeProgressive
++                                                    << " (480p progressive, TEKKEN4_PROGRESSIVE)\n");
++            logged = true;
++            SET_GPR_U32(ctx, 5, kVideoModeProgressive);
++        }
++        FUN_0022a598_0x22a598(rdram, ctx, runtime);
++    }
++    // sceGsResetGraph is the runtime's stub, which sets the display registers but not libgraph's sceGsGParam
++    // (0x3018c0: interlace, omode, ffmode, version; read by the game through sceGsGetGParam 0x289f20, which is game
++    // code). The ELF's data holds NTSC interlaced (1, 2, 1), so in 480p FUN_0022a370 still took the interlaced
++    // double-buffer setup (SMODE2 3, DH 895). Mode 0 (reset) stores them here like the real function.
++    constexpr uint32_t kSceGsResetGraph = 0x00289d90u;
++    constexpr uint32_t kSceGsGParam = 0x003018c0u;
++    void gsResetGraph(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const uint32_t mode = getRegU32(ctx, 4) & 0xFFFFu, interlace = getRegU32(ctx, 5), omode = getRegU32(ctx, 6),
++                       ffmode = getRegU32(ctx, 7);
++        ps2_stubs::sceGsResetGraph(rdram, ctx, runtime);
++        if (mode == 0u)
++        {
++            const uint16_t values[3] = {static_cast<uint16_t>(interlace & 1u), static_cast<uint16_t>(omode & 0xFFu),
++                                        static_cast<uint16_t>(ffmode & 1u)};
++            std::memcpy(rdram + kSceGsGParam, values, sizeof values);
++        }
++    }
++
+     void apply(PS2Runtime &runtime)
+     {
++        {
++            const char *progressive = std::getenv("TEKKEN4_PROGRESSIVE");
++            const char *net = std::getenv("TEKKEN4_NET");
++            if (progressive && *progressive && !(net && *net))
++                g_progressive = std::strcmp(progressive, "0") != 0;
++            runtime.registerFunction(kVideoModeSetup, videoModeSetup);
++            runtime.registerFunction(kSceGsResetGraph, gsResetGraph);
++            RUNTIME_LOG("[tekken4] display: " << (g_progressive ? "progressive 480p" : "interlaced (TEKKEN4_PROGRESSIVE=0)")
++                                              << "\n");
++        }
+         if (const char *sound = std::getenv("TEKKEN4_SOUND"); sound && std::strcmp(sound, "1") == 0)
+         {
+             const std::filesystem::path iso = findIsoPath();

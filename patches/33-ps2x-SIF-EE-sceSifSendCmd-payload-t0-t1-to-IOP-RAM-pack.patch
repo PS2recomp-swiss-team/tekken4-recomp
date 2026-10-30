@@ -1,0 +1,374 @@
+From 8f5b93b1ced3a9b319c5aab8914e0ab5d4ea64e5 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 01:54:33 +0100
+Subject: [PATCH 1/3] SIF: EE sceSifSendCmd payload ($t0/$t1) to IOP RAM,
+ packet to the IOP module's handler
+
+EE sceSifSendCmd(cid, packet, psize, src, dest, size): on the EE ABI dest and size arrive in
+$t0/$t1. ps2_syscalls::sceSifSendCmd read them from the stack and copied into EE RAM, so the
+IOP never saw the payload, and the IOP sifcmd HLE dropped sceSifAddCmdHandler, so no module saw
+the packet. Now the payload is written to IOP RAM and the packet is queued
+(ps2x::iop::queueEeSifCommand); the IOP calls the handler registered for cid (sound route only)
+at its next scheduling point, with the SIF header words (size | dsize << 8, dest, cid).
+Tekken 4's zsiopdrv pulls sound data from EE RAM this way (its cid 2 requests, cid 0 answers).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/include/ps2x/iop/iop_host.h         |   6 +
+ ps2xIOP/src/emulator/iop_emulator.cpp       | 149 ++++++++++++++++++++
+ ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp    |  27 +---
+ ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp |  56 ++++++--
+ 4 files changed, 198 insertions(+), 40 deletions(-)
+
+diff --git a/ps2xIOP/include/ps2x/iop/iop_host.h b/ps2xIOP/include/ps2x/iop/iop_host.h
+index 289bc33..b26c3e3 100644
+--- a/ps2xIOP/include/ps2x/iop/iop_host.h
++++ b/ps2xIOP/include/ps2x/iop/iop_host.h
+@@ -153,4 +153,10 @@ namespace ps2x::iop
+     // GetSreg/SetSreg (ordinals 6/7) read the same store. zsiopdrv spins until register 31 is non-zero.
+     void setSifSoftwareRegister(uint32_t index, uint32_t value) noexcept;
+     uint32_t sifSoftwareRegister(uint32_t index) noexcept;
++
++    // EE -> IOP SIF commands (EE sceSifSendCmd). The runtime copies the command's extra payload into IOP RAM first
++    // (the SIF DMA lands before the packet); the IOP then calls the handler its module registered for cid with
++    // sceSifAddCmdHandler, at its next scheduling point (on a console: the IOP's SIF DMA interrupt). packet is the
++    // whole command packet (16-byte header + body, 16..112 bytes). Commands without a registered handler are dropped.
++    void queueEeSifCommand(uint32_t cid, const void *packet, uint32_t size) noexcept;
+ }
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 71b75a7..c5b3693 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -20,9 +20,15 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <cctype>
+ #include <cstdlib>
++#include <cstdio>
++#include <cstring>
++#include <functional>
++#include <deque>
+ #include <map>
++#include <mutex>
+ #include <optional>
+ #include <span>
+ #include <sstream>
+@@ -31,6 +37,29 @@
+ 
+ namespace ps2x::iop::detail
+ {
++    // queueEeSifCommand's queue (EE side) -> serviceEeSifCommands (IOP side). One IOP per process.
++    struct EeSifCommand
++    {
++        uint32_t cid = 0u;
++        uint32_t size = 0u;
++        std::array<uint8_t, 112> packet{};
++    };
++    std::mutex &eeSifCommandMutex()
++    {
++        static std::mutex mutex;
++        return mutex;
++    }
++    std::deque<EeSifCommand> &eeSifCommandQueue()
++    {
++        static std::deque<EeSifCommand> queue;
++        return queue;
++    }
++    std::atomic<bool> &eeSifCommandPending()
++    {
++        static std::atomic<bool> pending{false};
++        return pending;
++    }
++
+     namespace
+     {
+         constexpr uint32_t kRamSize = IopMemory::RamSize;
+@@ -196,6 +225,15 @@ namespace ps2x::iop::detail
+             m_soundRoute = -1;
+             pendingDmaInterrupts.clear();
+             pendingGuestCallbacks.clear();
++            sifCmdHandlers.clear();
++            sifCmdSlotBase = 0u;
++            sifCmdNextSlot = 0u;
++            eeSifCommandsDelivered = 0u;
++            {
++                std::lock_guard<std::mutex> lock(eeSifCommandMutex());
++                eeSifCommandQueue().clear();
++                eeSifCommandPending().store(false, std::memory_order_release);
++            }
+             nextModuleId = 1;
+             moduleCursor = kModuleLoadBase;
+             totalCycles = 0;
+@@ -662,6 +700,24 @@ namespace ps2x::iop::detail
+                     setV0(previous);
+                     return ImportDisposition::Handled;
+                 }
++                // sceSifAddCmdHandler(cid, handler, data) / sceSifRemoveCmdHandler(cid): kept per cid so EE
++                // sceSifSendCmd packets reach the module (zsiopdrv's cid 0 = the EE's answers to its data requests).
++                if (soundRouteOn() && (call.ordinal == 10u || call.ordinal == 11u))
++                {
++                    const uint32_t cid = cpu.gpr[4];
++                    if (call.ordinal == 10u)
++                    {
++                        sifCmdHandlers[cid] = SifCmdHandler{cpu.gpr[5], cpu.gpr[6], cpu.gpr[28]};
++                        std::ostringstream out;
++                        out << "[sifcmd] AddCmdHandler cid=0x" << std::hex << cid << " handler=0x" << cpu.gpr[5]
++                            << " data=0x" << cpu.gpr[6];
++                        log(LogLevel::Info, out.str());
++                    }
++                    else
++                        sifCmdHandlers.erase(cid);
++                    setV0(0);
++                    return ImportDisposition::Handled;
++                }
+                 return rpc.dispatchSifCmdImport(call.ordinal, cpu)
+                            ? ImportDisposition::Handled
+                            : ImportDisposition::Missing;
+@@ -990,11 +1046,70 @@ namespace ps2x::iop::detail
+             servicingGuestCallbacks = false;
+         }
+ 
++        // EE sceSifSendCmd packets (queueEeSifCommand): header words as the SIF hardware delivers them
++        // (size | extra size << 8, extra destination, cid), then handler(packet, data) like sifcmd's interrupt.
++        void serviceEeSifCommands()
++        {
++            if (!eeSifCommandPending().load(std::memory_order_acquire) || servicingGuestCallbacks)
++                return;
++            std::deque<EeSifCommand> commands;
++            {
++                std::lock_guard<std::mutex> lock(eeSifCommandMutex());
++                commands.swap(eeSifCommandQueue());
++                eeSifCommandPending().store(false, std::memory_order_release);
++            }
++            m_idleValid = false;
++            if (!soundRouteOn())
++                return;
++            if (sifCmdSlotBase == 0u)
++                sifCmdSlotBase = allocate(kSifCmdSlots * kSifCmdSlotSize, 64u);
++            servicingGuestCallbacks = true;
++            try
++            {
++                for (const EeSifCommand &command : commands)
++                {
++                    const auto it = sifCmdHandlers.find(command.cid);
++                    if (it == sifCmdHandlers.end() || it->second.function == 0u || sifCmdSlotBase == 0u)
++                    {
++                        static int dropped = 0;
++                        if ((command.cid & 0x80000000u) == 0u && dropped < 8)
++                        {
++                            ++dropped;
++                            std::ostringstream out;
++                            out << "[sifcmd] EE cmd cid=0x" << std::hex << command.cid << " dropped (no handler)";
++                            log(LogLevel::Info, out.str());
++                        }
++                        continue;
++                    }
++                    const uint32_t slot = sifCmdSlotBase + (sifCmdNextSlot++ % kSifCmdSlots) * kSifCmdSlotSize;
++                    (void)memory.writeRam(slot, command.packet.data(), command.size);
++                    (void)callFunction(it->second.function, slot, it->second.data, 0u, 0u, it->second.gp, 100000u);
++                    if (++eeSifCommandsDelivered <= 4u)
++                    {
++                        uint32_t word0 = 0u, word1 = 0u;
++                        std::memcpy(&word0, command.packet.data(), 4);
++                        std::memcpy(&word1, command.packet.data() + 4, 4);
++                        std::ostringstream out;
++                        out << "[sifcmd] EE cmd cid=0x" << std::hex << command.cid << " -> handler 0x"
++                            << it->second.function << " (size word 0x" << word0 << ", dest 0x" << word1 << ")";
++                        log(LogLevel::Info, out.str());
++                    }
++                }
++            }
++            catch (...)
++            {
++                servicingGuestCallbacks = false;
++                throw;
++            }
++            servicingGuestCallbacks = false;
++        }
++
+         void runCycles(uint64_t cycles) noexcept
+         {
+             try
+             {
+                 const uint64_t target = totalCycles + cycles;
++                serviceEeSifCommands();
+                 while (totalCycles < target)
+                 {
+                     // Sealed while ready and delay queues cannot grow a runnable thread.
+@@ -1200,6 +1315,19 @@ namespace ps2x::iop::detail
+         std::map<int, Module> modules;
+         std::map<int, uint64_t> pendingDmaInterrupts;
+         std::multimap<uint64_t, ScheduledGuestCallback> pendingGuestCallbacks;
++        struct SifCmdHandler
++        {
++            uint32_t function = 0u;
++            uint32_t data = 0u;
++            uint32_t gp = 0u;
++        };
++        std::map<uint32_t, SifCmdHandler> sifCmdHandlers;
++        // IOP RAM the EE command packets are handed to their handlers in (sifcmd's receive buffer on a console).
++        static constexpr uint32_t kSifCmdSlots = 16u;
++        static constexpr uint32_t kSifCmdSlotSize = 128u;
++        uint32_t sifCmdSlotBase = 0u;
++        uint32_t sifCmdNextSlot = 0u;
++        uint64_t eeSifCommandsDelivered = 0u;
+         uint32_t nextModuleId = 1;
+         uint32_t moduleCursor = kModuleLoadBase;
+         uint64_t totalCycles = 0;
+@@ -1370,4 +1498,25 @@ namespace ps2x::iop
+     {
+         return index < g_sifSoftwareRegisters.size() ? g_sifSoftwareRegisters[index] : 0u;
+     }
++
++    void queueEeSifCommand(uint32_t cid, const void *packet, uint32_t size) noexcept
++    {
++        if (!packet || size < 16u || size > 112u)
++            return;
++        try
++        {
++            detail::EeSifCommand command;
++            command.cid = cid;
++            command.size = size;
++            std::memcpy(command.packet.data(), packet, size);
++            std::lock_guard<std::mutex> lock(detail::eeSifCommandMutex());
++            if (detail::eeSifCommandQueue().size() >= 256u) // no IOP running to take them
++                detail::eeSifCommandQueue().pop_front();
++            detail::eeSifCommandQueue().push_back(command);
++            detail::eeSifCommandPending().store(true, std::memory_order_release);
++        }
++        catch (...)
++        {
++        }
++    }
+ }
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+index dc975ed..bcbfded 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -24,31 +24,8 @@ namespace ps2_stubs
+ 
+     void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        const uint32_t srcAddr = getRegU32(ctx, 7); // $a3
+-        const uint32_t dstAddr = readStackU32(rdram, ctx, 16);
+-        const uint32_t size = readStackU32(rdram, ctx, 20);
+-        if (size != 0u && srcAddr != 0u && dstAddr != 0u)
+-        {
+-            std::vector<uint8_t> payload(size);
+-            bool valid = runtime != nullptr;
+-            for (uint32_t i = 0; i < size; ++i)
+-            {
+-                const uint8_t *src = getConstMemPtr(rdram, srcAddr + i);
+-                if (!src)
+-                {
+-                    valid = false;
+-                    break;
+-                }
+-                payload[i] = *src;
+-            }
+-            if (!valid || !runtime->writeIopMemory(dstAddr, payload.data(), payload.size()))
+-            {
+-                setReturnS32(ctx, 0);
+-                return;
+-            }
+-        }
+-
+-        setReturnS32(ctx, 1);
++        // Same call as the syscall layer: payload from $a3 to IOP RAM at $t0 ($t1 bytes), packet to the IOP handler.
++        ps2_syscalls::sceSifSendCmd(rdram, ctx, runtime);
+     }
+ 
+     namespace
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+index 07fcd29..9183bd6 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+@@ -2,6 +2,9 @@
+ #include "RPC.h"
+ #include "../../ps2_iop_transport.h"
+ 
++#include <atomic>
++#include <cstring>
++
+ namespace ps2_syscalls
+ {
+     namespace
+@@ -968,22 +971,39 @@ namespace ps2_syscalls
+         SifCallRpc(rdram, ctx, runtime);
+     }
+ 
++    // sceSifSendCmd(cid, packet, packet_size, src_extra, dest_extra, size_extra). On the EE ABI the 5th and 6th
++    // arguments arrive in $t0 and $t1 (not on the stack). The extra payload is a SIF DMA into IOP RAM at dest_extra,
++    // then the packet goes to the IOP module that registered cid with sceSifAddCmdHandler (header words as the SIF
++    // delivers them: packet size | payload size << 8, payload destination, cid). Tekken 4's sound driver pulls sound
++    // data from EE RAM this way; with the payload read from the stack and copied into EE RAM it received nothing.
+     void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        uint32_t cid = getRegU32(ctx, 4);
+-        uint32_t packetAddr = getRegU32(ctx, 5);
+-        uint32_t packetSize = getRegU32(ctx, 6);
+-        uint32_t srcExtra = getRegU32(ctx, 7);
+-
+-        uint32_t sp = getRegU32(ctx, 29);
+-        uint32_t destExtra = 0;
+-        uint32_t sizeExtra = 0;
+-        readStackU32(rdram, sp, 0x10, destExtra);
+-        readStackU32(rdram, sp, 0x14, sizeExtra);
++        const uint32_t cid = getRegU32(ctx, 4);
++        const uint32_t packetAddr = getRegU32(ctx, 5);
++        const uint32_t packetSize = getRegU32(ctx, 6);
++        const uint32_t srcExtra = getRegU32(ctx, 7);
++        const uint32_t destExtra = getRegU32(ctx, 8);
++        const uint32_t sizeExtra = getRegU32(ctx, 9);
++
++        bool copied = sizeExtra == 0u;
++        if (sizeExtra != 0u && sizeExtra <= PS2_RAM_SIZE && srcExtra != 0u && destExtra != 0u && runtime)
++        {
++            const uint32_t phys = srcExtra & 0x01FFFFFFu;
++            if (static_cast<uint64_t>(phys) + sizeExtra <= PS2_RAM_SIZE)
++                copied = runtime->writeIopMemory(destExtra, rdram + phys, sizeExtra);
++        }
+ 
+-        if (sizeExtra > 0 && srcExtra && destExtra)
++        constexpr uint32_t kMaxPacket = 112u;
++        uint8_t packet[kMaxPacket] = {};
++        const uint8_t *bytes = packetAddr ? getConstMemPtr(rdram, packetAddr) : nullptr;
++        if (bytes && packetSize >= 16u && packetSize <= kMaxPacket)
+         {
+-            rpcCopyToRdram(rdram, destExtra, srcExtra, sizeExtra);
++            std::memcpy(packet, bytes, packetSize);
++            const uint32_t sizeWord = (packetSize & 0xFFu) | ((copied ? sizeExtra : 0u) << 8u);
++            std::memcpy(packet + 0, &sizeWord, 4);
++            std::memcpy(packet + 4, &destExtra, 4);
++            std::memcpy(packet + 8, &cid, 4);
++            ps2x::iop::queueEeSifCommand(cid, packet, packetSize);
+         }
+ 
+         static int logCount = 0;
+@@ -992,12 +1012,18 @@ namespace ps2_syscalls
+             RUNTIME_LOG("[sceSifSendCmd] cid=0x" << std::hex << cid
+                                                  << " packet=0x" << packetAddr
+                                                  << " psize=0x" << packetSize
+-                                                 << " extra=0x" << destExtra << std::dec << std::endl);
++                                                 << " extra=0x" << srcExtra << "->0x" << destExtra
++                                                 << " size=0x" << sizeExtra << (copied ? "" : " (not copied)")
++                                                 << std::dec << std::endl);
+             ++logCount;
+         }
+ 
+-        // Return non-zero on success.
+-        setReturnS32(ctx, 1);
++        // Non-zero on success: the DMA id (games keep it as a busy marker until the IOP answers).
++        static std::atomic<uint32_t> nextId{1u};
++        uint32_t id = nextId.fetch_add(1u) & 0x7FFFFFFFu;
++        if (id == 0u)
++            id = nextId.fetch_add(1u) & 0x7FFFFFFFu;
++        setReturnS32(ctx, static_cast<int32_t>(id));
+     }
+ 
+     void sceRpcGetPacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+-- 
+2.55.0.windows.3
+

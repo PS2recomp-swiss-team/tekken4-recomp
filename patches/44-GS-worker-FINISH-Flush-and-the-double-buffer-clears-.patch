@@ -1,0 +1,119 @@
+From 0e3fa7859ad6457c5e98db846a9079fe4d28d2bd Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 03:49:12 +0100
+Subject: [PATCH 44/55] GS worker: FINISH, Flush and the double-buffer clears
+ no longer wait for the GL thread
+
+FINISH (Flush + Sync), the presenter's latch (Flush) and sceGsSwapDBuff's
+clears drained the GS worker queue: the EE thread waited until the GL thread
+had drawn everything queued, ~3 times per frame (5-7 ms per fight frame).
+They are queued now like every other command; the worker keeps their order and
+every read the EE can see (local->host transfers, VRAM reads, snapshots) still
+waits for the queue. PS2X_GS_SYNC_DRAIN=1 restores the waits (A/B).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../include/runtime/gs/gs_threaded_backend.h  |  2 +
+ .../src/lib/gs/gs_threaded_backend.cpp        | 45 ++++++++++++++++++-
+ 2 files changed, 45 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h b/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h
+index ec2fbe9..e06a844 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_threaded_backend.h
+@@ -67,6 +67,8 @@ private:
+         DrawState,
+         Vertices,
+         Call,
++        Flush,
++        Clear,
+     };
+ 
+     void Enqueue(Op op, const void *payload, uint32_t size);
+diff --git a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+index d6a3175..6c217bc 100644
+--- a/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_threaded_backend.cpp
+@@ -37,6 +37,26 @@ namespace
+         GSTexClutReg texclut;
+     };
+ 
++    // Tekken 4 port (perf): the EE no longer waits for the GS worker at FINISH, at the presenter's latch and at the
++    // double-buffer clears. Flush (end the pending GL batch), FINISH and the clear are queued like every other command:
++    // the worker keeps their order, and everything the EE can read back from the GS (local->host transfers, VRAM
++    // reads, snapshots) still waits for the queue itself. PS2X_GS_SYNC_DRAIN=1 restores the waits (A/B).
++    bool syncDrain()
++    {
++        static const bool drain = []
++        {
++            const char *value = std::getenv("PS2X_GS_SYNC_DRAIN");
++            return value && *value == '1';
++        }();
++        return drain;
++    }
++
++    struct ClearArgs
++    {
++        GSContext context;
++        uint32_t rgba;
++    };
++
+     struct WriteVramArgs
+     {
+         uint32_t psm;
+@@ -276,6 +296,15 @@ void GSThreadedBackend::Execute(const std::vector<uint8_t> &chunk, GSPrimitiveBa
+         case Op::Call:
+             (*readAt<const std::function<void()> *>(payload))();
+             break;
++        case Op::Flush:
++            m_inner->Flush();
++            break;
++        case Op::Clear:
++        {
++            const ClearArgs args = readAt<ClearArgs>(payload);
++            m_inner->ClearFramebuffer(args.context, args.rgba);
++            break;
++        }
+         }
+     }
+ }
+@@ -331,7 +360,12 @@ void GSThreadedBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
+ void GSThreadedBackend::Flush()
+ {
+     // GOW-Port: barrera para lectura/presentación y llamadas del frontend existente.
+-    RunOnWorker([&] { m_inner->Flush(); });
++    if (syncDrain())
++    {
++        RunOnWorker([&] { m_inner->Flush(); });
++        return;
++    }
++    Enqueue(Op::Flush, nullptr, 0u);
+ }
+ 
+ void GSThreadedBackend::TextureFlush()
+@@ -350,7 +384,7 @@ static bool gowFinishAsync()
+ 
+ void GSThreadedBackend::Sync(GSSyncReason reason)
+ {
+-    if (reason == GSSyncReason::Finish && gowFinishAsync())
++    if (reason == GSSyncReason::Finish && (gowFinishAsync() || !syncDrain()))
+     {
+         Enqueue(Op::Sync, &reason, sizeof(reason));
+         return;
+@@ -381,6 +415,13 @@ bool GSThreadedBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba
+ {
+     if (GsInventory::get().enabled())
+         GsInventory::get().clear();
++    if (!syncDrain())
++    {
++        // the callers (sceGsSwapDBuff's clears) do not use the result
++        const ClearArgs args{context, rgba};
++        Enqueue(Op::Clear, &args, sizeof(args));
++        return context.frame.fbw != 0u;
++    }
+     bool result = false;
+     RunOnWorker([&] { result = m_inner->ClearFramebuffer(context, rgba); });
+     return result;
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,1199 @@
+From 0dc98d9e6131d3dc469e5c5f1febb66f9020b88f Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 01:20:58 +0100
+Subject: [PATCH] Rollback hooks: frame boundary hook, machine
+ snapshot/restore, state hash, pad input provider
+
+- EeScheduler: boundary hook at the top of the dispatcher (every VBlankStart, or a main-thread wake),
+  SavedState save/load of every guest-visible scheduler member, a deterministic state digest; with a hook
+  installed, cycle-due events fire in EE-cycle order and the timer-vs-vblank wait compares cycles, not host
+  times (host pacing can no longer reorder events). No hook: unchanged behaviour.
+- PS2Memory: PS2DeviceState save/load (I/O regs, GS privileged regs, VIF0/1, DMA, PATH2/3 cut state,
+  pending transfers, DMAC causes, EE timers, MFIFO).
+- ps2_rollback: capture/restore of RDRAM, scratchpad, VU memories, scheduler, devices, VU0/VU1
+  interpreters, guest heap bookkeeping, pad ports; masked per-page RDRAM hash + full-state hash.
+- Pad stub: PadInputProvider (frame-exact scripted / rollback input), savePadState/loadPadState.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/CMakeLists.txt                 |   1 +
+ ps2xRuntime/include/ps2_runtime.h          |   1 +
+ ps2xRuntime/include/runtime/ee_scheduler.h |  69 ++++-
+ ps2xRuntime/include/runtime/ps2_memory.h   |  41 +++
+ ps2xRuntime/include/runtime/ps2_rollback.h |  63 +++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 301 ++++++++++++++++++++-
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp   |  51 +++-
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.h     |  10 +
+ ps2xRuntime/src/lib/ps2_memory.cpp         | 142 ++++++++++
+ ps2xRuntime/src/lib/ps2_rollback.cpp       | 283 +++++++++++++++++++
+ 10 files changed, 958 insertions(+), 4 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/ps2_rollback.h
+ create mode 100644 ps2xRuntime/src/lib/ps2_rollback.cpp
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 42662be..67eda7e 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -390,6 +390,7 @@ add_library(ps2_runtime STATIC
+     src/lib/ps2_rom_device.cpp
+     src/lib/ps2_vfs.cpp
+     src/lib/ps2_runtime.cpp
++    src/lib/ps2_rollback.cpp
+     src/lib/ps2_vif1_interpreter.cpp
+     src/lib/vu/ps2_vu1_core.cpp
+     src/lib/vu/ps2_vu1_upper.cpp
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index 4b9242c..b0a990c 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -486,6 +486,7 @@ private:
+ 
+     friend class PS2IopTransport;
+     friend class EeScheduler;
++    friend class PS2RollbackAccess;
+ 
+ private:
+     PS2Memory m_memory;
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index f247ff9..68a6b02 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -245,6 +245,21 @@ struct EeEvent
+     uint64_t value = 0;
+ };
+ 
++// Rollback/measurement hook: the main thread (id 1) was woken from a wait and no guest code is on the host
++// stack (the dispatcher is between two guest calls, no thread running). Everything the EE sees is plain data
++// at this point, so the hook may hash, save or restore the whole machine (EeScheduler::saveState/loadState).
++struct EeBoundaryInfo
++{
++    // vblank: a VBlankStart was processed since the last call (the hook then also runs while a thread is
++    // Running: it was stopped at a checkpoint, its resume pc is in its context and the host stack is unwound).
++    bool vblank = false;
++    int runningThreadId = 0;
++    EeWaitReason reason = EeWaitReason::None;
++    int waitId = 0;
++    uint64_t vsyncTick = 0;
++    uint64_t eeCycle = 0;
++};
++
+ struct EeThreadCreateParams
+ {
+     uint32_t attr = 0;
+@@ -360,7 +375,15 @@ public:
+     [[nodiscard]] EeKernelSnapshot snapshot() const;
+     void publishSnapshot();
+ 
+-private:
++    // Rollback support (TEKKEN4_RB_MODE; unused otherwise). The hook runs on the executor at the top of the
++    // dispatcher loop once per wake of the main thread, before any thread is selected. Setting a hook also makes
++    // the order of cycle-due events depend on EE cycles only (never on host pacing), see processDueDeadlines.
++    using BoundaryHook = std::function<void(const EeBoundaryInfo &)>;
++    void setBoundaryHook(BoundaryHook hook);
++    [[nodiscard]] uint64_t eeCycle() const noexcept { return m_eeCycle; }
++    // Host time the executor spent waiting for pacing deadlines (rollback mode only; 0 otherwise).
++    [[nodiscard]] uint64_t hostWaitNanoseconds() const noexcept { return m_hostWaitNs; }
++
+     struct ScheduledEvent
+     {
+         uint64_t deadlineCycle = 0;
+@@ -369,6 +392,42 @@ private:
+         uint64_t sequence = 0;
+     };
+ 
++    // Every member that the guest can observe, copied by value (std::function members capture values only).
++    struct SavedState
++    {
++        std::array<std::deque<int>, kPriorityCount> readyQueues{};
++        std::unordered_map<int, GuestThread> threads;
++        std::unordered_map<int, EeSemaphore> semaphores;
++        std::unordered_map<int, EeEventFlag> eventFlags;
++        std::unordered_map<int, EeAlarm> alarms;
++        std::unordered_map<int, EeIrqHandler> intcHandlers;
++        std::unordered_map<int, EeIrqHandler> dmacHandlers;
++        int nextThreadId = 0, nextInvocationThreadId = 0, nextSemaphoreId = 0, nextEventFlagId = 0, nextAlarmId = 0;
++        int nextIntcHandlerId = 0, nextDmacHandlerId = 0;
++        int intcHeadOrder = 0, intcTailOrder = 0, dmacHeadOrder = 0, dmacTailOrder = 0;
++        uint32_t enabledIntcMask = 0, enabledDmacMask = 0;
++        int currentThreadId = 0;
++        bool rescheduleRequested = false, timeSliceExpired = false, insideInterrupt = false, checkpointPending = false;
++        uint32_t pendingEeTimerInterrupts = 0;
++        uint64_t eeCycle = 0, sliceEndCycle = 0;
++        std::deque<EeEvent> events;
++        std::vector<ScheduledEvent> deadlines;
++        std::deque<GuestInvocation> pendingInvocations;
++        uint64_t eventSequence = 0, invocationSequence = 0, vsyncTick = 0;
++        uint32_t vsyncFlagAddress = 0, vsyncTickAddress = 0;
++        uint32_t gsVSyncCallback = 0, gsVSyncCallbackGp = 0, gsVSyncCallbackSp = 0;
++        std::unordered_map<uint64_t, uint32_t> invocationStackTops;
++        bool mainWakePending = false;
++        bool vblankPending = false;
++    };
++    // Executor only, at a boundary (inside the hook).
++    void saveState(SavedState &out) const;
++    void loadState(const SavedState &in);
++    // Deterministic bytes of the guest-visible scheduler state (thread ids sorted), for state hashes.
++    void appendStateDigest(std::vector<uint8_t> &out) const;
++
++private:
++
+     void assertExecutor() const;
+     [[nodiscard]] int allocateThreadId();
+     GuestThread &acquireInvocationThread();
+@@ -453,4 +512,12 @@ private:
+     mutable std::mutex m_snapshotMutex;
+     EeKernelSnapshot m_snapshot;
+     uint64_t m_snapshotSequence = 0;
++
++    BoundaryHook m_boundaryHook;
++    bool m_cycleOrderedEvents = false;
++    uint64_t m_hostWaitNs = 0;
++    bool m_mainWakePending = false;
++    bool m_vblankPending = false;
++    EeWaitReason m_mainWakeReason = EeWaitReason::None;
++    int m_mainWakeId = 0;
+ };
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index 31006a1..5d219f4 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -258,9 +258,50 @@ struct JumpTable
+     std::vector<uint32_t> targets; // Jump targets
+ };
+ 
++// Device state of PS2Memory that the EE can observe (rollback snapshots, TEKKEN4_RB_MODE). Guest memories
++// (RDRAM, scratchpad, VU code/data) are copied separately; GS VRAM is output and never rolled back.
++struct PS2DeviceState
++{
++    std::unordered_map<uint32_t, uint32_t> ioRegisters;
++    uint64_t gsRegs[20]{};
++    VIFRegisters vif0{};
++    VIFRegisters vif1{};
++    DMARegisters dma[10]{};
++    bool seenGifCopy = false;
++    bool path3Masked = false;
++    uint64_t path2CutTagLo = 0, path2CutTagHi = 0;
++    uint32_t path2CutDoneRegs = 0, path2CutRemainingBytes = 0;
++    bool path2CutDirectHl = false;
++    std::vector<uint8_t> vif1Carry;
++    std::vector<std::vector<uint8_t>> path3MaskedFifo;
++    struct Pending
++    {
++        bool fromScratchpad = false;
++        uint32_t srcAddr = 0;
++        uint32_t qwc = 0;
++        std::vector<uint8_t> chainData;
++    };
++    std::vector<Pending> pendingGif, pendingVif0, pendingVif1;
++    std::vector<uint32_t> completedDmacCauses;
++    struct Timer
++    {
++        uint32_t count = 0, mode = 0, compare = 0, hold = 0;
++        uint64_t clockRemainder = 0;
++    };
++    Timer timers[4]{};
++    uint64_t eeTimerDebt = 0, eeTimerLimit = 1;
++    uint32_t latchedTimerIrq = 0;
++    bool gifFqcPending = false;
++    bool mfifoDraining = false;
++    uint32_t mfifoWaitingChannel = 0;
++};
++
+ class PS2Memory
+ {
+ public:
++    void saveDeviceState(PS2DeviceState &out);
++    void loadDeviceState(const PS2DeviceState &in);
++
+     PS2Memory();
+     ~PS2Memory();
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback.h b/ps2xRuntime/include/runtime/ps2_rollback.h
+new file mode 100644
+index 0000000..7799f97
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_rollback.h
+@@ -0,0 +1,63 @@
++#pragma once
++
++// Rollback support (phase 0/1, docs/ROLLBACK_PLAN.md of the Tekken 4 port): a full copy of the emulated machine
++// at a frame boundary (EeScheduler boundary hook), its restore, and a state hash. Nothing here runs unless a game
++// module installs the boundary hook; the default runtime is unchanged.
++//
++// What a snapshot holds: RDRAM 32 MB, scratchpad, VU0/VU1 code+data, EeScheduler (threads, contexts, kernel
++// objects, deadlines, cycle counters), PS2Memory device state (DMA/VIF/GIF/MFIFO/timers), the VU0/VU1 interpreters,
++// the guest heap bookkeeping of the runtime, the pad stub ports. NOT held (output side or outside the EE): GS VRAM
++// and GS frontend/backend state, IOP (CPU, RAM, SPU2, SoundEngine), host audio, presenter.
++
++#include "runtime/ee_scheduler.h"
++#include "runtime/ps2_memory.h"
++#include "runtime/ps2_vu1.h"
++
++#include <cstdint>
++#include <memory>
++#include <vector>
++
++class PS2Runtime;
++
++namespace ps2_rollback
++{
++    struct Snapshot
++    {
++        std::vector<uint8_t> rdram;
++        std::vector<uint8_t> scratchpad;
++        std::vector<uint8_t> vu0Code, vu0Data, vu1Code, vu1Data;
++        EeScheduler::SavedState scheduler;
++        PS2DeviceState devices;
++        std::unique_ptr<VU1Interpreter> vu0, vu1;
++        R5900Context cpuContext;
++        std::vector<uint8_t> runtimeState; // guest heap + async callback stacks (PS2RollbackAccess)
++        std::vector<uint8_t> padState;
++        bool valid = false;
++    };
++
++    // Both at a boundary only (inside the EeScheduler boundary hook, executor thread).
++    void capture(PS2Runtime &runtime, Snapshot &out);
++    void restore(PS2Runtime &runtime, const Snapshot &in);
++
++    // Byte range excluded from the RDRAM hash (physical address).
++    struct MaskRange
++    {
++        uint32_t address = 0;
++        uint32_t size = 0;
++    };
++
++    struct StateHash
++    {
++        uint64_t total = 0;      // everything below combined
++        uint64_t rdram = 0;      // RDRAM with masks applied
++        uint64_t other = 0;      // scratchpad + VU memories + scheduler digest + device state digest
++        uint64_t scheduler = 0;  // scheduler digest alone
++        uint32_t regions[32]{};  // RDRAM per 1 MB (masked), folded to 32 bits
++    };
++
++    // Hashes the current machine state. pageHashes (optional) receives 8192 per-4 KB-page hashes of RDRAM.
++    StateHash hashState(PS2Runtime &runtime, const std::vector<MaskRange> &masks,
++                        std::vector<uint64_t> *pageHashes = nullptr);
++
++    uint64_t hashBytes(const uint8_t *data, size_t size, uint64_t seed = 0);
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index c5e31c4..852c6d9 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -165,6 +165,24 @@ void EeScheduler::run()
+             break;
+         }
+ 
++        if (m_boundaryHook && (m_vblankPending || (m_mainWakePending && m_currentThreadId == 0)))
++        {
++            EeBoundaryInfo info{};
++            info.vblank = m_vblankPending;
++            info.runningThreadId = m_currentThreadId;
++            if (m_mainWakePending && m_currentThreadId == 0)
++            {
++                info.reason = m_mainWakeReason;
++                info.waitId = m_mainWakeId;
++                m_mainWakePending = false;
++            }
++            m_vblankPending = false;
++            info.vsyncTick = m_vsyncTick;
++            info.eeCycle = m_eeCycle;
++            m_boundaryHook(info);
++            continue;
++        }
++
+         if (m_currentThreadId == 0)
+         {
+             GuestThread *next = selectReady();
+@@ -1693,6 +1711,12 @@ void EeScheduler::blockCurrent(EeWaitState wait)
+ 
+ void EeScheduler::makeReady(GuestThread &item, int result, bool interruptSafe)
+ {
++    if (item.id == kMainThreadId)
++    {
++        m_mainWakePending = true;
++        m_mainWakeReason = item.wait.reason;
++        m_mainWakeId = waitObjectId(item.wait);
++    }
+     auto completion = std::move(item.wait.completion);
+     item.wait = {};
+     setReturnS32(&item.activeContext(), result);
+@@ -1782,6 +1806,54 @@ void EeScheduler::processDueDeadlines()
+         {
+             std::unique_lock lock(m_eventMutex);
+             const auto now = std::chrono::steady_clock::now();
++            if (m_cycleOrderedEvents)
++            {
++                // Rollback mode: the earliest cycle-due deadline fires first, whatever the host deadlines say
++                // (an alarm's host deadline comes from now(), the vblank chain's from boot, so their host order can
++                // differ from their cycle order when the host runs behind). Pacing still waits for its host time.
++                uint64_t firstCycle = std::numeric_limits<uint64_t>::max();
++                for (const ScheduledEvent &item : m_deadlines)
++                {
++                    if (item.deadlineCycle <= m_eeCycle && item.deadlineCycle < firstCycle)
++                    {
++                        firstCycle = item.deadlineCycle;
++                    }
++                }
++                if (firstCycle == std::numeric_limits<uint64_t>::max())
++                {
++                    updateNextDeadline();
++                    return;
++                }
++                for (const ScheduledEvent &item : m_deadlines)
++                {
++                    if (item.deadlineCycle == firstCycle && item.hostDeadline > pacingDeadline)
++                    {
++                        pacingDeadline = item.hostDeadline;
++                    }
++                }
++                if (now < pacingDeadline)
++                {
++                    m_eventCv.wait_until(lock, pacingDeadline, [this]()
++                                         { return m_stopRequested.load(std::memory_order_acquire); });
++                    m_hostWaitNs += static_cast<uint64_t>(
++                        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - now).count());
++                    if (m_stopRequested.load(std::memory_order_acquire))
++                    {
++                        updateNextDeadline();
++                        return;
++                    }
++                }
++                auto firstLater = std::partition(m_deadlines.begin(), m_deadlines.end(),
++                                                 [firstCycle](const ScheduledEvent &item)
++                                                 { return item.deadlineCycle == firstCycle; });
++                due.insert(due.end(),
++                           std::make_move_iterator(m_deadlines.begin()),
++                           std::make_move_iterator(firstLater));
++                m_deadlines.erase(m_deadlines.begin(), firstLater);
++                updateNextDeadline();
++            }
++            else
++            {
+             for (const ScheduledEvent &item : m_deadlines)
+             {
+                 if (item.deadlineCycle <= m_eeCycle &&
+@@ -1820,6 +1892,7 @@ void EeScheduler::processDueDeadlines()
+                        std::make_move_iterator(firstFuture));
+             m_deadlines.erase(m_deadlines.begin(), firstFuture);
+             updateNextDeadline();
++            }
+         }
+ 
+         std::sort(due.begin(), due.end(), [](const ScheduledEvent &left, const ScheduledEvent &right)
+@@ -1868,6 +1941,7 @@ void EeScheduler::processEvent(const EeEvent &event)
+         break;
+     case EeEventType::VBlankStart:
+         ++m_vsyncTick;
++        m_vblankPending = static_cast<bool>(m_boundaryHook);
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+         {
+@@ -2029,16 +2103,25 @@ void EeScheduler::waitForEvent()
+     if (hasTimerDeadline)
+     {
+         const auto timerHostDeadline = std::chrono::steady_clock::now() + eeCyclesToHostDuration(timerCycles);
+-        if (timerHostDeadline < hostDeadline)
++        // Rollback mode compares EE cycles: which deadline is reached first must not depend on host pacing.
++        const bool timerFirst = m_cycleOrderedEvents ? (m_deadlines.empty() || m_eeCycle + timerCycles < deadlineCycle)
++                                                     : timerHostDeadline < hostDeadline;
++        if (timerFirst)
+         {
+             deadlineCycle = m_eeCycle + timerCycles;
+             hostDeadline = timerHostDeadline;
+         }
+     }
+ 
++    const auto waitStart = m_cycleOrderedEvents ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+     const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this]()
+                                                { return !m_events.empty() ||
+                                                         m_stopRequested.load(std::memory_order_acquire); });
++    if (m_cycleOrderedEvents)
++    {
++        m_hostWaitNs += static_cast<uint64_t>(
++            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count());
++    }
+     if (!signaled)
+     {
+         const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
+@@ -2144,3 +2227,219 @@ void EeScheduler::publishIdleDebugContext()
+         publishDebugContext(selected->activeContext());
+     }
+ }
++
++void EeScheduler::setBoundaryHook(BoundaryHook hook)
++{
++    m_boundaryHook = std::move(hook);
++    m_cycleOrderedEvents = static_cast<bool>(m_boundaryHook);
++}
++
++void EeScheduler::saveState(SavedState &out) const
++{
++    assertExecutor();
++    out.readyQueues = m_readyQueues;
++    out.threads = m_threads;
++    out.semaphores = m_semaphores;
++    out.eventFlags = m_eventFlags;
++    out.alarms = m_alarms;
++    out.intcHandlers = m_intcHandlers;
++    out.dmacHandlers = m_dmacHandlers;
++    out.nextThreadId = m_nextThreadId;
++    out.nextInvocationThreadId = m_nextInvocationThreadId;
++    out.nextSemaphoreId = m_nextSemaphoreId;
++    out.nextEventFlagId = m_nextEventFlagId;
++    out.nextAlarmId = m_nextAlarmId;
++    out.nextIntcHandlerId = m_nextIntcHandlerId;
++    out.nextDmacHandlerId = m_nextDmacHandlerId;
++    out.intcHeadOrder = m_intcHeadOrder;
++    out.intcTailOrder = m_intcTailOrder;
++    out.dmacHeadOrder = m_dmacHeadOrder;
++    out.dmacTailOrder = m_dmacTailOrder;
++    out.enabledIntcMask = m_enabledIntcMask;
++    out.enabledDmacMask = m_enabledDmacMask;
++    out.currentThreadId = m_currentThreadId;
++    out.rescheduleRequested = m_rescheduleRequested;
++    out.timeSliceExpired = m_timeSliceExpired;
++    out.insideInterrupt = m_insideInterrupt;
++    out.checkpointPending = m_checkpointPending.load(std::memory_order_acquire);
++    out.pendingEeTimerInterrupts = m_pendingEeTimerInterrupts;
++    out.eeCycle = m_eeCycle;
++    out.sliceEndCycle = m_sliceEndCycle;
++    {
++        std::lock_guard lock(m_eventMutex);
++        out.events = m_events;
++        out.deadlines = m_deadlines;
++    }
++    out.pendingInvocations = m_pendingInvocations;
++    out.eventSequence = m_eventSequence;
++    out.invocationSequence = m_invocationSequence;
++    out.vsyncTick = m_vsyncTick;
++    out.vsyncFlagAddress = m_vsyncFlagAddress;
++    out.vsyncTickAddress = m_vsyncTickAddress;
++    out.gsVSyncCallback = m_gsVSyncCallback;
++    out.gsVSyncCallbackGp = m_gsVSyncCallbackGp;
++    out.gsVSyncCallbackSp = m_gsVSyncCallbackSp;
++    out.invocationStackTops = m_invocationStackTops;
++    out.mainWakePending = m_mainWakePending;
++    out.vblankPending = m_vblankPending;
++}
++
++void EeScheduler::loadState(const SavedState &in)
++{
++    assertExecutor();
++    m_readyQueues = in.readyQueues;
++    m_threads = in.threads;
++    m_semaphores = in.semaphores;
++    m_eventFlags = in.eventFlags;
++    m_alarms = in.alarms;
++    m_intcHandlers = in.intcHandlers;
++    m_dmacHandlers = in.dmacHandlers;
++    m_nextThreadId = in.nextThreadId;
++    m_nextInvocationThreadId = in.nextInvocationThreadId;
++    m_nextSemaphoreId = in.nextSemaphoreId;
++    m_nextEventFlagId = in.nextEventFlagId;
++    m_nextAlarmId = in.nextAlarmId;
++    m_nextIntcHandlerId = in.nextIntcHandlerId;
++    m_nextDmacHandlerId = in.nextDmacHandlerId;
++    m_intcHeadOrder = in.intcHeadOrder;
++    m_intcTailOrder = in.intcTailOrder;
++    m_dmacHeadOrder = in.dmacHeadOrder;
++    m_dmacTailOrder = in.dmacTailOrder;
++    m_enabledIntcMask = in.enabledIntcMask;
++    m_enabledDmacMask = in.enabledDmacMask;
++    m_currentThreadId = in.currentThreadId;
++    m_rescheduleRequested = in.rescheduleRequested;
++    m_timeSliceExpired = in.timeSliceExpired;
++    m_insideInterrupt = in.insideInterrupt;
++    m_pendingEeTimerInterrupts = in.pendingEeTimerInterrupts;
++    m_eeCycle = in.eeCycle;
++    m_sliceEndCycle = in.sliceEndCycle;
++    {
++        std::lock_guard lock(m_eventMutex);
++        m_events = in.events;
++        m_deadlines = in.deadlines;
++        updateNextDeadline();
++    }
++    m_checkpointPending.store(in.checkpointPending, std::memory_order_release);
++    m_pendingInvocations = in.pendingInvocations;
++    m_eventSequence = in.eventSequence;
++    m_invocationSequence = in.invocationSequence;
++    m_vsyncTick = in.vsyncTick;
++    m_vsyncFlagAddress = in.vsyncFlagAddress;
++    m_vsyncTickAddress = in.vsyncTickAddress;
++    m_gsVSyncCallback = in.gsVSyncCallback;
++    m_gsVSyncCallbackGp = in.gsVSyncCallbackGp;
++    m_gsVSyncCallbackSp = in.gsVSyncCallbackSp;
++    m_invocationStackTops = in.invocationStackTops;
++    m_mainWakePending = in.mainWakePending;
++    m_vblankPending = in.vblankPending;
++    m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
++    publishSnapshot();
++}
++
++namespace
++{
++    template <typename T>
++    void appendPod(std::vector<uint8_t> &out, const T &value)
++    {
++        const auto *bytes = reinterpret_cast<const uint8_t *>(&value);
++        out.insert(out.end(), bytes, bytes + sizeof(T));
++    }
++
++    template <typename Map>
++    std::vector<int> sortedKeys(const Map &map)
++    {
++        std::vector<int> keys;
++        keys.reserve(map.size());
++        for (const auto &[key, value] : map)
++        {
++            (void)value;
++            keys.push_back(key);
++        }
++        std::sort(keys.begin(), keys.end());
++        return keys;
++    }
++}
++
++void EeScheduler::appendStateDigest(std::vector<uint8_t> &out) const
++{
++    appendPod(out, m_eeCycle);
++    appendPod(out, m_vsyncTick);
++    appendPod(out, m_currentThreadId);
++    appendPod(out, m_pendingEeTimerInterrupts);
++    for (const auto &queue : m_readyQueues)
++    {
++        appendPod(out, static_cast<uint32_t>(queue.size()));
++        for (const int id : queue)
++        {
++            appendPod(out, id);
++        }
++    }
++    for (const int id : sortedKeys(m_threads))
++    {
++        const GuestThread &item = m_threads.at(id);
++        appendPod(out, id);
++        appendPod(out, item.status);
++        appendPod(out, item.wait.reason);
++        appendPod(out, waitObjectId(item.wait));
++        appendPod(out, item.currentPriority);
++        appendPod(out, item.suspendCount);
++        appendPod(out, item.wakeupCount);
++        appendPod(out, static_cast<uint32_t>(item.invocations.size()));
++        appendPod(out, static_cast<uint8_t>(item.resumeCompletion ? 1 : 0));
++        if (item.status != EeThreadStatus::Dormant)
++        {
++            appendPod(out, item.context);
++            for (const GuestInvocation &invocation : item.invocations)
++            {
++                appendPod(out, invocation.kind);
++                appendPod(out, invocation.context);
++            }
++        }
++    }
++    for (const int id : sortedKeys(m_semaphores))
++    {
++        const EeSemaphore &item = m_semaphores.at(id);
++        appendPod(out, id);
++        appendPod(out, item.count);
++        for (const int waiter : item.waiters)
++        {
++            appendPod(out, waiter);
++        }
++    }
++    for (const int id : sortedKeys(m_eventFlags))
++    {
++        const EeEventFlag &item = m_eventFlags.at(id);
++        appendPod(out, id);
++        appendPod(out, item.bits);
++        for (const int waiter : item.waiters)
++        {
++            appendPod(out, waiter);
++        }
++    }
++    for (const int id : sortedKeys(m_alarms))
++    {
++        appendPod(out, id);
++        appendPod(out, m_alarms.at(id).handler);
++    }
++    {
++        std::lock_guard lock(m_eventMutex);
++        std::vector<std::pair<uint64_t, uint32_t>> deadlines;
++        for (const ScheduledEvent &item : m_deadlines)
++        {
++            deadlines.emplace_back(item.deadlineCycle, (static_cast<uint32_t>(item.event.type) << 24) ^ item.event.id);
++        }
++        std::sort(deadlines.begin(), deadlines.end());
++        for (const auto &item : deadlines)
++        {
++            appendPod(out, item.first); // not the pair: its padding bytes are garbage
++            appendPod(out, item.second);
++        }
++    }
++    appendPod(out, static_cast<uint32_t>(m_pendingInvocations.size()));
++    for (const GuestInvocation &invocation : m_pendingInvocations)
++    {
++        appendPod(out, invocation.kind);
++        appendPod(out, invocation.context.pc);
++    }
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index c5d37ff..b8553f9 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -67,6 +67,8 @@ namespace ps2_stubs
+         PadInputState g_padOverrideState{};
+         PadPortState g_padPorts[kPadPortCount]{};
+         int g_padReadLogCount = 0;
++        PadInputProvider g_padInputProvider = nullptr;
++        std::atomic<uint32_t> g_padFrameCount{0};
+ 
+         uint8_t axisToByte(float axis)
+         {
+@@ -126,6 +128,12 @@ namespace ps2_stubs
+         // returns no packet.
+         bool hostControllerConnected(int port)
+         {
++            if (g_padInputProvider)
++            {
++                uint16_t buttons = 0xFFFFu;
++                uint8_t axes[4]{};
++                return g_padInputProvider(port, buttons, axes);
++            }
+             if (port == 0)
+             {
+                 return true;
+@@ -328,6 +336,18 @@ namespace ps2_stubs
+ 
+             PadInputState state;
+             bool useOverride = false;
++            if (g_padInputProvider)
++            {
++                // Rollback/scripted input: the provider answers for the current logical frame.
++                uint8_t axes[4]{kPadAnalogCenter, kPadAnalogCenter, kPadAnalogCenter, kPadAnalogCenter};
++                g_padInputProvider(port, state.buttons, axes);
++                state.rx = axes[0];
++                state.ry = axes[1];
++                state.lx = axes[2];
++                state.ly = axes[3];
++                useOverride = true;
++            }
++            else
+             {
+                 std::lock_guard<std::mutex> lock(g_padOverrideMutex);
+                 if (g_padOverrideEnabled)
+@@ -473,8 +493,7 @@ namespace ps2_stubs
+     {
+         (void)rdram;
+         (void)runtime;
+-        static std::atomic<uint32_t> frameCount{0};
+-        setReturnU32(ctx, frameCount++);
++        setReturnU32(ctx, g_padFrameCount++);
+     }
+ 
+     void scePadGetModVersion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -918,6 +937,34 @@ namespace ps2_stubs
+         setReturnS32(ctx, 0);
+     }
+ 
++    void setPadInputProvider(PadInputProvider provider)
++    {
++        g_padInputProvider = provider;
++    }
++
++    std::vector<uint8_t> savePadState()
++    {
++        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::vector<uint8_t> out(sizeof(g_padPorts) + sizeof(uint32_t));
++        std::memcpy(out.data(), g_padPorts, sizeof(g_padPorts));
++        const uint32_t frames = g_padFrameCount.load();
++        std::memcpy(out.data() + sizeof(g_padPorts), &frames, sizeof(frames));
++        return out;
++    }
++
++    void loadPadState(const std::vector<uint8_t> &in)
++    {
++        if (in.size() != sizeof(g_padPorts) + sizeof(uint32_t))
++        {
++            return;
++        }
++        std::lock_guard<std::mutex> lock(g_padStateMutex);
++        std::memcpy(g_padPorts, in.data(), sizeof(g_padPorts));
++        uint32_t frames = 0u;
++        std::memcpy(&frames, in.data() + sizeof(g_padPorts), sizeof(frames));
++        g_padFrameCount.store(frames);
++    }
++
+     PadDebugSnapshot getPadDebugSnapshot()
+     {
+         PadDebugSnapshot snapshot{};
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h
+index c4de234..b862d56 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.h
+@@ -4,6 +4,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <vector>
+ 
+ namespace ps2_stubs
+ {
+@@ -38,6 +39,15 @@ namespace ps2_stubs
+     void scePadSetWarningLevel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void scePadStateIntToStr(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+ 
++    // Rollback/scripted input (TEKKEN4_RB_MODE): when set, scePadRead takes every port's buttons (active-low,
++    // libpad bit order) and axes (rx, ry, lx, ly) from the provider instead of the host keyboard/gamepads, and a
++    // port is connected when the provider returns true. nullptr restores live input.
++    using PadInputProvider = bool (*)(int port, uint16_t &buttons, uint8_t (&axes)[4]);
++    void setPadInputProvider(PadInputProvider provider);
++    // Guest-visible pad stub state (port modes, request states, frame count) for rollback snapshots.
++    std::vector<uint8_t> savePadState();
++    void loadPadState(const std::vector<uint8_t> &in);
++
+     static constexpr size_t kPadDebugPortCount = 2u;
+     static constexpr size_t kPadDebugSlotCount = 1u;
+     static constexpr size_t kPadDebugDataSize = 32u;
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index e479774..5be4562 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -3055,3 +3055,145 @@ void PS2Memory::clearModifiedFlag(uint32_t address, uint32_t size)
+         }
+     }
+ }
++
++namespace
++{
++    void copyGsRegsOut(const GSRegisters &regs, uint64_t (&out)[20])
++    {
++        out[0] = regs.pmode;
++        out[1] = regs.smode1;
++        out[2] = regs.smode2;
++        out[3] = regs.srfsh;
++        out[4] = regs.synch1;
++        out[5] = regs.synch2;
++        out[6] = regs.syncv;
++        out[7] = regs.dispfb1;
++        out[8] = regs.display1;
++        out[9] = regs.dispfb2;
++        out[10] = regs.display2;
++        out[11] = regs.extbuf;
++        out[12] = regs.extdata;
++        out[13] = regs.extwrite;
++        out[14] = regs.bgcolor;
++        out[15] = regs.csr.load(std::memory_order_acquire);
++        out[16] = regs.vsyncTick.load(std::memory_order_acquire);
++        out[17] = regs.imr;
++        out[18] = regs.busdir;
++        out[19] = regs.siglblid;
++    }
++
++    void copyGsRegsIn(GSRegisters &regs, const uint64_t (&in)[20])
++    {
++        regs.pmode = in[0];
++        regs.smode1 = in[1];
++        regs.smode2 = in[2];
++        regs.srfsh = in[3];
++        regs.synch1 = in[4];
++        regs.synch2 = in[5];
++        regs.syncv = in[6];
++        regs.dispfb1 = in[7];
++        regs.display1 = in[8];
++        regs.dispfb2 = in[9];
++        regs.display2 = in[10];
++        regs.extbuf = in[11];
++        regs.extdata = in[12];
++        regs.extwrite = in[13];
++        regs.bgcolor = in[14];
++        regs.csr.store(in[15], std::memory_order_release);
++        regs.vsyncTick.store(in[16], std::memory_order_release);
++        regs.imr = in[17];
++        regs.busdir = in[18];
++        regs.siglblid = in[19];
++    }
++
++    template <typename From, typename To>
++    void copyPending(const std::vector<From> &from, std::vector<To> &to)
++    {
++        to.clear();
++        to.reserve(from.size());
++        for (const From &item : from)
++        {
++            To copy{};
++            copy.fromScratchpad = item.fromScratchpad;
++            copy.srcAddr = item.srcAddr;
++            copy.qwc = item.qwc;
++            copy.chainData = item.chainData;
++            to.push_back(std::move(copy));
++        }
++    }
++}
++
++void PS2Memory::saveDeviceState(PS2DeviceState &out)
++{
++    out.ioRegisters = m_ioRegisters;
++    copyGsRegsOut(gs_regs, out.gsRegs);
++    out.vif0 = vif0_regs;
++    out.vif1 = vif1_regs;
++    std::memcpy(out.dma, dma_regs, sizeof(dma_regs));
++    out.seenGifCopy = m_seenGifCopy;
++    out.path3Masked = m_path3Masked;
++    out.path2CutTagLo = m_path2CutTagLo;
++    out.path2CutTagHi = m_path2CutTagHi;
++    out.path2CutDoneRegs = m_path2CutDoneRegs;
++    out.path2CutRemainingBytes = m_path2CutRemainingBytes;
++    out.path2CutDirectHl = m_path2CutDirectHl;
++    out.vif1Carry = m_vif1Carry;
++    out.path3MaskedFifo = m_path3MaskedFifo;
++    copyPending(m_pendingGifTransfers, out.pendingGif);
++    copyPending(m_pendingVif0Transfers, out.pendingVif0);
++    copyPending(m_pendingVif1Transfers, out.pendingVif1);
++    {
++        std::lock_guard<std::mutex> lock(m_completedDmacMutex);
++        out.completedDmacCauses = m_completedDmacCauses;
++    }
++    for (size_t i = 0; i < 4u; ++i)
++    {
++        out.timers[i] = PS2DeviceState::Timer{m_eeTimers[i].count, m_eeTimers[i].mode, m_eeTimers[i].compare,
++                                              m_eeTimers[i].hold, m_eeTimers[i].clockRemainder};
++    }
++    out.eeTimerDebt = m_eeTimerDebt;
++    out.eeTimerLimit = m_eeTimerLimit;
++    out.latchedTimerIrq = m_latchedTimerIrq;
++    out.gifFqcPending = m_gifFqcPending;
++    out.mfifoDraining = m_mfifoDraining;
++    out.mfifoWaitingChannel = m_mfifoWaitingChannel;
++}
++
++void PS2Memory::loadDeviceState(const PS2DeviceState &in)
++{
++    m_ioRegisters = in.ioRegisters;
++    copyGsRegsIn(gs_regs, in.gsRegs);
++    vif0_regs = in.vif0;
++    vif1_regs = in.vif1;
++    std::memcpy(dma_regs, in.dma, sizeof(dma_regs));
++    m_seenGifCopy = in.seenGifCopy;
++    m_path3Masked = in.path3Masked;
++    m_path2CutTagLo = in.path2CutTagLo;
++    m_path2CutTagHi = in.path2CutTagHi;
++    m_path2CutDoneRegs = in.path2CutDoneRegs;
++    m_path2CutRemainingBytes = in.path2CutRemainingBytes;
++    m_path2CutDirectHl = in.path2CutDirectHl;
++    m_vif1Carry = in.vif1Carry;
++    m_path3MaskedFifo = in.path3MaskedFifo;
++    copyPending(in.pendingGif, m_pendingGifTransfers);
++    copyPending(in.pendingVif0, m_pendingVif0Transfers);
++    copyPending(in.pendingVif1, m_pendingVif1Transfers);
++    {
++        std::lock_guard<std::mutex> lock(m_completedDmacMutex);
++        m_completedDmacCauses = in.completedDmacCauses;
++    }
++    for (size_t i = 0; i < 4u; ++i)
++    {
++        m_eeTimers[i].count = in.timers[i].count;
++        m_eeTimers[i].mode = in.timers[i].mode;
++        m_eeTimers[i].compare = in.timers[i].compare;
++        m_eeTimers[i].hold = in.timers[i].hold;
++        m_eeTimers[i].clockRemainder = in.timers[i].clockRemainder;
++    }
++    m_eeTimerDebt = in.eeTimerDebt;
++    m_eeTimerLimit = in.eeTimerLimit;
++    m_latchedTimerIrq = in.latchedTimerIrq;
++    m_gifFqcPending = in.gifFqcPending;
++    m_mfifoDraining = in.mfifoDraining;
++    m_mfifoWaitingChannel = in.mfifoWaitingChannel;
++}
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+new file mode 100644
+index 0000000..0fe2d24
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -0,0 +1,283 @@
++#include "runtime/ps2_rollback.h"
++
++#include "ps2_runtime.h"
++#include "Kernel/Stubs/Pad.h"
++
++#include <algorithm>
++#include <cstring>
++
++// Private runtime members a snapshot needs (friend of PS2Runtime).
++class PS2RollbackAccess
++{
++public:
++    static void save(PS2Runtime &runtime, std::vector<uint8_t> &out)
++    {
++        std::lock_guard<std::mutex> heapLock(runtime.m_guestHeapMutex);
++        std::lock_guard<std::mutex> stackLock(runtime.m_asyncCallbackStackMutex);
++        out.clear();
++        auto put = [&out](const void *data, size_t size)
++        {
++            const auto *bytes = static_cast<const uint8_t *>(data);
++            out.insert(out.end(), bytes, bytes + size);
++        };
++        const uint32_t blocks = static_cast<uint32_t>(runtime.m_guestHeapBlocks.size());
++        put(&blocks, sizeof(blocks));
++        for (const auto &block : runtime.m_guestHeapBlocks)
++        {
++            put(&block.addr, sizeof(block.addr));
++            put(&block.size, sizeof(block.size));
++            const uint8_t isFree = block.free ? 1u : 0u;
++            put(&isFree, 1u);
++        }
++        put(&runtime.m_guestHeapBase, sizeof(uint32_t));
++        put(&runtime.m_guestHeapEnd, sizeof(uint32_t));
++        put(&runtime.m_guestHeapLimit, sizeof(uint32_t));
++        put(&runtime.m_guestHeapSuggestedBase, sizeof(uint32_t));
++        const uint8_t configured = runtime.m_guestHeapConfigured ? 1u : 0u;
++        put(&configured, 1u);
++        put(&runtime.m_asyncCallbackStackFloor, sizeof(uint32_t));
++        put(&runtime.m_asyncCallbackStackTop, sizeof(uint32_t));
++    }
++
++    static void load(PS2Runtime &runtime, const std::vector<uint8_t> &in)
++    {
++        std::lock_guard<std::mutex> heapLock(runtime.m_guestHeapMutex);
++        std::lock_guard<std::mutex> stackLock(runtime.m_asyncCallbackStackMutex);
++        size_t at = 0;
++        auto get = [&in, &at](void *data, size_t size)
++        {
++            std::memcpy(data, in.data() + at, size);
++            at += size;
++        };
++        uint32_t blocks = 0;
++        get(&blocks, sizeof(blocks));
++        runtime.m_guestHeapBlocks.resize(blocks);
++        for (auto &block : runtime.m_guestHeapBlocks)
++        {
++            get(&block.addr, sizeof(block.addr));
++            get(&block.size, sizeof(block.size));
++            uint8_t isFree = 0;
++            get(&isFree, 1u);
++            block.free = isFree != 0u;
++        }
++        get(&runtime.m_guestHeapBase, sizeof(uint32_t));
++        get(&runtime.m_guestHeapEnd, sizeof(uint32_t));
++        get(&runtime.m_guestHeapLimit, sizeof(uint32_t));
++        get(&runtime.m_guestHeapSuggestedBase, sizeof(uint32_t));
++        uint8_t configured = 0;
++        get(&configured, 1u);
++        runtime.m_guestHeapConfigured = configured != 0u;
++        get(&runtime.m_asyncCallbackStackFloor, sizeof(uint32_t));
++        get(&runtime.m_asyncCallbackStackTop, sizeof(uint32_t));
++    }
++};
++
++namespace ps2_rollback
++{
++    namespace
++    {
++        void copyIn(std::vector<uint8_t> &dst, const uint8_t *src, size_t size)
++        {
++            dst.resize(size);
++            std::memcpy(dst.data(), src, size);
++        }
++
++        constexpr uint64_t kPrime1 = 0x9E3779B185EBCA87ull;
++        constexpr uint64_t kPrime2 = 0xC2B2AE3D27D4EB4Full;
++
++        inline uint64_t rotl(uint64_t value, int bits)
++        {
++            return (value << bits) | (value >> (64 - bits));
++        }
++
++        inline uint64_t mixFinal(uint64_t h)
++        {
++            h ^= h >> 33;
++            h *= kPrime2;
++            h ^= h >> 29;
++            h *= kPrime1;
++            h ^= h >> 32;
++            return h;
++        }
++    }
++
++    uint64_t hashBytes(const uint8_t *data, size_t size, uint64_t seed)
++    {
++        // Four independent lanes over 8-byte words (xxHash64-like rounds), then a tail. Not cryptographic; only
++        // has to tell two machine states apart.
++        uint64_t lane[4] = {seed + kPrime1, seed ^ kPrime2, seed + 0x165667B19E3779F9ull, seed - kPrime1};
++        size_t at = 0;
++        for (; at + 32u <= size; at += 32u)
++        {
++            uint64_t word[4];
++            std::memcpy(word, data + at, 32u);
++            for (int i = 0; i < 4; ++i)
++            {
++                lane[i] = rotl(lane[i] + word[i] * kPrime2, 31) * kPrime1;
++            }
++        }
++        uint64_t h = rotl(lane[0], 1) + rotl(lane[1], 7) + rotl(lane[2], 12) + rotl(lane[3], 18) + size;
++        for (; at < size; ++at)
++        {
++            h = (h ^ data[at]) * kPrime1;
++        }
++        return mixFinal(h);
++    }
++
++    void capture(PS2Runtime &runtime, Snapshot &out)
++    {
++        PS2Memory &memory = runtime.memory();
++        copyIn(out.rdram, memory.getRDRAM(), PS2_RAM_SIZE);
++        copyIn(out.scratchpad, memory.getScratchpad(), PS2_SCRATCHPAD_SIZE);
++        copyIn(out.vu0Code, memory.getVU0Code(), PS2_VU0_CODE_SIZE);
++        copyIn(out.vu0Data, memory.getVU0Data(), PS2_VU0_DATA_SIZE);
++        copyIn(out.vu1Code, memory.getVU1Code(), PS2_VU1_CODE_SIZE);
++        copyIn(out.vu1Data, memory.getVU1Data(), PS2_VU1_DATA_SIZE);
++        runtime.eeScheduler().saveState(out.scheduler);
++        memory.saveDeviceState(out.devices);
++        if (!out.vu0)
++        {
++            out.vu0 = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU0);
++        }
++        if (!out.vu1)
++        {
++            out.vu1 = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU1);
++        }
++        *out.vu0 = runtime.vu0();
++        *out.vu1 = runtime.vu1();
++        out.cpuContext = runtime.cpu();
++        PS2RollbackAccess::save(runtime, out.runtimeState);
++        out.padState = ps2_stubs::savePadState();
++        out.valid = true;
++    }
++
++    void restore(PS2Runtime &runtime, const Snapshot &in)
++    {
++        if (!in.valid)
++        {
++            return;
++        }
++        PS2Memory &memory = runtime.memory();
++        std::memcpy(memory.getRDRAM(), in.rdram.data(), PS2_RAM_SIZE);
++        std::memcpy(memory.getScratchpad(), in.scratchpad.data(), PS2_SCRATCHPAD_SIZE);
++        if (std::memcmp(memory.getVU0Code(), in.vu0Code.data(), PS2_VU0_CODE_SIZE) != 0)
++        {
++            std::memcpy(memory.getVU0Code(), in.vu0Code.data(), PS2_VU0_CODE_SIZE);
++            memory.markVU0CodeModified();
++        }
++        std::memcpy(memory.getVU0Data(), in.vu0Data.data(), PS2_VU0_DATA_SIZE);
++        if (std::memcmp(memory.getVU1Code(), in.vu1Code.data(), PS2_VU1_CODE_SIZE) != 0)
++        {
++            std::memcpy(memory.getVU1Code(), in.vu1Code.data(), PS2_VU1_CODE_SIZE);
++            memory.markVU1CodeModified();
++        }
++        std::memcpy(memory.getVU1Data(), in.vu1Data.data(), PS2_VU1_DATA_SIZE);
++        runtime.eeScheduler().loadState(in.scheduler);
++        memory.loadDeviceState(in.devices);
++        runtime.vu0() = *in.vu0;
++        runtime.vu1() = *in.vu1;
++        runtime.cpu() = in.cpuContext;
++        PS2RollbackAccess::load(runtime, in.runtimeState);
++        ps2_stubs::loadPadState(in.padState);
++    }
++
++    StateHash hashState(PS2Runtime &runtime, const std::vector<MaskRange> &masks, std::vector<uint64_t> *pageHashes)
++    {
++        constexpr uint32_t kPage = 4096u;
++        constexpr uint32_t kPages = PS2_RAM_SIZE / kPage;
++        PS2Memory &memory = runtime.memory();
++        const uint8_t *rdram = memory.getRDRAM();
++
++        // Pages touched by a mask are hashed from a copy with the masked bytes zeroed.
++        std::vector<MaskRange> sorted = masks;
++        std::sort(sorted.begin(), sorted.end(), [](const MaskRange &a, const MaskRange &b)
++                  { return a.address < b.address; });
++        size_t maskIndex = 0;
++        alignas(64) uint8_t page[kPage];
++
++        StateHash result{};
++        uint64_t regionAccumulator[32]{};
++        uint64_t rdramAccumulator = 0;
++        if (pageHashes)
++        {
++            pageHashes->resize(kPages);
++        }
++        for (uint32_t p = 0; p < kPages; ++p)
++        {
++            const uint32_t start = p * kPage;
++            const uint32_t end = start + kPage;
++            while (maskIndex < sorted.size() && sorted[maskIndex].address + sorted[maskIndex].size <= start)
++            {
++                ++maskIndex;
++            }
++            const uint8_t *source = rdram + start;
++            if (maskIndex < sorted.size() && sorted[maskIndex].address < end)
++            {
++                std::memcpy(page, source, kPage);
++                for (size_t m = maskIndex; m < sorted.size() && sorted[m].address < end; ++m)
++                {
++                    const uint32_t from = std::max(start, sorted[m].address);
++                    const uint32_t to = std::min(end, sorted[m].address + sorted[m].size);
++                    if (to > from)
++                    {
++                        std::memset(page + (from - start), 0, to - from);
++                    }
++                }
++                source = page;
++            }
++            const uint64_t h = hashBytes(source, kPage, p);
++            if (pageHashes)
++            {
++                (*pageHashes)[p] = h;
++            }
++            regionAccumulator[p >> 8] = mixFinal(regionAccumulator[p >> 8] ^ h) + p;
++            rdramAccumulator = mixFinal(rdramAccumulator ^ h) + p;
++        }
++        for (int r = 0; r < 32; ++r)
++        {
++            result.regions[r] = static_cast<uint32_t>(regionAccumulator[r] ^ (regionAccumulator[r] >> 32));
++        }
++        result.rdram = rdramAccumulator;
++
++        std::vector<uint8_t> digest;
++        digest.reserve(64 * 1024);
++        runtime.eeScheduler().appendStateDigest(digest);
++        result.scheduler = hashBytes(digest.data(), digest.size(), 1);
++
++        uint64_t other = result.scheduler;
++        other = mixFinal(other ^ hashBytes(memory.getScratchpad(), PS2_SCRATCHPAD_SIZE, 2));
++        other = mixFinal(other ^ hashBytes(memory.getVU0Data(), PS2_VU0_DATA_SIZE, 3));
++        other = mixFinal(other ^ hashBytes(memory.getVU1Data(), PS2_VU1_DATA_SIZE, 4));
++        other = mixFinal(other ^ hashBytes(memory.getVU0Code(), PS2_VU0_CODE_SIZE, 5));
++        other = mixFinal(other ^ hashBytes(memory.getVU1Code(), PS2_VU1_CODE_SIZE, 6));
++        // Device registers (fixed-size part only; the pending vectors are expected empty at a boundary).
++        PS2DeviceState devices;
++        memory.saveDeviceState(devices);
++        std::vector<uint8_t> device;
++        auto put = [&device](const void *data, size_t size)
++        {
++            const auto *bytes = static_cast<const uint8_t *>(data);
++            device.insert(device.end(), bytes, bytes + size);
++        };
++        put(devices.dma, sizeof(devices.dma));
++        put(&devices.vif0, sizeof(devices.vif0));
++        put(&devices.vif1, sizeof(devices.vif1));
++        for (const auto &timer : devices.timers)
++        {
++            put(&timer.count, sizeof(timer.count));
++            put(&timer.mode, sizeof(timer.mode));
++            put(&timer.compare, sizeof(timer.compare));
++        }
++        put(&devices.mfifoWaitingChannel, sizeof(devices.mfifoWaitingChannel));
++        const uint32_t sizes[5] = {static_cast<uint32_t>(devices.vif1Carry.size()),
++                                   static_cast<uint32_t>(devices.pendingGif.size()),
++                                   static_cast<uint32_t>(devices.pendingVif1.size()),
++                                   static_cast<uint32_t>(devices.completedDmacCauses.size()),
++                                   static_cast<uint32_t>(devices.path3MaskedFifo.size())};
++        put(sizes, sizeof(sizes));
++        other = mixFinal(other ^ hashBytes(device.data(), device.size(), 7));
++        result.other = other;
++        result.total = mixFinal(result.rdram ^ rotl(result.other, 17));
++        return result;
++    }
++}
+-- 
+2.55.0.windows.3
+

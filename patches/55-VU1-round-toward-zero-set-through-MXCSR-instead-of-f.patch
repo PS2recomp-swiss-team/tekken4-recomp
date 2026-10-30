@@ -1,0 +1,58 @@
+From a37b661581374c85b2d5380399bc3239b7664b46 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 07:08:28 +0100
+Subject: [PATCH 55/55] VU1: round-toward-zero set through MXCSR instead of
+ fegetround/fesetround per run
+
+The CRT calls also rewrite the x87 control word and cost ~2% of the game thread
+at ~3000 VU1 runs a frame. x64 float code is SSE only: the run sees the same
+rounding; status flags raised by the run are kept on restore. Checked: live-frame
+state hashes (RDRAM, VU memories, registers) identical to the previous build at
+all 5940 frames of a measure run.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index 16aa728..b287559 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -11,6 +11,7 @@
+ #include <bit>
+ #include <atomic>
+ #include <cfenv>
++#include <xmmintrin.h>
+ #include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+@@ -1912,8 +1913,12 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+     m_activeMemory = memory;
+ 
+     ps2_perf::Scope perf(ps2_perf::Bucket::Vu); // GOW-Port: VU0/VU1; las llamadas al GS se descuentan.
+-    const int previousRoundingMode = std::fegetround();
+-    const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
++    // VU arithmetic rounds toward zero. Tekken 4 port (perf): set through MXCSR directly (x64 float code is SSE only;
++    // fegetround/fesetround also touch the x87 control word and cost ~2% of the game thread at ~3000 runs a frame).
++    const unsigned previousCsr = _mm_getcsr();
++    const bool useVuRounding = (previousCsr & 0x6000u) != 0x6000u;
++    if (useVuRounding)
++        _mm_setcsr(previousCsr | 0x6000u);
+     StepContext context{vuCode, codeSize, vuData, dataSize, &gs, memory, m_cycle + maxCycles, false};
+     m_lastRunHitBudget = false; // GOW-Port: funciona también con un despachador compilado.
+     const uint32_t runStartPc = m_state.pc;
+@@ -2293,8 +2298,8 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+         if (++endMacRuns % 20000u == 0u)
+             std::fprintf(stderr, "[vu1-endmac] ours runs=%u mac12=%u mac0=%u other=%u\n", endMacRuns, endMacCount[0], endMacCount[1], endMacCount[2]);
+     }
+-    if (useVuRounding && previousRoundingMode != -1)
+-        std::fesetround(previousRoundingMode);
++    if (useVuRounding) // the previous rounding mode back; status flags raised by the run stay
++        _mm_setcsr((_mm_getcsr() & ~0x6000u) | (previousCsr & 0x6000u));
+ }
+ 
+ // GOW-Port: GOW_VU1C_VERIFICAR. Antes de un bloque compilado se ejecutan sus pares con el interprete desde el
+-- 
+2.55.0.windows.3
+

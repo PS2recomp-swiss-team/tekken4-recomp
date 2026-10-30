@@ -1,0 +1,267 @@
+From e3349b18760860fee9fc223f43ab4872af100823 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 02:10:51 +0100
+Subject: [PATCH] ps2xIOP: cdvd/ioman look file paths up in the disc image's
+ ISO9660 directory
+
+sceCdSearchFile answered from the virtual ISO built from the extracted files (DATA.BIN at LBN
+1106 there) or a hard-coded PAL DATA.BIN (LBN 1236), while sceCdRead reads the real image, where
+the US DATA.BIN starts at LBN 401. zsiopdrv keeps that LBN (0x521a0) as the base of every
+sound-bank and BGM read, so it uploaded data from 705 sectors further on: banks without end flags,
+voice start addresses in the middle of sounds, every menu sound droning on through the bank (mix
+rms ~0.6, 5-9 % of the fight clipped). ioman's cdrom0: open had the same PAL constant.
+Now both resolve the path in the image's own directory (iop_iso9660.h); without an image the
+virtual ISO stays.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/src/emulator/imports/iop_cdvd.cpp  |  56 +++++-----
+ ps2xIOP/src/emulator/imports/iop_ioman.cpp |  18 ++--
+ ps2xIOP/src/emulator/imports/iop_iso9660.h | 117 +++++++++++++++++++++
+ 3 files changed, 153 insertions(+), 38 deletions(-)
+ create mode 100644 ps2xIOP/src/emulator/imports/iop_iso9660.h
+
+diff --git a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+index 1f05718..1a11505 100644
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+@@ -1,4 +1,5 @@
+-#include "iop_cdvd.h"
++#include "iop_cdvd.h"
++#include "iop_iso9660.h"
+ 
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_kernel.h"
+@@ -612,37 +613,36 @@ namespace ps2x::iop::detail
+             if (resultAddress == 0u || nameAddress == 0u)
+                 return false;
+ 
+-            const std::string guestPath = memory.readString(nameAddress, 1024u);
+-            IsoNode *node = findVirtualIsoNode(guestPath);
+-            if (!node && !host.hostPath(HostPathKind::CdImage).empty())
++            const std::string guestPath = memory.readString(nameAddress, 1024u);
++            // With a disc image the driver reads sectors of that image (readSectors), so the answer must be that
++            // image's ISO9660 entry. The virtual ISO (extracted files) has another layout, and the PAL DATA.BIN
++            // numbers that used to be hard-coded here (LBN 1236) sent the US build's sound bank and BGM reads
++            // 705 sectors past their files (docs/MUSIC_FIX.md, never-ending voices).
++            const std::string imagePath = host.hostPath(HostPathKind::CdImage);
++            if (!imagePath.empty())
+             {
+-                std::string canon = guestPath;
+-                for (char &character : canon)
+-                {
+-                    if (character == '\\')
+-                        character = '/';
+-                    else
+-                        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+-                }
+-                constexpr char kDataBin[] = "TEKKEN/DATA.BIN";
+-                const size_t at = canon.find(kDataBin);
+-                if (at != std::string::npos)
++                if (imageHandle == 0u)
++                    imageHandle = host.openHostFile(imagePath);
++                IsoImageEntry entry;
++                if (!lookupIsoImagePath(host, imageHandle, guestPath, entry))
+                 {
+-                    const size_t after = at + sizeof(kDataBin) - 1u;
+-                    if (after >= canon.size() || canon[after] == ';')
+-                    {
+-                        std::array<uint8_t, 32u> hit{};
+-                        writeLe32(hit.data(), 1236u);
+-                        writeLe32(hit.data() + 4u, 2694412288u);
+-                        const char leaf[] = "DATA.BIN;1";
+-                        std::memcpy(hit.data() + 8u, leaf, sizeof(leaf) - 1u);
+-                        std::ostringstream out;
+-                        out << "[cdvd] sceCdSearchFile " << guestPath << " -> LBN 1236";
+-                        host.log(LogLevel::Info, out.str());
+-                        return memory.writeRam(resultAddress, hit.data(), hit.size());
+-                    }
++                    std::ostringstream out;
++                    out << "[cdvd] sceCdSearchFile " << guestPath << " not found in the disc image";
++                    host.log(LogLevel::Warning, out.str());
++                    return false;
+                 }
++                std::array<uint8_t, 32u> hit{};
++                writeLe32(hit.data(), entry.lsn);
++                writeLe32(hit.data() + 4u, entry.size);
++                const std::string leaf = normalizedIsoComponent(guestPath.substr(guestPath.find_last_of("\\/:") + 1u));
++                std::memcpy(hit.data() + 8u, leaf.data(), std::min<size_t>(16u, leaf.size()));
++                hit[24u] = entry.directory ? 2u : 0u;
++                std::ostringstream out;
++                out << "[cdvd] sceCdSearchFile " << guestPath << " -> LBN " << entry.lsn << " size " << entry.size;
++                host.log(LogLevel::Info, out.str());
++                return memory.writeRam(resultAddress, hit.data(), hit.size());
+             }
++            IsoNode *node = findVirtualIsoNode(guestPath);
+             if (!node)
+                 return false;
+ 
+diff --git a/ps2xIOP/src/emulator/imports/iop_ioman.cpp b/ps2xIOP/src/emulator/imports/iop_ioman.cpp
+index 86f9305..696891c 100644
+--- a/ps2xIOP/src/emulator/imports/iop_ioman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_ioman.cpp
+@@ -1,4 +1,5 @@
+-#include "iop_ioman.h"
++#include "iop_ioman.h"
++#include "iop_iso9660.h"
+ 
+ #include "../core/iop_cpu.h"
+ #include "../core/iop_memory.h"
+@@ -15,8 +16,6 @@ namespace ps2x::iop::detail
+ {
+     namespace
+     {
+-        constexpr uint64_t kDataBinLbn = 1236u;
+-        constexpr uint64_t kDataBinSize = 2694412288u;
+         constexpr uint32_t kMaxRead = 2u * 1024u * 1024u;
+ 
+         std::string canonicalPath(std::string path)
+@@ -83,16 +82,15 @@ namespace ps2x::iop::detail
+ 
+         uint64_t base = 0u;
+         uint64_t size = imageSize;
+-        const size_t dataBin = path.find("TEKKEN/DATA.BIN");
+-        if (dataBin != std::string::npos)
++        // Files are looked up in the image's own ISO9660 directory (the PAL DATA.BIN LBN 1236 used to be
++        // hard-coded here; the US disc has DATA.BIN at 401).
++        IsoImageEntry entry;
++        if (lookupIsoImagePath(m_host, m_image, name, entry) && !entry.directory)
+         {
+-            const size_t after = dataBin + std::char_traits<char>::length("TEKKEN/DATA.BIN");
+-            if (after < path.size() && path[after] != ';')
+-                return fail(-1);
+-            base = kDataBinLbn * 2048u;
++            base = static_cast<uint64_t>(entry.lsn) * 2048u;
+             if (base >= imageSize)
+                 return fail(-1);
+-            size = std::min(imageSize - base, kDataBinSize);
++            size = std::min<uint64_t>(imageSize - base, entry.size);
+         }
+         else if (path.find("/TEKKEN/") != std::string::npos)
+             return fail(-1);
+diff --git a/ps2xIOP/src/emulator/imports/iop_iso9660.h b/ps2xIOP/src/emulator/imports/iop_iso9660.h
+new file mode 100644
+index 0000000..5e10b01
+--- /dev/null
++++ b/ps2xIOP/src/emulator/imports/iop_iso9660.h
+@@ -0,0 +1,117 @@
++#pragma once
++
++// Path lookup in the ISO9660 directory of the CD image the IOP reads from (HostPathKind::CdImage). cdvdman's
++// sceCdSearchFile and ioman's cdrom0: device must report the layout of that image: a sector number from any other
++// layout (the virtual ISO built from extracted files, or one disc's numbers hard-coded) reads the wrong data.
++
++#include "ps2x/iop/iop_host.h"
++
++#include <algorithm>
++#include <array>
++#include <cctype>
++#include <cstdint>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace ps2x::iop::detail
++{
++    struct IsoImageEntry
++    {
++        uint32_t lsn = 0u;
++        uint32_t size = 0u;
++        bool directory = false;
++    };
++
++    // path: "cdrom0:\\TEKKEN\\DATA.BIN;1", "\\TEKKEN\\DATA.BIN", "TEKKEN/DATA.BIN" (case and ";n" ignored).
++    inline bool lookupIsoImagePath(IopHost &host, uint64_t image, std::string_view path, IsoImageEntry &out)
++    {
++        if (image == 0u)
++            return false;
++        const size_t colon = path.find(':');
++        if (colon != std::string_view::npos)
++            path.remove_prefix(colon + 1u);
++        std::vector<std::string> parts;
++        std::string part;
++        for (const char c : path)
++        {
++            if (c == '\\' || c == '/')
++            {
++                if (!part.empty())
++                    parts.push_back(part);
++                part.clear();
++            }
++            else if (c != '\0')
++                part.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
++        }
++        if (!part.empty())
++            parts.push_back(part);
++        for (std::string &p : parts)
++        {
++            const size_t semi = p.find(';');
++            if (semi != std::string::npos)
++                p.resize(semi);
++        }
++        if (parts.empty())
++            return false;
++
++        constexpr uint32_t kSector = 2048u;
++        auto readBytes = [&](uint64_t offset, uint8_t *dst, size_t size)
++        {
++            size_t got = 0u;
++            return host.readHostFile(image, offset, dst, size, got) && got == size;
++        };
++        auto le32 = [](const uint8_t *p)
++        {
++            return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8u) |
++                   (static_cast<uint32_t>(p[2]) << 16u) | (static_cast<uint32_t>(p[3]) << 24u);
++        };
++
++        std::array<uint8_t, kSector> pvd{};
++        if (!readBytes(16ull * kSector, pvd.data(), pvd.size()) || pvd[0] != 1u || pvd[1] != 'C' || pvd[2] != 'D')
++            return false;
++        IsoImageEntry current{le32(pvd.data() + 156u + 2u), le32(pvd.data() + 156u + 10u), true};
++
++        for (size_t level = 0; level < parts.size(); ++level)
++        {
++            if (!current.directory || current.size == 0u || current.size > 4u * 1024u * 1024u)
++                return false;
++            std::vector<uint8_t> dir((current.size + kSector - 1u) / kSector * kSector);
++            if (!readBytes(static_cast<uint64_t>(current.lsn) * kSector, dir.data(), dir.size()))
++                return false;
++            bool found = false;
++            for (size_t i = 0; i < current.size;)
++            {
++                const uint8_t length = dir[i];
++                if (length == 0u)
++                {
++                    i = (i / kSector + 1u) * kSector; // records do not cross sectors
++                    continue;
++                }
++                if (i + 33u > dir.size() || i + length > dir.size())
++                    break;
++                const uint8_t nameLength = dir[i + 32u];
++                std::string name(reinterpret_cast<const char *>(dir.data() + i + 33u),
++                                 std::min<size_t>(nameLength, length > 33u ? length - 33u : 0u));
++                const size_t semi = name.find(';');
++                if (semi != std::string::npos)
++                    name.resize(semi);
++                if (!name.empty() && name.back() == '.')
++                    name.pop_back();
++                for (char &c : name)
++                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
++                if (nameLength > 1u && name == parts[level])
++                {
++                    current = IsoImageEntry{le32(dir.data() + i + 2u), le32(dir.data() + i + 10u), (dir[i + 25u] & 2u) != 0u};
++                    found = true;
++                    break;
++                }
++                i += length;
++            }
++            if (!found)
++                return false;
++        }
++        out = current;
++        return true;
++    }
++}
+-- 
+2.55.0.windows.3
+

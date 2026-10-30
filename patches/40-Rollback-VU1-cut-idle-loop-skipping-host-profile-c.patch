@@ -1,0 +1,211 @@
+From d5b233edf27897a7b179ea0c6818aa1187e1bbaa Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 02:36:43 +0100
+Subject: [PATCH] Rollback: VU1 cut, idle-loop skipping, host profile counters
+
+- CutVu1: MSCAL microprograms are not run in a re-simulated frame (their output is the GS and VU1 data
+  memory; HostProfile::hashVu1Data=false leaves VU1 data out of the state hash).
+- EeScheduler::setIdleLoopPcs: a backward-edge checkpoint at a registered idle-loop pc accounts the loop's
+  iterations up to just before the next deadline / EE timer interrupt / slice end in one step (empty by
+  default; the Tekken 4 driver registers the vsync wait at 0x22a150, ~70% of a fight frame's EE cycles).
+- HostProfile: host time in VU1 runs and VIF1 processing (only when a driver turns it on).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h    |  8 +++++
+ .../include/runtime/ps2_rollback_cuts.h       | 34 +++++++++++++++++++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 31 +++++++++++++++++
+ ps2xRuntime/src/lib/ps2_rollback.cpp          |  4 ++-
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  4 +++
+ ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp  |  2 ++
+ 6 files changed, 82 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 68a6b02..3bfbe45 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -380,6 +380,11 @@ public:
+     // the order of cycle-due events depend on EE cycles only (never on host pacing), see processDueDeadlines.
+     using BoundaryHook = std::function<void(const EeBoundaryInfo &)>;
+     void setBoundaryHook(BoundaryHook hook);
++    // Idle loops (rollback modes): a backward-edge checkpoint at one of these guest pcs, where the loop only burns
++    // cycles until an event, accounts all iterations up to just before the next event (deadline, EE timer
++    // interrupt, slice end) in one step. The EE sees the same cycles and events; empty = off (default).
++    void setIdleLoopPcs(std::vector<uint32_t> pcs) { m_idleLoopPcs = std::move(pcs); }
++    [[nodiscard]] uint64_t idleSkippedCycles() const noexcept { return m_idleSkippedCycles; }
+     [[nodiscard]] uint64_t eeCycle() const noexcept { return m_eeCycle; }
+     // Host time the executor spent waiting for pacing deadlines (rollback mode only; 0 otherwise).
+     [[nodiscard]] uint64_t hostWaitNanoseconds() const noexcept { return m_hostWaitNs; }
+@@ -516,6 +521,9 @@ private:
+     BoundaryHook m_boundaryHook;
+     bool m_cycleOrderedEvents = false;
+     uint64_t m_hostWaitNs = 0;
++    std::vector<uint32_t> m_idleLoopPcs;
++    uint64_t m_idleSkippedCycles = 0;
++    void skipIdleIterations(uint32_t cycles) noexcept;
+     bool m_mainWakePending = false;
+     bool m_vblankPending = false;
+     EeWaitReason m_mainWakeReason = EeWaitReason::None;
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback_cuts.h b/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+index 95e6d38..da26c42 100644
+--- a/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
++++ b/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+@@ -5,6 +5,7 @@
+ // module sets cuts or installs a gate; the default runtime path only reads a zero word / a null pointer.
+ 
+ #include <atomic>
++#include <chrono>
+ #include <cstddef>
+ #include <cstdint>
+ #include <functional>
+@@ -27,6 +28,39 @@ namespace ps2_rollback
+         CutUpload = 1u << 1,  // GS: host->local image data is not written to VRAM (local->local/host still served)
+         CutIop = 1u << 2,     // IOP frozen: no IOP cycles, sound RPCs answered by the gate (see IopGate)
+         CutPresent = 1u << 3, // the presenter keeps showing the last live frame (no latch on vsync ticks)
++        CutVu1 = 1u << 4,     // EXPERIMENT: VU1 microprograms (MSCAL) not run; VU1 data/regs then differ
++    };
++
++    // Host time per subsystem on the executor thread (rollback profiling; off unless a driver turns it on).
++    struct HostProfile
++    {
++        bool on = false;
++        bool hashVu1Data = true; // false: hashState leaves VU1 data memory out (CutVu1 experiments)
++        uint64_t vu1Ns = 0, vif1Ns = 0, iopNs = 0, vu1Runs = 0;
++    };
++    extern HostProfile g_hostProfile;
++
++    class ProfileScope
++    {
++    public:
++        explicit ProfileScope(uint64_t &slot) noexcept : m_slot(slot), m_on(g_hostProfile.on)
++        {
++            if (m_on)
++                m_start = std::chrono::steady_clock::now();
++        }
++        ~ProfileScope()
++        {
++            if (m_on)
++                m_slot += static_cast<uint64_t>(
++                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - m_start).count());
++        }
++        ProfileScope(const ProfileScope &) = delete;
++        ProfileScope &operator=(const ProfileScope &) = delete;
++
++    private:
++        uint64_t &m_slot;
++        bool m_on;
++        std::chrono::steady_clock::time_point m_start{};
+     };
+ 
+     extern std::atomic<uint32_t> g_activeCuts;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 852c6d9..04932bc 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -391,6 +391,8 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ 
+     if (m_eeCycle < m_sliceEndCycle)
+     {
++        if (!m_idleLoopPcs.empty())
++            skipIdleIterations(cycles);
+         return false;
+     }
+ 
+@@ -403,9 +405,38 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+     }
+ 
+     renewTimeSlice();
++    if (!m_idleLoopPcs.empty())
++        skipIdleIterations(cycles);
+     return false;
+ }
+ 
++void EeScheduler::skipIdleIterations(uint32_t cycles) noexcept
++{
++    const GuestThread *running = currentThread();
++    if (!running || m_pendingEeTimerInterrupts != 0u || m_checkpointPending.load(std::memory_order_acquire))
++        return;
++    if (!running->invocations.empty()) // an interrupt handler runs: not the idle loop
++        return;
++    const uint32_t pc = running->context.pc;
++    if (std::find(m_idleLoopPcs.begin(), m_idleLoopPcs.end(), pc) == m_idleLoopPcs.end())
++        return;
++    // Iteration k of the loop ends at m_eeCycle + k * step; the first one reaching a limit must run normally.
++    uint64_t limit = m_sliceEndCycle > m_eeCycle ? m_sliceEndCycle - m_eeCycle : 0u;
++    const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
++    if (nextEventCycle != 0u)
++        limit = std::min<uint64_t>(limit, nextEventCycle > m_eeCycle ? nextEventCycle - m_eeCycle : 0u);
++    limit = std::min<uint64_t>(limit, m_runtime.memory().cyclesUntilNextEeTimerInterrupt());
++    const uint64_t step = std::max<uint64_t>(1u, cycles);
++    if (limit <= step)
++        return;
++    const uint64_t iterations = (limit - 1u) / step;
++    const uint64_t bulk = std::min<uint64_t>(iterations * step, 0x7FFFFFFFu);
++    if (bulk == 0u)
++        return;
++    m_idleSkippedCycles += bulk;
++    accountCycles(static_cast<uint32_t>(bulk));
++}
++
+ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+ {
+     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+index b966c2f..3732878 100644
+--- a/ps2xRuntime/src/lib/ps2_rollback.cpp
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -251,7 +251,8 @@ namespace ps2_rollback
+         uint64_t other = result.scheduler;
+         other = mixFinal(other ^ hashBytes(memory.getScratchpad(), PS2_SCRATCHPAD_SIZE, 2));
+         other = mixFinal(other ^ hashBytes(memory.getVU0Data(), PS2_VU0_DATA_SIZE, 3));
+-        other = mixFinal(other ^ hashBytes(memory.getVU1Data(), PS2_VU1_DATA_SIZE, 4));
++        if (g_hostProfile.hashVu1Data)
++            other = mixFinal(other ^ hashBytes(memory.getVU1Data(), PS2_VU1_DATA_SIZE, 4));
+         other = mixFinal(other ^ hashBytes(memory.getVU0Code(), PS2_VU0_CODE_SIZE, 5));
+         other = mixFinal(other ^ hashBytes(memory.getVU1Code(), PS2_VU1_CODE_SIZE, 6));
+         // Device registers (fixed-size part only; the pending vectors are expected empty at a boundary).
+@@ -291,6 +292,7 @@ namespace ps2_rollback
+ namespace ps2_rollback
+ {
+     std::atomic<uint32_t> g_activeCuts{0u};
++    HostProfile g_hostProfile;
+ 
+     namespace
+     {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index bb36c54..1873b5d 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -710,6 +710,10 @@ bool PS2Runtime::syncCoreSubsystems()
+     m_memory.setGifArbiter(&m_gifArbiter);
+     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
+                                  {
++                                     if (ps2_rollback::cutActive(ps2_rollback::CutVu1))
++                                         return;
++                                     ps2_rollback::ProfileScope profile(ps2_rollback::g_hostProfile.vu1Ns);
++                                     ++ps2_rollback::g_hostProfile.vu1Runs;
+                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+                                      if (!cpuContext)
+                                      {
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index e3d5882..7ff22c1 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -1,5 +1,6 @@
+ // Based on Blackline Interactive implementation
+ #include "runtime/ps2_memory.h"
++#include "runtime/ps2_rollback_cuts.h"
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -442,6 +443,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+ {
+     if (sizeBytes == 0u)
+         return;
++    ps2_rollback::ProfileScope profile(ps2_rollback::g_hostProfile.vif1Ns);
+ 
+     // A command cut off at the end of the previous transfer continues here: parse it again, whole.
+     std::vector<uint8_t> joined;
+-- 
+2.55.0.windows.3
+

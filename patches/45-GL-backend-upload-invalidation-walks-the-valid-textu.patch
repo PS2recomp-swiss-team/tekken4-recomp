@@ -1,0 +1,163 @@
+From 657e23405250d4363168adad5f57e524a4033f8d Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 03:49:12 +0100
+Subject: [PATCH 45/55] GL backend: upload invalidation walks the valid
+ textures only
+
+Every image upload walked the whole texture cache (up to 6000 entries, most of
+them already invalid) to invalidate overlapping textures. A list of the valid
+textures (pointers into the node-based map, rebuilt after an eviction) makes
+it proportional to the live set. Same textures invalidated as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 66 ++++++++++++++++----
+ 1 file changed, 53 insertions(+), 13 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index aac8948..e25f55d 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -465,6 +465,7 @@ void main()
+         uint8_t psm = 0;
+         uint32_t dirtyY0 = 0, dirtyY1 = 0;
+         uint64_t contentHash = 0; // hash of the raw blocks [blockLo, blockHi) it was decoded from (0 = none)
++        bool listed = false;      // in liveTextures
+     };
+ 
+     struct RenderTarget
+@@ -597,6 +598,29 @@ struct GSHwBackend::Impl
+     double firstRawZ = 0.0;
+ 
+     std::unordered_map<uint64_t, Texture> textures;
++    // Tekken 4 port (perf): the valid textures, so an upload's invalidation walks those instead of the whole cache (up to
++    // 6000 entries, most of them invalid, per upload: several ms per frame in stages with many uploads). The map is
++    // node based: element pointers stay valid until the entry is erased (evictOld rebuilds the list).
++    std::vector<Texture *> liveTextures;
++    void markValid(Texture &t)
++    {
++        t.valid = true;
++        if (!t.listed)
++        {
++            t.listed = true;
++            liveTextures.push_back(&t);
++        }
++    }
++    void rebuildLiveTextures()
++    {
++        liveTextures.clear();
++        for (auto &kv : textures)
++        {
++            kv.second.listed = kv.second.valid;
++            if (kv.second.valid)
++                liveTextures.push_back(&kv.second);
++        }
++    }
+     std::vector<RenderTarget> targets;
+     uint64_t useCounter = 0, writeSeq = 0;
+     struct UploadRecord { uint32_t lo, hi; uint64_t seq; };
+@@ -945,7 +969,7 @@ struct GSHwBackend::Impl
+         g.BindTexture(kTexture2D, tex.id);
+         g.PixelStorei(kUnpackAlignment, 4);
+         g.TexImage2D(kTexture2D, 0, static_cast<GLint>(kRgba8), tex.width, tex.height, 0, kRgba, kUnsignedByte, pixels.data());
+-        tex.valid = true;
++        markValid(tex);
+         if (textures.size() > 6000u)
+             evictOld();
+         return tex;
+@@ -1046,7 +1070,7 @@ struct GSHwBackend::Impl
+             tex.width == std::max<uint32_t>(1u, s.textureWidth) && tex.height == std::max<uint32_t>(1u, s.textureHeight))
+         {
+             ++stats.texRevalidated;
+-            tex.valid = true;
++            markValid(tex);
+             tex.dirtyY0 = tex.dirtyY1 = 0;
+             return tex;
+         }
+@@ -1101,7 +1125,7 @@ struct GSHwBackend::Impl
+         g.TexImage2D(kTexture2D, 0, 0x8229 /*R8*/, tex.width, tex.height, 0, 0x1903 /*RED*/, kUnsignedByte, indices.data());
+         g.TexParameteri(kTexture2D, kTextureMinFilter, kNearest);
+         g.TexParameteri(kTexture2D, kTextureMagFilter, kNearest);
+-        tex.valid = true;
++        markValid(tex);
+         if (textures.size() > 6000u)
+             evictOld();
+         return tex;
+@@ -1166,6 +1190,7 @@ struct GSHwBackend::Impl
+             else
+                 ++it;
+         }
++        rebuildLiveTextures();
+     }
+ 
+     // Raw GS memory of blocks [lo, hi) (256 bytes each); 0 when the range wraps past the end (never revalidated).
+@@ -1187,11 +1212,18 @@ struct GSHwBackend::Impl
+ 
+     void invalidateBlocks(uint32_t lo, uint32_t hi)
+     {
+-        for (auto &kv : textures)
++        for (size_t i = 0; i < liveTextures.size();)
+         {
+-            Texture &t = kv.second;
+-            if (t.valid && t.blockLo < hi && lo < t.blockHi)
+-                t.valid = false;
++            Texture &t = *liveTextures[i];
++            if (t.valid && !(t.blockLo < hi && lo < t.blockHi))
++            {
++                ++i;
++                continue;
++            }
++            t.valid = false;
++            t.listed = false;
++            liveTextures[i] = liveTextures.back();
++            liveTextures.pop_back();
+         }
+     }
+ 
+@@ -1200,21 +1232,28 @@ struct GSHwBackend::Impl
+     void invalidateForUpload(const GSTransferCommand &c, uint32_t lo, uint32_t hi)
+     {
+         const uint32_t x0 = c.trxpos.dsax, y0 = c.trxpos.dsay, x1 = x0 + c.trxreg.rrw, y1 = y0 + c.trxreg.rrh;
+-        for (auto &kv : textures)
++        for (size_t i = 0; i < liveTextures.size();)
+         {
+-            Texture &t = kv.second;
+-            if (!t.valid || !(t.blockLo < hi && lo < t.blockHi))
++            Texture &t = *liveTextures[i];
++            if (t.valid && !(t.blockLo < hi && lo < t.blockHi))
++            {
++                ++i;
+                 continue;
+-            if (t.indexed && t.tbp == c.bitbltbuf.dbp && t.tbw == c.bitbltbuf.dbw && t.psm == (c.bitbltbuf.dpsm & 63u) &&
+-                x1 <= t.width && y1 <= t.height)
++            }
++            if (t.valid && t.indexed && t.tbp == c.bitbltbuf.dbp && t.tbw == c.bitbltbuf.dbw &&
++                t.psm == (c.bitbltbuf.dpsm & 63u) && x1 <= t.width && y1 <= t.height)
+             {
+                 if (t.dirtyY1 <= t.dirtyY0)
+                     t.dirtyY0 = y0, t.dirtyY1 = y1;
+                 else
+                     t.dirtyY0 = std::min(t.dirtyY0, y0), t.dirtyY1 = std::max(t.dirtyY1, y1);
++                ++i;
+                 continue;
+             }
+             t.valid = false;
++            t.listed = false;
++            liveTextures[i] = liveTextures.back();
++            liveTextures.pop_back();
+         }
+     }
+ 
+@@ -2647,7 +2686,8 @@ void GSHwBackend::Reset()
+     d.clutHash = d.store.ClutHash();
+     d.invertedZ.clear();
+     for (auto &kv : d.textures)
+-        kv.second.valid = false;
++        kv.second.valid = false, kv.second.listed = false;
++    d.liveTextures.clear();
+ }
+ 
+ void GSHwBackend::Submit(const GSPrimitiveBatch &batch)
+-- 
+2.55.0.windows.3
+

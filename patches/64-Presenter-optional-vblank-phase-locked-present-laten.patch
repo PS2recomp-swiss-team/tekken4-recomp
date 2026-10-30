@@ -1,0 +1,107 @@
+From 8fe8cbdb9deecd649c23fb8be716a66c3522ccde Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:43:17 +0100
+Subject: [PATCH 64/65] Presenter: optional vblank-phase-locked present;
+ latency probe sees run-ahead pictures
+
+TEKKEN4_PRESENT_PHASE_MS=<ms>: the paced present moves to <ms> after each
+guest VBlankStart instead of a free-running 16.667 ms clock (which latches at
+a random phase, ~9 ms after the vblank on average). Off by default. The
+input-lag probe hashes the pictures run-ahead latches, so t5 works with it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../include/runtime/ps2_input_latency.h       |  2 ++
+ ps2xRuntime/src/lib/ps2_input_latency.cpp     | 10 ++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp           | 20 +++++++++++++++++--
+ 3 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_input_latency.h b/ps2xRuntime/include/runtime/ps2_input_latency.h
+index bcc449e..e0a1902 100644
+--- a/ps2xRuntime/include/runtime/ps2_input_latency.h
++++ b/ps2xRuntime/include/runtime/ps2_input_latency.h
+@@ -39,6 +39,8 @@ namespace ps2_input_latency
+     // Game thread, at VBlankStart before the tick advances (tick = the frame whose picture was just shown).
+     void noteVBlank(uint64_t newTick);
+     uint16_t padMaskOfTick(uint64_t tick);
++    // Host ms since that tick's VBlankStart (-1: unknown).
++    double msSinceVBlank(uint64_t tick);
+     uint64_t hashExact(const uint8_t *rgba, uint32_t width, uint32_t height);
+     // GS frontend (EE thread): the game's full-screen copy into the display buffer was submitted (frame complete).
+     void noteDisplayCopy(uint64_t tick, uint32_t destFbp);
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+index 0d47901..02296f8 100644
+--- a/ps2xRuntime/src/lib/ps2_input_latency.cpp
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -436,6 +436,15 @@ namespace ps2_input_latency
+                      destFbp, ms);
+     }
+ 
++    double msSinceVBlank(uint64_t tick)
++    {
++        const uint64_t vb = g_vbQpc[tick % kTickRing].load(std::memory_order_acquire);
++        const uint64_t now = qpc();
++        if (vb == 0 || now < vb)
++            return -1.0;
++        return static_cast<double>(now - vb) * 1000.0 / static_cast<double>(qpcFreq());
++    }
++
+     uint16_t padMaskOfTick(uint64_t tick)
+     {
+         return g_padTick.load(std::memory_order_acquire) == tick ? g_padMask.load(std::memory_order_acquire) : 0;
+@@ -553,6 +562,7 @@ namespace ps2_input_latency
+     bool vblankHash() { return false; }
+     void noteVBlank(uint64_t) {}
+     uint16_t padMaskOfTick(uint64_t) { return 0; }
++    double msSinceVBlank(uint64_t) { return -1.0; }
+     uint64_t hashExact(const uint8_t *, uint32_t, uint32_t) { return 0; }
+     void noteDisplayCopy(uint64_t, uint32_t) {}
+     void onLatchBegin(uint64_t) {}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index e9e30e0..85f4eb5 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -473,7 +473,8 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+         return;
+     }
+ 
+-    if (!needsLatch && s_lastRunaheadLatch != ps2_runahead::latchSequence())
++    const bool runaheadLatch = !needsLatch && s_lastRunaheadLatch != ps2_runahead::latchSequence();
++    if (runaheadLatch)
+         ps2_input_latency::onLatchBegin(currentTick); // the speculative picture counts as this tick's latch
+     s_lastRunaheadLatch = ps2_runahead::latchSequence();
+     s_scratch.clear();
+@@ -550,7 +551,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     outWidth = width;
+     outHeight = height;
+     s_hasUploadedFrame = true;
+-    if (needsLatch)
++    if (needsLatch || runaheadLatch)
+         ps2_input_latency::onLatchPixels(s_scratch.data(), width, height);
+ }
+ 
+@@ -2603,6 +2604,21 @@ void PS2Runtime::run()
+         {
+             const uint64_t guestTick = m_eeScheduler->currentVSyncTick();
+             const auto now = std::chrono::steady_clock::now();
++            // TEKKEN4_PRESENT_PHASE_MS: the paced present moves to <phase> ms after each guest VBlankStart
++            // (docs/INPUT.md: the 16.667 ms clock otherwise latches at a random phase, ~8 ms late on average).
++            static const double s_phaseMs = []
++            {
++                const char *v = std::getenv("TEKKEN4_PRESENT_PHASE_MS");
++                return (v && *v) ? std::atof(v) : -1.0;
++            }();
++            static uint64_t s_phaseTick = std::numeric_limits<uint64_t>::max();
++            if (s_phaseMs >= 0.0 && guestTick != s_phaseTick)
++            {
++                s_phaseTick = guestTick;
++                const double since = ps2_input_latency::msSinceVBlank(guestTick);
++                if (since >= 0.0 && since < 16.0)
++                    nextPaced = now + std::chrono::microseconds(static_cast<int64_t>((s_phaseMs - since) * 1000.0));
++            }
+             const bool tickDue = ps2_input_latency::presentOnTick() && guestTick != shownTick;
+             const bool clockDue = !ps2_input_latency::presentOnTick() && now >= nextPaced;
+             const bool idleDue = now >= nextIdle;
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,164 @@
+From 1ec9a1cae77e4e03971c8fa20edcce6a489241cf Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 12:24:38 +0100
+Subject: [PATCH] Perf stats: PS2X_PERF_STATS=1 reports until exit, [hitch]
+ line per late present / guest frame
+
+PS2X_PERF_STATS=<n> reports n seconds, so the natural "=1" printed one second
+only; 1 now means until the program exits. New [hitch] lines (PS2X_PERF_HITCH_MS,
+default 20, 0 = off): a present or guest-vblank interval over the limit prints
+at once, with the deltas since the previous event of that kind (EE time in GIF,
+GS publish wait, scheduler pacing wait, GS worker busy, texture decodes, render
+target uploads, drains), to match a hitch to a texture burst or GS stall.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ps2_perf_stats.h |  2 +-
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp   |  2 +-
+ ps2xRuntime/src/lib/ps2_perf_stats.cpp       | 68 ++++++++++++++++++--
+ 3 files changed, 66 insertions(+), 6 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+index edb172b..401ff32 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf_stats.h
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -71,7 +71,7 @@ namespace ps2_perf_stats
+     // guest vsync tick it shows (interval between swaps; a tick shown twice = repeat, ticks never shown = skipped), the
+     // EE thread every VBlankStart it processes (interval between guest frames in host time).
+     void notePresent(uint64_t shownTick) noexcept;
+-    void noteVblank() noexcept;
++    void noteVblank(uint64_t hostWaitNs = 0) noexcept; // hostWaitNs: the scheduler's pacing-wait total so far
+ }
+ 
+ // Counts one event in g_counters.<name> when the stats are on (an expression, usable after a comma).
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index f5930da..93b0497 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -2073,7 +2073,7 @@ void EeScheduler::processEvent(const EeEvent &event)
+         }
+         ps2_input_latency::noteVBlank(m_vsyncTick + 1u);
+         ++m_vsyncTick;
+-        ps2_perf_stats::noteVblank();
++        ps2_perf_stats::noteVblank(m_hostWaitNs);
+         ps2_input_latency::notifyTick();
+         m_vblankPending = static_cast<bool>(m_boundaryHook);
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+index 23b34d5..deb7cca 100644
+--- a/ps2xRuntime/src/lib/ps2_perf_stats.cpp
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -21,7 +21,9 @@ namespace ps2_perf_stats
+             static const int value = []
+             {
+                 const char *env = std::getenv("PS2X_PERF_STATS");
+-                return env && *env ? std::atoi(env) : 0;
++                // PS2X_PERF_STATS=<seconds to report>; 1 (the natural "on") = until the program exits, not one line.
++                const int n = env && *env ? std::atoi(env) : 0;
++                return n == 1 ? 1000000 : n;
+             }();
+             return value;
+         }
+@@ -45,6 +47,42 @@ namespace ps2_perf_stats
+         };
+         FrameLog g_frames;
+ 
++        // Hitch log (PS2X_PERF_HITCH_MS, default 20; 0 = off): a present / guest-vblank interval longer than that prints
++        // one "[hitch]" line right away with what the other threads did since the previous event of the same kind
++        // (deltas: EE time in GIF, GS publish / drain waits, GS worker busy, texture decodes, render-target uploads), so
++        // a hitch can be matched to a stage load, texture burst or GS stall in stdout order.
++        struct HitchSnap
++        {
++            uint64_t eeGif = 0, pubWait = 0, drainWait = 0, worker = 0, texDec = 0, rtUp = 0, drains = 0, hostWait = 0;
++        };
++        std::atomic<uint64_t> g_t0Ns{0};
++        double hitchMs()
++        {
++            static const double v = []
++            {
++                const char *e = std::getenv("PS2X_PERF_HITCH_MS");
++                return e && *e ? std::atof(e) : 20.0;
++            }();
++            return v;
++        }
++        HitchSnap takeHitchSnap(uint64_t hostWait = 0)
++        {
++            const Counters &c = g_counters;
++            const auto r = [](const std::atomic<uint64_t> &a) { return a.load(std::memory_order_relaxed); };
++            return HitchSnap{r(c.eeGifNs), r(c.gsPublishWaitNs), r(c.gsDrainWaitNs), r(c.gsWorkerBusyNs),
++                             r(c.texDecodes), r(c.rtUploads), r(c.gsDrains), hostWait};
++        }
++        void reportHitch(const char *kind, uint64_t nowNs_, uint32_t intervalUs, const HitchSnap &then, const HitchSnap &now)
++        {
++            const auto ms = [](uint64_t a, uint64_t b) { return static_cast<double>(b - a) / 1e6; };
++            std::printf("[hitch] %s t=%.3f dt=%.1f eegif=%.1f pubwait=%.1f hostwait=%.1f drainwait=%.1f worker=%.1f texdec=%llu rtup=%llu drains=%llu\n",
++                        kind, static_cast<double>(nowNs_ - g_t0Ns.load(std::memory_order_relaxed)) / 1e9, intervalUs / 1000.0,
++                        ms(then.eeGif, now.eeGif), ms(then.pubWait, now.pubWait), ms(then.hostWait, now.hostWait), ms(then.drainWait, now.drainWait),
++                        ms(then.worker, now.worker), static_cast<unsigned long long>(now.texDec - then.texDec),
++                        static_cast<unsigned long long>(now.rtUp - then.rtUp), static_cast<unsigned long long>(now.drains - then.drains));
++        }
++        HitchSnap g_presentSnap, g_vblankSnap;
++
+         std::string joinUs(const std::vector<uint32_t> &v)
+         {
+             std::string s;
+@@ -63,9 +101,23 @@ namespace ps2_perf_stats
+         if (!enabled())
+             return;
+         const uint64_t t = nowNs();
++        const HitchSnap snap = takeHitchSnap();
++        uint32_t hitchUs = 0;
++        HitchSnap then;
+         std::lock_guard lock(g_frames.mutex);
+         if (g_frames.lastPresentNs)
+-            g_frames.presentUs.push_back(static_cast<uint32_t>((t - g_frames.lastPresentNs) / 1000u));
++        {
++            const auto us = static_cast<uint32_t>((t - g_frames.lastPresentNs) / 1000u);
++            g_frames.presentUs.push_back(us);
++            if (hitchMs() > 0.0 && us > hitchMs() * 1000.0)
++            {
++                hitchUs = us;
++                then = g_presentSnap;
++            }
++        }
++        g_presentSnap = snap;
++        if (hitchUs)
++            reportHitch("present", t, hitchUs, then, snap);
+         g_frames.lastPresentNs = t;
+         if (g_frames.haveTick)
+         {
+@@ -78,14 +130,21 @@ namespace ps2_perf_stats
+         g_frames.haveTick = true;
+     }
+ 
+-    void noteVblank() noexcept
++    void noteVblank(uint64_t hostWaitNs) noexcept
+     {
+         if (!enabled())
+             return;
+         const uint64_t t = nowNs();
++        const HitchSnap snap = takeHitchSnap(hostWaitNs);
+         std::lock_guard lock(g_frames.mutex);
+         if (g_frames.lastVblankNs)
+-            g_frames.vblankUs.push_back(static_cast<uint32_t>((t - g_frames.lastVblankNs) / 1000u));
++        {
++            const auto us = static_cast<uint32_t>((t - g_frames.lastVblankNs) / 1000u);
++            g_frames.vblankUs.push_back(us);
++            if (hitchMs() > 0.0 && us > hitchMs() * 1000.0)
++                reportHitch("guest", t, us, g_vblankSnap, snap);
++        }
++        g_vblankSnap = snap;
+         g_frames.lastVblankNs = t;
+     }
+ 
+@@ -98,6 +157,7 @@ namespace ps2_perf_stats
+         if (const char *vu = std::getenv("PS2X_PERF_STATS_VU"); vu && *vu == '1')
+             ps2_rollback::g_hostProfile.on = true;
+         PS2Runtime *rt = &runtime;
++        g_t0Ns.store(nowNs(), std::memory_order_relaxed);
+         std::thread([rt]()
+                     {
+             struct Snap
+-- 
+2.55.0.windows.3
+

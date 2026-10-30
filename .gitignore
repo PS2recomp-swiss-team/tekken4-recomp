@@ -1,0 +1,32 @@
+# --- Game data: copyrighted, never commit or publish ---
+*.iso
+*.zip
+*.bin
+*.img
+*.elf
+SCES_*
+SLES_*
+SLUS_*
+game/
+
+# Ghidra project databases contain the game's code
+ghidra/
+
+# --- Third-party checkouts (pinned commits are recorded in docs/status.md) ---
+external/
+
+# --- Build trees and recompiler output (generated from the game ELF) ---
+build/
+out/
+generated/
+logs/
+# ExportPS2Functions.java defaults its output dir to <toml dir>/output
+config/output/
+
+__pycache__/
+
+# Local shortcuts and scratch folders
+*.lnk
+help/
+to clean/
+imgui.ini

@@ -1,0 +1,45 @@
+TEKKEN 4 (US) - nativer PC-Port: Mini-Release zum Testen (2026-10-30)
+=====================================================================
+
+Dieses Paket enthaelt KEINE Spieldaten und kein BIOS. Du baust das Spiel selbst aus deiner eigenen ISO.
+
+Du brauchst
+  - Tekken 4 USA als ISO: SLUS-20328 (die PAL-Version SCES-50878 wird abgelehnt).
+  - Windows 10/11, Python 3, Git, CMake, Ninja, Visual Studio 2022 Build Tools (C++), Internet (PS2Recomp + Abhaengigkeiten).
+  - Etwa 6 GB Platz. Der Build dauert 10-20 Minuten (bei uns 8,6 Minuten).
+
+WICHTIG: In einen NEUEN, LEEREN Ordner entpacken, z. B. D:\T4Test\tekken4-recomp
+  Das Build-Skript nutzt den Ordner daneben (..\tekken4-fork-ps2recomp). Liegt dort schon dein alter PAL-Fork
+  (z. B. H:\tekken4-fork-ps2recomp), wuerde er benutzt und der Build falsch. Also NICHT neben deinen alten Baum entpacken.
+
+Bauen und spielen (Launcher)
+  python launcher\t4_launcher.pyw
+  Tab "Build game": ISO auswaehlen, BUILD GAME. Danach Tab "Play offline", PLAY. Einstellungen im Tab "Settings".
+
+Oder per Kommandozeile
+  powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso "C:\Pfad\Tekken 4 (USA).iso"
+  set TEKKEN4_ISO=C:\Pfad\Tekken 4 (USA).iso
+  tools\run_game.cmd
+
+Einstellungen (Umgebungsvariablen, docs\GRAPHICS.md)
+  TEKKEN4_INTERNAL_RES = lowest | native | 1080p | 1440p | 4k | auto
+  TEKKEN4_FULLSCREEN   = 1 (randlos) | exclusive | 0      (im Spiel: F11 oder Alt+Enter)
+  TEKKEN4_AA = off | fxaa | ssaa2..4     TEKKEN4_HUD = sharp     TEKKEN4_PROGRESSIVE = 1 | 0
+  TEKKEN4_UNLOCK_ALL = 1 | 0 (alle Kaempfer frei, Standard an; der Spielstand wird nicht veraendert)
+
+Steuerung
+  Gamepad (Xbox): A/B/X/Y = Kreuz/Kreis/Viereck/Dreieck, LB/RB/LT/RT = L1/R1/L2/R2, Steuerkreuz oder linker Stick.
+  Tastatur: WASD = bewegen, Pfeil runter/rechts/links/hoch = Kreuz/Kreis/Viereck/Dreieck, Enter = Start, Tab = Select.
+  F1 = Debug-Fenster. Fenster schliessen = beenden (Esc beendet nicht).
+
+Online-Test (Rollback, zwei PCs im LAN; docs\ROLLBACK_PHASE3.md, Abschnitt 5)
+  Beide brauchen exakt denselben Build; dafuer docs\rollback\net_build.cmd anpassen (Pfade).
+  Noch nicht auf zwei PCs getestet: Rueckmeldung dazu ist besonders wertvoll.
+
+Bekannt
+  - Intro-Musik klingt noch nicht sauber (Ton in lauten Stellen rau; TEKKEN4_MOVIE_GAIN regelt die Lautstaerke).
+  - Vereinzelte helle Puenktchen im Sand der Strand-Stage in hoher Aufloesung.
+  - Kurze Haenger beim Start und beim Laden nach der Charakterauswahl.
+  - Der Launcher-Build wurde nur im Trockenlauf getestet; das Build-Skript selbst lief komplett durch.
+
+Bitte melden: Fotos von Fehlern, logs\run.log bzw. launcher\save, was du gemacht hast. Stand und Details: docs\status.md.

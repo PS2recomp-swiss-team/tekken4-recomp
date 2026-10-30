@@ -1,0 +1,265 @@
+From 16bc4319a509e342f2dfa02803d6d585b89574bf Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 01:55:00 +0100
+Subject: [PATCH 3/3] ps2xIOP: sound debug aids (env-gated)
+
+TEKKEN4_SOUND_VOICES=1: every 5 s the sounding voices, libsd calls by ordinal, KON/KOFF writes,
+SPU2 IRQs and EE commands delivered; the first IOP->EE SIF commands with their body words.
+TEKKEN4_SOUND_SOLO=<core0 mask>,<core1 mask>: only those voices reach the mix (e.g. 0,f30000 =
+zsiopdrv's stream voices). TEKKEN4_IOP_DUMP=<s>[,..]: IOP RAM + SPU RAM dumps at IOP seconds.
+TEKKEN4_IOP_TRACE=<pc>[,..] (+ TEKKEN4_IOP_TRACE_MAX): a0-a3/ra each time the IOP reaches a PC.
+Nothing changes without the variables.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/src/emulator/core/sound_engine.cpp |  36 ++++++-
+ ps2xIOP/src/emulator/iop_emulator.cpp      | 104 +++++++++++++++++++++
+ ps2xIOP/src/emulator/services/iop_rpc.cpp  |  15 +++
+ 3 files changed, 154 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.cpp b/ps2xIOP/src/emulator/core/sound_engine.cpp
+index f825d77..ec707a0 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.cpp
++++ b/ps2xIOP/src/emulator/core/sound_engine.cpp
+@@ -792,6 +792,19 @@ namespace ps2x::iop::detail
+     void SoundEngine::step()
+     {
+         int32_t coreOut[2][2] = {};
++        // TEKKEN4_SOUND_SOLO=<core 0 voice mask>,<core 1 voice mask> (hex): only those voices reach the mix (the others
++        // still play, silently). Debug aid: e.g. 0,30000 = core 1 voices 16-17 (the BGM stream) alone.
++        static const std::array<uint32_t, 2> solo = []
++        {
++            std::array<uint32_t, 2> masks{0xFFFFFFu, 0xFFFFFFu};
++            if (const char *env = std::getenv("TEKKEN4_SOUND_SOLO"))
++            {
++                char *end = nullptr;
++                masks[0] = static_cast<uint32_t>(std::strtoul(env, &end, 16));
++                masks[1] = end && *end == ',' ? static_cast<uint32_t>(std::strtoul(end + 1, nullptr, 16)) : 0u;
++            }
++            return masks;
++        }();
+         for (uint32_t core = 0; core < 2u; ++core)
+         {
+             Core &c = m_cores[core];
+@@ -799,7 +812,7 @@ namespace ps2x::iop::detail
+             for (uint32_t index = 0; index < VoicesPerCore; ++index)
+             {
+                 const int32_t sample = stepVoice(c, index);
+-                if (sample == 0)
++                if (sample == 0 || (solo[core] & (1u << index)) == 0u)
+                     continue;
+                 const int32_t scaledL = (sample * volumeOf(c.voices[index].volL)) >> 14;
+                 const int32_t scaledR = (sample * volumeOf(c.voices[index].volR)) >> 14;
+@@ -865,6 +878,27 @@ namespace ps2x::iop::detail
+                     }
+             }
+         }
++        // TEKKEN4_SOUND_VOICES=1: every 5 mixer seconds, every sounding voice (debug aid for the BGM stream voices).
++        static const bool voiceList = std::getenv("TEKKEN4_SOUND_VOICES") != nullptr;
++        if (voiceList)
++        {
++            static uint64_t mixSamples = 0;
++            if (++mixSamples % (48000u * 5u) == 0u)
++            {
++                std::fprintf(stderr, "[snd-voices] t=%llus mvol0=%04x/%04x mvol1=%04x/%04x attr=%04x/%04x irqa=%x/%x rev=%d/%d\n",
++                             static_cast<unsigned long long>(mixSamples / 48000u), m_cores[0].mvolL, m_cores[0].mvolR,
++                             m_cores[1].mvolL, m_cores[1].mvolR, m_cores[0].attr, m_cores[1].attr, m_cores[0].irqa * 2u,
++                             m_cores[1].irqa * 2u, m_reverb[0].enabled ? 1 : 0, m_reverb[1].enabled ? 1 : 0);
++                for (uint32_t core = 0; core < 2u; ++core)
++                    for (uint32_t index = 0; index < VoicesPerCore; ++index)
++                    {
++                        const Voice &v = m_cores[core].voices[index];
++                        if (v.active && v.pitch != 0u && v.envelope != 0)
++                            std::fprintf(stderr, "[snd-voices]   core=%u voice=%u pitch=%04x vol=%04x/%04x env=%d ssa=%x lsa=%x nax=%x\n",
++                                         core, index, v.pitch, v.volL, v.volR, v.envelope, v.ssa * 2u, v.lsa * 2u, v.nax * 2u);
++                    }
++            }
++        }
+         // GOW_AUDIO_RAW=<file>: the mixed samples as produced (s16le stereo 48 kHz), before the output's rate adaptation,
+         // so a recording can be compared sample by sample with its source (tools/movies.py)
+         static std::FILE *raw = [] { const char *path = std::getenv("GOW_AUDIO_RAW"); return path ? std::fopen(path, "wb") : nullptr; }();
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 5b98890..3dc9406 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -417,6 +417,12 @@ namespace ps2x::iop::detail
+             const uint32_t a1 = cpu.gpr[5];
+             const uint32_t a2 = cpu.gpr[6];
+             const uint32_t a3 = cpu.gpr[7];
++            if (ordinal < m_libsdCalls.size())
++                ++m_libsdCalls[ordinal];
++            if (ordinal == 7u && ((a0 >> 8) & 0xFFu) == 0x15u)
++                ++m_konCalls;
++            if (ordinal == 7u && ((a0 >> 8) & 0xFFu) == 0x16u)
++                ++m_koffCalls;
+             switch (ordinal)
+             {
+             case 4:
+@@ -653,12 +659,68 @@ namespace ps2x::iop::detail
+             m_idleValid = false;
+         }
+ 
++        // TEKKEN4_IOP_DUMP=<s1>[,<s2>...]: at those IOP seconds, write iop_ram_<s>s.bin (2 MB IOP RAM) and
++        // spu_ram_<s>s.bin (2 MB sample RAM) to the working directory (debug aid for the BGM stream).
++        void debugDumpRam()
++        {
++            // TEKKEN4_SOUND_VOICES=1 also logs, every 5 IOP seconds, the libsd calls (by ordinal), KON/KOFF writes,
++            // SPU2 IRQs and EE commands delivered since the last line.
++            static const bool stats = std::getenv("TEKKEN4_SOUND_VOICES") != nullptr;
++            if (stats && totalCycles >= m_nextSoundStats)
++            {
++                m_nextSoundStats = totalCycles + 5ull * 36864000ull;
++                std::ostringstream out;
++                out << "[snd-stats] iop " << totalCycles / 36864000ull << " s: irq " << m_spu2IrqCount << " eecmd "
++                    << eeSifCommandsDelivered << " kon " << m_konCalls << " koff " << m_koffCalls << " libsd";
++                for (size_t i = 0; i < m_libsdCalls.size(); ++i)
++                    if (m_libsdCalls[i] != 0u)
++                        out << ' ' << i << ':' << m_libsdCalls[i];
++                log(LogLevel::Info, out.str());
++                m_libsdCalls.fill(0u);
++                m_konCalls = m_koffCalls = 0u;
++            }
++            static std::vector<uint64_t> times = []
++            {
++                std::vector<uint64_t> list;
++                if (const char *env = std::getenv("TEKKEN4_IOP_DUMP"))
++                {
++                    std::stringstream in(env);
++                    std::string item;
++                    while (std::getline(in, item, ','))
++                        if (!item.empty())
++                            list.push_back(std::strtoull(item.c_str(), nullptr, 10));
++                }
++                std::sort(list.begin(), list.end(), std::greater<uint64_t>());
++                return list;
++            }();
++            if (times.empty() || totalCycles < times.back() * 36864000ull)
++                return;
++            const uint64_t at = times.back();
++            (void)0;
++            times.pop_back();
++            const std::string suffix = std::to_string(at) + "s.bin";
++            if (std::FILE *f = std::fopen(("iop_ram_" + suffix).c_str(), "wb"))
++            {
++                std::fwrite(memory.ram().data(), 1, kRamSize, f);
++                std::fclose(f);
++            }
++            std::vector<uint8_t> spu(SoundEngine::RamHalfwords * 2u);
++            m_sound.readSampleRam(0u, spu.data(), spu.size());
++            if (std::FILE *f = std::fopen(("spu_ram_" + suffix).c_str(), "wb"))
++            {
++                std::fwrite(spu.data(), 1, spu.size(), f);
++                std::fclose(f);
++            }
++            log(LogLevel::Info, "[IOP] RAM dump " + suffix);
++        }
++
+         void drainMixedAudio()
+         {
+             if (!soundRouteOn())
+                 return;
+             m_sound.advanceTo(totalCycles);
+             serviceSpu2Irq();
++            debugDumpRam();
+             int16_t block[1024 * 2];
+             for (;;)
+             {
+@@ -838,6 +900,43 @@ namespace ps2x::iop::detail
+             return ImportDisposition::Missing;
+         }
+ 
++        // TEKKEN4_IOP_TRACE=<pc>[,<pc>...] (hex): logs a0-a3, ra and the cycle each time the IOP reaches one of those
++        // PCs, at most TEKKEN4_IOP_TRACE_MAX (default 200) lines (debug aid for the sound driver).
++        static std::vector<uint32_t> &pcTrace()
++        {
++            static std::vector<uint32_t> list = []
++            {
++                std::vector<uint32_t> pcs;
++                if (const char *env = std::getenv("TEKKEN4_IOP_TRACE"))
++                {
++                    std::stringstream in(env);
++                    std::string item;
++                    while (std::getline(in, item, ','))
++                        if (!item.empty())
++                            pcs.push_back(static_cast<uint32_t>(std::strtoul(item.c_str(), nullptr, 16)));
++                }
++                std::sort(pcs.begin(), pcs.end());
++                return pcs;
++            }();
++            return list;
++        }
++
++        void tracePc(const CpuState &cpu)
++        {
++            static int left = []
++            {
++                const char *env = std::getenv("TEKKEN4_IOP_TRACE_MAX");
++                return env ? std::atoi(env) : 200;
++            }();
++            if (left <= 0 || !std::binary_search(pcTrace().begin(), pcTrace().end(), cpu.pc))
++                return;
++            --left;
++            char line[200];
++            std::snprintf(line, sizeof(line), "[iop-trace] pc=%x a0=%x a1=%x a2=%x a3=%x ra=%x t=%.3f", cpu.pc, cpu.gpr[4],
++                          cpu.gpr[5], cpu.gpr[6], cpu.gpr[7], cpu.gpr[31], static_cast<double>(totalCycles) / 36864000.0);
++            log(LogLevel::Info, line);
++        }
++
+         bool step(CpuState &cpu)
+         {
+             if (cpu.stopped)
+@@ -857,6 +956,8 @@ namespace ps2x::iop::detail
+             }
+             if (checkInterrupt(cpu))
+                 return true;
++            if (!pcTrace().empty())
++                tracePc(cpu);
+ 
+             if (const auto import = imports.decode(cpu.pc))
+             {
+@@ -1341,6 +1442,9 @@ namespace ps2x::iop::detail
+         LibsdState m_libsd{};
+         SoundEngine m_sound;
+         uint64_t m_spu2IrqCount = 0u;
++        std::array<uint32_t, 32> m_libsdCalls{};
++        uint32_t m_konCalls = 0u, m_koffCalls = 0u;
++        uint64_t m_nextSoundStats = 0u;
+         int m_soundRoute = -1;
+         // TEKKEN4_IOP_IDLE_SKIP=0 turns the idle-skip cache off (paired speed runs with one exe).
+         bool m_idleCacheEnabled = []
+diff --git a/ps2xIOP/src/emulator/services/iop_rpc.cpp b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+index cf4fdc6..2a89796 100644
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <vector>
+@@ -197,6 +199,19 @@ namespace ps2x::iop::detail
+             std::memcpy(packet.data() + 4u, &extraDestination, sizeof(extraDestination));
+             std::memcpy(packet.data() + 8u, &commandId, sizeof(commandId));
+ 
++            // TEKKEN4_SOUND_VOICES=1: the first IOP -> EE commands (cid, body words) for the BGM stream protocol.
++            static const bool trace = std::getenv("TEKKEN4_SOUND_VOICES") != nullptr;
++            static int traced = 0;
++            if (trace && traced < 60 && packetSize >= 32u)
++            {
++                ++traced;
++                uint32_t body[4] = {};
++                std::memcpy(body, packet.data() + 16u, sizeof(body));
++                char line[160];
++                std::snprintf(line, sizeof(line), "[sifcmd] IOP->EE cid=0x%x body %x %x %x %x", commandId, body[0], body[1],
++                              body[2], body[3]);
++                m_host.log(LogLevel::Info, line);
++            }
+             if (!m_host.sendSifCommand(commandId, packet.data(), packetSize))
+             {
+                 // A command without an EE handler is still a completed DMA on  real hardware. Only malformed packets fail above.
+-- 
+2.55.0.windows.3
+

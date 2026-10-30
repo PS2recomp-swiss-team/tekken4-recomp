@@ -1,0 +1,913 @@
+diff --git a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+index 2421f9e..e30797e 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+@@ -4,13 +4,18 @@
+ #include "runtime/gs/gs_texture_page_cache.h"
+ 
+ #include <array>
++#include <condition_variable>
++#include <deque>
++#include <memory>
+ #include <mutex>
++#include <thread>
+ #include <vector>
+ 
+ class GSCpuBackend final : public GSRasterBackend
+ {
+ public:
+     GSCpuBackend();
++    ~GSCpuBackend() override;
+ 
+     void Initialize(uint8_t *vram, uint32_t vramSize) override;
+     void Reset() override;
+@@ -44,7 +49,9 @@ private:
+     void DrawSprite(const GSPrimitiveBatch &batch);
+     void DrawTriangle(const GSPrimitiveBatch &batch);
+     void DrawLine(const GSPrimitiveBatch &batch);
++    struct PixelPipeline; // what WritePixel needs from the draw state, worked out once per primitive
+     void WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog);
++    void WritePixel(const PixelPipeline &pipe, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog);
+     uint32_t SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v);
+     uint32_t LookupCLUT(const GSDrawState &state, uint8_t index, uint8_t cpsm, uint8_t csm, uint8_t csa, uint8_t sourcePsm);
+ 
+@@ -72,10 +79,32 @@ private:
+     std::array<WriteVramFunc, kPsmHandlerCount> m_writeVramFuncs{};
+     std::array<uint16_t, 512> m_clut{};
+     std::array<uint32_t, 2> m_clutCbp{};
+-    GSMem::TexturePageCache m_texturePageCache;
++    mutable GSMem::TexturePageCache m_texturePageCache; // mutable: the drawing threads' barrier invalidates it
+ 
+     GSTransferCommand m_transfer{};
+     GSTransferSnapshot m_transferState{};
+     std::vector<uint8_t> m_localToHostBuffer;
+     size_t m_localToHostReadPos = 0;
++
++    // Drawing threads (PS2X_GS_THREADS=<n> or "auto"; off by default). Every primitive is queued for all workers
++    // and each one draws only the rows of its own 16-row bands, so no two threads write the same byte. Anything
++    // else that reads or changes GS memory or the CLUT first waits until they have drawn everything queued.
++    void StartWorkersIfConfigured();
++    void StopWorkers();
++    void WaitForWorkersUnlocked() const;
++    void WorkerLoop(unsigned index);
++    bool m_workersConfigured = false;
++    unsigned m_bandCount = 1;
++    std::vector<std::thread> m_workers;
++    std::vector<std::unique_ptr<GSMem::TexturePageCache>> m_workerCaches;
++    mutable std::mutex m_jobMutex;
++    mutable std::condition_variable m_jobCv;
++    mutable std::condition_variable m_idleCv;
++    mutable std::deque<GSPrimitiveBatch> m_jobs;
++    mutable std::vector<size_t> m_workerNext;
++    // GS memory pages the queued primitives draw into and sample (conservative ranges): a primitive that samples
++    // pages a queued one draws into, or draws into pages a queued one samples, waits for the workers first.
++    mutable std::vector<std::pair<uint32_t, uint32_t>> m_queuedWritePages;
++    mutable std::vector<std::pair<uint32_t, uint32_t>> m_queuedReadPages;
++    bool m_stopWorkers = false;
+ };
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+index f92554f..421943f 100644
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -10,6 +10,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <fstream>
+ #include <iostream>
+@@ -17,14 +18,32 @@
+ 
+ using namespace GSInternal;
+ 
++// The helpers below run for every pixel or texel; left to the compiler they stay calls.
++#if defined(_MSC_VER)
++#define GS_FORCE_INLINE __forceinline
++#else
++#define GS_FORCE_INLINE inline __attribute__((always_inline))
++#endif
++
+ namespace
+ {
+-    float fabsQ(float q)
++    // Which rows this thread draws (see GSCpuBackend's drawing threads); outside them a thread draws every row.
++    thread_local unsigned t_bandIndex = 0u;
++    thread_local unsigned t_bandCount = 1u;
++    thread_local GSMem::TexturePageCache *t_textureCache = nullptr;
++    constexpr unsigned kBandRowShift = 4u; // 16-row bands: the tallest block of any pixel format
++
++    GS_FORCE_INLINE bool ownsRow(int y)
++    {
++        return t_bandCount <= 1u || ((static_cast<unsigned>(y) >> kBandRowShift) % t_bandCount) == t_bandIndex;
++    }
++
++    GS_FORCE_INLINE float fabsQ(float q)
+     {
+         return (std::fabs(q) > 1.0e-8f) ? q : 1.0f;
+     }
+ 
+-    u16 Rgba8888ToRgba5551(u32 c)
++    GS_FORCE_INLINE u16 Rgba8888ToRgba5551(u32 c)
+     {
+         uint32_t r = ((c >> 0) & 0xFF) >> 3;
+         uint32_t g = ((c >> 8) & 0xFF) >> 3;
+@@ -34,7 +53,7 @@ namespace
+         return (r | (g << 5) | (b << 10) | (a << 15));
+     }
+ 
+-    u32 Rgba5551ToRgba8888(u16 c)
++    GS_FORCE_INLINE u32 Rgba5551ToRgba8888(u16 c)
+     {
+         u32 r = ((c >> 0) & 0x1F) << 3;
+         u32 g = ((c >> 5) & 0x1F) << 3;
+@@ -44,12 +63,12 @@ namespace
+         return (r | (g << 8) | (b << 16) | (a << 24));
+     }
+ 
+-    u32 pack32(u8 r, u8 g, u8 b, u8 a)
++    GS_FORCE_INLINE u32 pack32(u8 r, u8 g, u8 b, u8 a)
+     {
+         return static_cast<u32>(r) | (g << 8) | (b << 16) | (a << 24);
+     }
+ 
+-    uint32_t applyTexa(const GSTexaReg &texa, uint8_t psm, uint32_t texel)
++    GS_FORCE_INLINE uint32_t applyTexa(const GSTexaReg &texa, uint8_t psm, uint32_t texel)
+     {
+         if (psm == GS_PSM_CT32)
+             return texel;
+@@ -101,7 +120,7 @@ namespace
+     std::atomic<uint32_t> s_debugContext1PrimitiveCount{0};
+     std::atomic<uint32_t> s_debugFbp150PixelCount{0};
+ 
+-    int wrapTextureCoordinate(int coordinate,
++    GS_FORCE_INLINE int wrapTextureCoordinate(int coordinate,
+                               int textureSize,
+                               uint8_t mode,
+                               uint16_t regionMin,
+@@ -122,7 +141,7 @@ namespace
+         }
+     }
+ 
+-    bool passesAlphaTest(uint64_t testReg, uint8_t alpha)
++    GS_FORCE_INLINE bool passesAlphaTest(uint64_t testReg, uint8_t alpha)
+     {
+         if ((testReg & 0x1u) == 0u)
+             return true;
+@@ -170,7 +189,18 @@ namespace
+         }
+     };
+ 
+-    PixelWriteMask classifyAlphaTest(uint64_t testReg, uint8_t alpha, uint8_t framePsm)
++    // True when no pixel of a primitive can be written: the alpha test always fails (ATST NEVER, or a flat colour
++    // whose alpha fails it) and AFAIL is KEEP. Games draw such sprites over the whole screen.
++    bool alphaTestDiscardsPrimitive(uint64_t testReg, bool textured, uint8_t vertexAlpha)
++    {
++        if ((testReg & 0x1u) == 0u || ((testReg >> 12) & 0x3u) != 0u)
++            return false;
++        if (((testReg >> 1) & 0x7u) == 0u)
++            return true;
++        return !textured && !passesAlphaTest(testReg, vertexAlpha);
++    }
++
++    GS_FORCE_INLINE PixelWriteMask classifyAlphaTest(uint64_t testReg, uint8_t alpha, uint8_t framePsm)
+     {
+         const bool pass = passesAlphaTest(testReg, alpha);
+         if (pass)
+@@ -195,7 +225,7 @@ namespace
+         }
+     }
+ 
+-    bool passesDestinationAlphaTest(uint64_t testReg, uint8_t framePsm, uint32_t rawFramebufferPixel)
++    GS_FORCE_INLINE bool passesDestinationAlphaTest(uint64_t testReg, uint8_t framePsm, uint32_t rawFramebufferPixel)
+     {
+         const bool date = ((testReg >> 14) & 0x1u) != 0u;
+         if (!date)
+@@ -225,7 +255,7 @@ namespace
+         uint8_t a;
+     };
+ 
+-    TextureCombineResult combineTexture(const GSTex0Reg &tex,
++    GS_FORCE_INLINE TextureCombineResult combineTexture(const GSTex0Reg &tex,
+                                         uint8_t vr,
+                                         uint8_t vg,
+                                         uint8_t vb,
+@@ -282,21 +312,30 @@ namespace
+         return (index & ~0x18u) | ((index & 0x08u) << 1u) | ((index & 0x10u) >> 1u);
+     }
+ 
+-    bool isFourBitIndexedPsm(uint8_t psm)
++    GS_FORCE_INLINE bool isFourBitIndexedPsm(uint8_t psm)
+     {
+         return psm == GS_PSM_T4 || psm == GS_PSM_T4HL || psm == GS_PSM_T4HH;
+     }
+ 
+-    bool isEightBitIndexedPsm(uint8_t psm)
++    GS_FORCE_INLINE bool isEightBitIndexedPsm(uint8_t psm)
+     {
+         return psm == GS_PSM_T8 || psm == GS_PSM_T8H;
+     }
+ 
+-    uint8_t lerpChannel(uint8_t c00, uint8_t c10, uint8_t c01, uint8_t c11, float fx, float fy)
++    GS_FORCE_INLINE uint8_t lerpChannel(uint8_t c00, uint8_t c10, uint8_t c01, uint8_t c11, float fx, float fy)
+     {
+         const float top = static_cast<float>(c00) + (static_cast<float>(c10) - static_cast<float>(c00)) * fx;
+         const float bottom = static_cast<float>(c01) + (static_cast<float>(c11) - static_cast<float>(c01)) * fx;
+-        return clampU8(static_cast<int>(std::lround(top + (bottom - top) * fy)));
++        // The value is never negative, so + 0.5 and truncation round like lround, without its CRT call (MSVC
++        // only inlines rounding with /arch:AVX; it was a fifth of the drawing time).
++        return clampU8(static_cast<int>(top + (bottom - top) * fy + 0.5f));
++    }
++
++    // floor() for texture coordinates, without the CRT call.
++    GS_FORCE_INLINE int floorToInt(float value)
++    {
++        const int truncated = static_cast<int>(value);
++        return truncated - (value < static_cast<float>(truncated) ? 1 : 0);
+     }
+ }
+ 
+@@ -557,9 +596,12 @@ void GSCpuBackend::Reset()
+ 
+ void GSCpuBackend::ResetUnlocked()
+ {
++    WaitForWorkersUnlocked();
+     m_clut.fill(0u);
+     m_clutCbp.fill(0u);
+     m_texturePageCache.Invalidate();
++    for (auto &cache : m_workerCaches)
++        cache->Invalidate();
+     m_transfer = {};
+     m_transfer.direction = 3u;
+     m_transferState = {};
+@@ -573,7 +615,133 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
+     std::lock_guard<std::mutex> lock(m_mutex);
+     if (!m_vram || batch.vertexCount == 0u)
+         return;
+-    DrawPrimitive(batch);
++    if (!m_workersConfigured)
++        StartWorkersIfConfigured();
++    if (m_workers.empty())
++    {
++        DrawPrimitive(batch);
++        return;
++    }
++
++    // The bands run ahead of each other, so drawing into memory and sampling it must not overlap in the queue.
++    const auto &ctx = batch.state.context;
++    const uint32_t frameRows = static_cast<uint32_t>(std::max<int>(static_cast<int>(ctx.scissor.y1), 0)) + 1u;
++    const std::pair<uint32_t, uint32_t> writes{ctx.frame.fbp,
++                                               ctx.frame.fbp + std::max<uint32_t>(ctx.frame.fbw, 1u) * ((frameRows + 31u) / 32u)};
++    std::pair<uint32_t, uint32_t> reads{0u, 0u};
++    if (batch.state.prim.tme)
++    {
++        const uint32_t firstPage = ctx.tex0.tbp0 / 32u;
++        const uint32_t pageRows = (static_cast<uint32_t>(batch.state.textureHeight) + 31u) / 32u;
++        reads = {firstPage, firstPage + std::max<uint32_t>(ctx.tex0.tbw, 1u) * pageRows + 1u};
++    }
++    auto overlaps = [](const std::pair<uint32_t, uint32_t> &range, const std::vector<std::pair<uint32_t, uint32_t>> &queued)
++    {
++        for (const auto &other : queued)
++            if (range.first < other.second && other.first < range.second)
++                return true;
++        return false;
++    };
++    if ((reads.second != 0u && overlaps(reads, m_queuedWritePages)) || overlaps(writes, m_queuedReadPages))
++        WaitForWorkersUnlocked();
++    m_queuedWritePages.push_back(writes);
++    if (reads.second != 0u)
++        m_queuedReadPages.push_back(reads);
++
++    {
++        std::lock_guard<std::mutex> jobLock(m_jobMutex);
++        m_jobs.push_back(batch);
++    }
++    m_jobCv.notify_all();
++}
++
++GSCpuBackend::~GSCpuBackend()
++{
++    StopWorkers();
++}
++
++void GSCpuBackend::StartWorkersIfConfigured()
++{
++    m_workersConfigured = true;
++    const char *setting = std::getenv("PS2X_GS_THREADS");
++    if (!setting)
++        return;
++    unsigned count = static_cast<unsigned>(std::strtoul(setting, nullptr, 10));
++    if (std::strcmp(setting, "auto") == 0)
++    {
++        const unsigned hardware = std::thread::hardware_concurrency();
++        count = hardware > 2u ? hardware - 2u : 0u; // leave the EE and the window thread a core each
++    }
++    if (count < 2u)
++        return;
++    count = std::min(count, 16u);
++    m_bandCount = count;
++    m_stopWorkers = false;
++    m_workerNext.assign(count, 0u);
++    m_workerCaches.clear();
++    for (unsigned i = 0; i < count; ++i)
++        m_workerCaches.push_back(std::make_unique<GSMem::TexturePageCache>());
++    for (unsigned i = 0; i < count; ++i)
++        m_workers.emplace_back([this, i]() { WorkerLoop(i); });
++}
++
++void GSCpuBackend::StopWorkers()
++{
++    if (m_workers.empty())
++        return;
++    {
++        std::lock_guard<std::mutex> jobLock(m_jobMutex);
++        m_stopWorkers = true;
++    }
++    m_jobCv.notify_all();
++    for (std::thread &worker : m_workers)
++        worker.join();
++    m_workers.clear();
++    m_jobs.clear();
++}
++
++void GSCpuBackend::WaitForWorkersUnlocked() const
++{
++    if (m_workers.empty())
++        return;
++    std::unique_lock<std::mutex> jobLock(m_jobMutex);
++    m_idleCv.wait(jobLock, [this]()
++                  {
++                      for (const size_t next : m_workerNext)
++                          if (next != m_jobs.size())
++                              return false;
++                      return true; });
++    m_jobs.clear();
++    std::fill(m_workerNext.begin(), m_workerNext.end(), 0u);
++    m_queuedWritePages.clear();
++    m_queuedReadPages.clear();
++    // Each one-page texture cache may hold a page that was uploaded or drawn to since: start fresh (with workers
++    // the EE thread's own cache serves only CLUT loads, so it would otherwise stay stale for a long time).
++    for (const auto &cache : m_workerCaches)
++        cache->Invalidate();
++    m_texturePageCache.Invalidate();
++}
++
++void GSCpuBackend::WorkerLoop(unsigned index)
++{
++    t_bandIndex = index;
++    t_bandCount = m_bandCount;
++    t_textureCache = m_workerCaches[index].get();
++    std::unique_lock<std::mutex> jobLock(m_jobMutex);
++    for (;;)
++    {
++        m_jobCv.wait(jobLock, [this, index]() { return m_stopWorkers || m_workerNext[index] < m_jobs.size(); });
++        if (m_stopWorkers)
++            return;
++        // Queued batches keep their address while more are appended (deque), and the queue is only cleared
++        // once every worker has drawn all of it.
++        const GSPrimitiveBatch &batch = m_jobs[m_workerNext[index]];
++        jobLock.unlock();
++        DrawPrimitive(batch);
++        jobLock.lock();
++        if (++m_workerNext[index] == m_jobs.size())
++            m_idleCv.notify_all();
++    }
+ }
+ 
+ void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
+@@ -581,6 +749,7 @@ void GSCpuBackend::LoadClut(const GSTex0Reg &tex0, const GSTexClutReg &texclut)
+     std::lock_guard<std::mutex> lock(m_mutex);
+     if (!m_vram || (!isFourBitIndexedPsm(tex0.psm) && !isEightBitIndexedPsm(tex0.psm)))
+         return;
++    WaitForWorkersUnlocked();
+ 
+     switch (tex0.cld)
+     {
+@@ -669,17 +838,23 @@ void GSCpuBackend::Flush()
+ void GSCpuBackend::TextureFlush()
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     m_texturePageCache.Invalidate();
++    for (auto &cache : m_workerCaches)
++        cache->Invalidate();
+ }
+ 
+ void GSCpuBackend::Sync(GSSyncReason)
+ {
+-    // CPU backend is immediate. GPU backends may wait on fences/readbacks here.
++    // Without drawing threads the CPU backend is immediate; with them, wait until they are done.
++    std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+ }
+ 
+ uint32_t GSCpuBackend::ReadVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y) const
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     return ReadVramUnlocked(psm, base, bw, x, y);
+ }
+ 
+@@ -695,12 +870,13 @@ uint32_t GSCpuBackend::ReadTextureVramUnlocked(uint32_t psm, uint32_t base, uint
+     if (!m_vram)
+         return 0u;
+ 
+-    return GSMem::ReadTexture(m_texturePageCache, m_vram, psm, base, bw, x, y);
++    return GSMem::ReadTexture(t_textureCache ? *t_textureCache : m_texturePageCache, m_vram, psm, base, bw, x, y);
+ }
+ 
+ void GSCpuBackend::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_t y, uint32_t value)
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     WriteVramUnlocked(psm, base, bw, x, y, value);
+ }
+ 
+@@ -714,6 +890,7 @@ void GSCpuBackend::WriteVramUnlocked(uint32_t psm, uint32_t base, uint32_t bw, u
+ void GSCpuBackend::SnapshotVram(std::vector<uint8_t> &out) const
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     if (!m_vram || m_vramSize == 0u)
+     {
+         out.clear();
+@@ -863,7 +1040,8 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
+         const auto &ctx = state.context;
+         int px = static_cast<int>(v.x) - (ctx.xyoffset.ofx >> 4);
+         int py = static_cast<int>(v.y) - (ctx.xyoffset.ofy >> 4);
+-        WritePixel(state, px, py, static_cast<u32>(v.z), v.r, v.g, v.b, v.a, v.fog);
++        if (ownsRow(py))
++            WritePixel(state, px, py, static_cast<u32>(v.z), v.r, v.g, v.b, v.a, v.fog);
+         break;
+     }
+     default:
+@@ -871,13 +1049,65 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
+     }
+ }
+ 
++// The part of WritePixel that depends only on the draw state.
++struct GSCpuBackend::PixelPipeline
++{
++    explicit PixelPipeline(const GSDrawState &state)
++    {
++        const auto &ctx = state.context;
++        scissorX0 = ctx.scissor.x0;
++        scissorX1 = ctx.scissor.x1;
++        scissorY0 = ctx.scissor.y0;
++        scissorY1 = ctx.scissor.y1;
++        fog = state.prim.fge;
++        fogR = state.fogR;
++        fogG = state.fogG;
++        fogB = state.fogB;
++        fbp = GSInternal::framePageBaseToBlock(ctx.frame.fbp);
++        fbw = std::max<u32>(ctx.frame.fbw, 1u);
++        fpsm = ctx.frame.psm;
++        sixteenBitFrame = fpsm == GS_PSM_CT16 || fpsm == GS_PSM_CT16S || fpsm == GS_PSM_Z16 || fpsm == GS_PSM_Z16S;
++        zbp = GSInternal::framePageBaseToBlock(ctx.zbuf.zbp);
++        zpsm = ctx.zbuf.psm;
++        zmask = ctx.zbuf.zmask;
++        test = ctx.test;
++        ztestMethod = static_cast<uint32_t>((ctx.test >> 17) & 3u);
++        alphaBlend = state.prim.abe;
++        pabe = state.pabe;
++        destinationAlphaTestNeedsRead = ((ctx.test >> 14) & 0x1u) != 0u &&
++                                        (fpsm == GS_PSM_CT32 || fpsm == GS_PSM_CT16 || fpsm == GS_PSM_CT16S);
++        fbmsk = ctx.frame.fbmsk;
++        forceAlphaMsb = (ctx.fba & 0x1ull) != 0ull && fpsm != GS_PSM_CT24;
++        asel = static_cast<uint8_t>(ctx.alpha & 3u);
++        bsel = static_cast<uint8_t>((ctx.alpha >> 2) & 3u);
++        csel = static_cast<uint8_t>((ctx.alpha >> 4) & 3u);
++        dsel = static_cast<uint8_t>((ctx.alpha >> 6) & 3u);
++        fix = static_cast<uint8_t>((ctx.alpha >> 32) & 0xFFu);
++    }
++
++    int scissorX0, scissorX1, scissorY0, scissorY1;
++    bool fog;
++    uint8_t fogR, fogG, fogB;
++    u32 fbp, fbw, fpsm, zbp, zpsm;
++    bool sixteenBitFrame, zmask;
++    uint64_t test;
++    uint32_t ztestMethod;
++    bool alphaBlend, pabe, destinationAlphaTestNeedsRead, forceAlphaMsb;
++    u32 fbmsk;
++    uint8_t asel, bsel, csel, dsel, fix;
++};
++
+ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog)
+ {
+-    const auto &ctx = state.context;
+-    if (x < ctx.scissor.x0 || x > ctx.scissor.x1 || y < ctx.scissor.y0 || y > ctx.scissor.y1)
++    WritePixel(PixelPipeline(state), x, y, z, r, g, b, a, fog);
++}
++
++void GSCpuBackend::WritePixel(const PixelPipeline &p, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog)
++{
++    if (x < p.scissorX0 || x > p.scissorX1 || y < p.scissorY0 || y > p.scissorY1)
+         return;
+ 
+-    if (state.prim.fge)
++    if (p.fog)
+     {
+         const uint32_t inverseFog = 255u - fog;
+         auto applyFog = [&](uint8_t input, uint8_t fogColor) -> uint8_t
+@@ -885,58 +1115,50 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+             return static_cast<uint8_t>(((static_cast<uint32_t>(fog) * input) >> 8) + ((inverseFog * fogColor) >> 8));
+         };
+ 
+-        r = applyFog(r, state.fogR);
+-        g = applyFog(g, state.fogG);
+-        b = applyFog(b, state.fogB);
++        r = applyFog(r, p.fogR);
++        g = applyFog(g, p.fogG);
++        b = applyFog(b, p.fogB);
+     }
+ 
+-    const u32 fbp = GSInternal::framePageBaseToBlock(ctx.frame.fbp);
+-    const u32 fbw = std::max<u32>(ctx.frame.fbw, 1u);
+-    const u32 fpsm = ctx.frame.psm;
+-    const u32 zbp = GSInternal::framePageBaseToBlock(ctx.zbuf.zbp);
+-    const u32 zpsm = ctx.zbuf.psm;
+-
+-    const PixelWriteMask writeMask = classifyAlphaTest(ctx.test, a, static_cast<uint8_t>(fpsm));
++    const PixelWriteMask writeMask = classifyAlphaTest(p.test, a, static_cast<uint8_t>(p.fpsm));
+     if (!writeMask.writesAnything())
+     {
+         return;
+     }
+ 
+-    const uint32_t ztestMethod = static_cast<uint32_t>((ctx.test >> 17) & 3u);
+-    const bool alphaBlendEnabled = state.prim.abe;
+-    const bool preserveDestinationAlpha = writeMask.writeRgb && !writeMask.writeAlpha && fpsm == GS_PSM_CT32;
+-    const bool destinationAlphaTestNeedsRead = ((ctx.test >> 14) & 0x1u) != 0u && (fpsm == GS_PSM_CT32 || fpsm == GS_PSM_CT16 || fpsm == GS_PSM_CT16S);
++    const bool preserveDestinationAlpha = writeMask.writeRgb && !writeMask.writeAlpha && p.fpsm == GS_PSM_CT32;
+ 
+     // small optimization, avoid reading the framebuffer for simple draws
+     // TODO: only one address lookup for rmw
+-    const bool frmw = destinationAlphaTestNeedsRead || (writeMask.writesFramebuffer() && ((ctx.frame.fbmsk != 0) || alphaBlendEnabled || preserveDestinationAlpha));
++    const bool frmw = p.destinationAlphaTestNeedsRead ||
++                      (writeMask.writesFramebuffer() && ((p.fbmsk != 0) || p.alphaBlend || preserveDestinationAlpha));
+ 
+     u32 rawFramebufferPixel = 0;
+     u32 fbrgba = 0;
+     if (frmw)
+     {
+-        rawFramebufferPixel = ReadVramUnlocked(fpsm, fbp, fbw, x, y);
++        rawFramebufferPixel = ReadVramUnlocked(p.fpsm, p.fbp, p.fbw, x, y);
+         fbrgba = rawFramebufferPixel;
+ 
+-        if (bitsPerPixel(fpsm) == 16)
++        if (p.sixteenBitFrame)
+         {
+             fbrgba = Rgba5551ToRgba8888(fbrgba);
+         }
+-        else if (fpsm == GS_PSM_CT24)
++        else if (p.fpsm == GS_PSM_CT24)
+         {
+             // The GS supplies 0x80 as destination alpha for RGB24 blending.
+             fbrgba |= 0x80000000u;
+         }
+     }
+ 
+-    if (!passesDestinationAlphaTest(ctx.test, static_cast<uint8_t>(fpsm), rawFramebufferPixel))
++    if (!passesDestinationAlphaTest(p.test, static_cast<uint8_t>(p.fpsm), rawFramebufferPixel))
+     {
+         return;
+     }
+ 
+     bool zpass = false;
+     uint32_t storedZ = 0u;
+-    switch (ztestMethod)
++    switch (p.ztestMethod)
+     {
+     case 0:
+         zpass = false;
+@@ -945,11 +1167,11 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+         zpass = true;
+         break;
+     case 2:
+-        storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
++        storedZ = ReadVramUnlocked(p.zpsm, p.zbp, p.fbw, x, y);
+         zpass = static_cast<uint32_t>(z) >= storedZ;
+         break;
+     case 3:
+-        storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
++        storedZ = ReadVramUnlocked(p.zpsm, p.zbp, p.fbw, x, y);
+         zpass = static_cast<uint32_t>(z) > storedZ;
+         break;
+     }
+@@ -965,7 +1187,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+         const u8 srcG = g;
+         const u8 srcB = b;
+ 
+-        if (state.prim.abe)
++        if (p.alphaBlend)
+         {
+             uint8_t dr = fbrgba & 0xFF;
+             uint8_t dg = (fbrgba >> 8) & 0xFF;
+@@ -973,15 +1195,8 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+             uint8_t da = (fbrgba >> 24) & 0xFF;
+ 
+             // PABE disables alpha blending when the source alpha MSB is clear.
+-            if (!(state.pabe && (a & 0x80u) == 0u))
++            if (!(p.pabe && (a & 0x80u) == 0u))
+             {
+-                uint64_t alphaReg = ctx.alpha;
+-                uint8_t asel = alphaReg & 3;
+-                uint8_t bsel = (alphaReg >> 2) & 3;
+-                uint8_t csel = (alphaReg >> 4) & 3;
+-                uint8_t dsel = (alphaReg >> 6) & 3;
+-                uint8_t fix = static_cast<uint8_t>((alphaReg >> 32) & 0xFF);
+-
+                 auto pickRGB = [&](uint8_t sel, int cs, int cd) -> int
+                 {
+                     if (sel == 0)
+@@ -990,12 +1205,12 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+                         return cd;
+                     return 0;
+                 };
+-                int cAlpha = (csel == 0) ? a : (csel == 1) ? da
+-                                                           : fix;
++                int cAlpha = (p.csel == 0) ? a : (p.csel == 1) ? da
++                                                               : p.fix;
+ 
+-                r = clampU8(((pickRGB(asel, r, dr) - pickRGB(bsel, r, dr)) * cAlpha >> 7) + pickRGB(dsel, r, dr));
+-                g = clampU8(((pickRGB(asel, g, dg) - pickRGB(bsel, g, dg)) * cAlpha >> 7) + pickRGB(dsel, g, dg));
+-                b = clampU8(((pickRGB(asel, b, db) - pickRGB(bsel, b, db)) * cAlpha >> 7) + pickRGB(dsel, b, db));
++                r = clampU8(((pickRGB(p.asel, r, dr) - pickRGB(p.bsel, r, dr)) * cAlpha >> 7) + pickRGB(p.dsel, r, dr));
++                g = clampU8(((pickRGB(p.asel, g, dg) - pickRGB(p.bsel, g, dg)) * cAlpha >> 7) + pickRGB(p.dsel, g, dg));
++                b = clampU8(((pickRGB(p.asel, b, db) - pickRGB(p.bsel, b, db)) * cAlpha >> 7) + pickRGB(p.dsel, b, db));
+             }
+             else
+             {
+@@ -1005,16 +1220,16 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+             }
+         }
+ 
+-        if (writeMask.writeAlpha && (ctx.fba & 0x1ull) != 0ull && ctx.frame.psm != GS_PSM_CT24)
++        if (writeMask.writeAlpha && p.forceAlphaMsb)
+         {
+             a = static_cast<uint8_t>(a | 0x80u);
+         }
+ 
+         u32 pixel = pack32(r, g, b, a);
+ 
+-        if (ctx.frame.fbmsk != 0)
++        if (p.fbmsk != 0)
+         {
+-            pixel = (pixel & ~ctx.frame.fbmsk) | (fbrgba & ctx.frame.fbmsk);
++            pixel = (pixel & ~p.fbmsk) | (fbrgba & p.fbmsk);
+         }
+ 
+         if (preserveDestinationAlpha)
+@@ -1023,17 +1238,17 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
+         }
+ 
+         // format conversion
+-        if (bitsPerPixel(fpsm) == 16)
++        if (p.sixteenBitFrame)
+         {
+             pixel = Rgba8888ToRgba5551(pixel);
+         }
+ 
+-        WriteVramUnlocked(fpsm, fbp, fbw, x, y, pixel);
++        WriteVramUnlocked(p.fpsm, p.fbp, p.fbw, x, y, pixel);
+     }
+ 
+-    if (writeMask.writeDepth && !ctx.zbuf.zmask)
++    if (writeMask.writeDepth && !p.zmask)
+     {
+-        WriteVramUnlocked(zpsm, zbp, fbw, x, y, z);
++        WriteVramUnlocked(p.zpsm, p.zbp, p.fbw, x, y, z);
+     }
+ }
+ 
+@@ -1145,17 +1360,21 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
+ 
+     const float sampleU = texUf - 0.5f;
+     const float sampleV = texVf - 0.5f;
+-    const int u0 = static_cast<int>(std::floor(sampleU));
+-    const int v0 = static_cast<int>(std::floor(sampleV));
++    const int u0 = floorToInt(sampleU);
++    const int v0 = floorToInt(sampleV);
+     const int u1 = u0 + 1;
+     const int v1 = v0 + 1;
+     const float fx = sampleU - static_cast<float>(u0);
+     const float fy = sampleV - static_cast<float>(v0);
+ 
++    // A texel with weight 0 does not change the result: copies that sample on texel centres (fx or fy = 0, e.g.
++    // a screen copy at a half-pixel offset) need only one or two fetches.
+     const uint32_t c00 = samplePoint(u0, v0);
+-    const uint32_t c10 = samplePoint(u1, v0);
+-    const uint32_t c01 = samplePoint(u0, v1);
+-    const uint32_t c11 = samplePoint(u1, v1);
++    if (fx == 0.0f && fy == 0.0f)
++        return c00;
++    const uint32_t c10 = fx != 0.0f ? samplePoint(u1, v0) : c00;
++    const uint32_t c01 = fy != 0.0f ? samplePoint(u0, v1) : c00;
++    const uint32_t c11 = (fx != 0.0f && fy != 0.0f) ? samplePoint(u1, v1) : (fx != 0.0f ? c10 : c01);
+ 
+     const uint8_t r = lerpChannel(static_cast<uint8_t>(c00 & 0xFFu),
+                                   static_cast<uint8_t>(c10 & 0xFFu),
+@@ -1232,6 +1451,9 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+     const uint8_t alphaFix = static_cast<uint8_t>((alphaReg >> 32) & 0xFFu);
+ 
+     uint8_t r = v1.r, g = v1.g, b = v1.b, a = v1.a;
++    if (alphaTestDiscardsPrimitive(ctx.test, state.prim.tme, a))
++        return;
++    const PixelPipeline pipe(state);
+ 
+     if (state.prim.tme)
+     {
+@@ -1263,6 +1485,8 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+ 
+         for (int y = drawY0; y <= drawY1; ++y)
+         {
++            if (!ownsRow(y))
++                continue;
+             // The GS evaluates UV at the pixel's own position (pixel centres are integer).
+             float ty = (static_cast<float>(y) - fy0) / spanYf;
+             float texVf = v0f + (v1f - v0f) * ty;
+@@ -1291,21 +1515,26 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+                 uint8_t ta = static_cast<uint8_t>((texel >> 24) & 0xFF);
+ 
+                 const TextureCombineResult color = combineTexture(tex, r, g, b, a, tr, tg, tb, ta);
+-                WritePixel(state, x, y, z1, color.r, color.g, color.b, color.a, v1.fog);
++                WritePixel(pipe, x, y, z1, color.r, color.g, color.b, color.a, v1.fog);
+             }
+         }
+     }
+     else
+     {
+         for (int y = drawY0; y <= drawY1; ++y)
++        {
++            if (!ownsRow(y))
++                continue;
+             for (int x = drawX0; x <= drawX1; ++x)
+-                WritePixel(state, x, y, z1, r, g, b, a, v1.fog);
++                WritePixel(pipe, x, y, z1, r, g, b, a, v1.fog);
++        }
+     }
+ }
+ 
+ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+ {
+     const GSDrawState &state = batch.state;
++    const PixelPipeline pipe(state);
+     const GSVertex &v0 = batch.vertices[0];
+     const GSVertex &v1 = batch.vertices[1];
+     const GSVertex &v2 = batch.vertices[2];
+@@ -1341,6 +1570,8 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+ 
+     for (int y = minY; y <= maxY; ++y)
+     {
++        if (!ownsRow(y))
++            continue;
+         float py = static_cast<float>(y) + 0.5f;
+         for (int x = minX; x <= maxX; ++x)
+         {
+@@ -1416,7 +1647,7 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+             }
+ 
+             const uint8_t fog = clampU8(static_cast<int>(v0.fog * w0 + v1.fog * w1 + v2.fog * w2));
+-            WritePixel(state, x, y, static_cast<u32>(z + 0.5), r, g, b, a, fog);
++            WritePixel(pipe, x, y, static_cast<u32>(z + 0.5), r, g, b, a, fog);
+         }
+     }
+ }
+@@ -1424,6 +1655,7 @@ void GSCpuBackend::DrawTriangle(const GSPrimitiveBatch &batch)
+ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
+ {
+     const GSDrawState &state = batch.state;
++    const PixelPipeline pipe(state);
+     const GSVertex &v0 = batch.vertices[0];
+     const GSVertex &v1 = batch.vertices[1];
+     const auto &ctx = state.context;
+@@ -1468,7 +1700,8 @@ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
+ 
+         double z = (v0.z + (v1.z - v0.z) * t);
+         const uint8_t fog = clampU8(static_cast<int>(v0.fog + (v1.fog - v0.fog) * t));
+-        WritePixel(state, x0, y0, static_cast<u32>(z), r, g, b, a, fog);
++        if (ownsRow(y0))
++            WritePixel(pipe, x0, y0, static_cast<u32>(z), r, g, b, a, fog);
+ 
+         if (x0 == x1 && y0 == y1)
+             break;
+@@ -1491,6 +1724,7 @@ void GSCpuBackend::DrawLine(const GSPrimitiveBatch &batch)
+ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     m_transfer = command;
+     m_transferState.x = command.trxpos.dsax;
+     m_transferState.y = command.trxpos.dsay;
+@@ -1508,6 +1742,7 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
+ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
+         return;
+     if (m_transfer.trxreg.rrw == 0u || m_transfer.trxreg.rrh == 0u || m_transferState.totalPixels == 0u)
+@@ -1725,6 +1960,7 @@ void GSCpuBackend::PerformLocalToHostTransfer()
+ uint32_t GSCpuBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     if (!dst || maxBytes == 0u || m_localToHostReadPos >= m_localToHostBuffer.size())
+         return 0u;
+     const size_t count = std::min<size_t>(maxBytes, m_localToHostBuffer.size() - m_localToHostReadPos);
+@@ -1737,6 +1973,7 @@ uint32_t GSCpuBackend::ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
+ bool GSCpuBackend::ClearFramebuffer(const GSContext &context, uint32_t rgba)
+ {
+     std::lock_guard<std::mutex> lock(m_mutex);
++    WaitForWorkersUnlocked();
+     if (!m_vram || context.frame.fbw == 0u)
+         return false;
+ 
+diff --git a/ps2xTest/src/ps2_gs_tests.cpp b/ps2xTest/src/ps2_gs_tests.cpp
+index be75682..bfed846 100644
+--- a/ps2xTest/src/ps2_gs_tests.cpp
++++ b/ps2xTest/src/ps2_gs_tests.cpp
+@@ -1782,6 +1782,82 @@ void register_ps2_gs_tests()
+             }
+         });
+ 
++        tc.Run("drawing threads (PS2X_GS_THREADS) leave the same GS memory as drawing on one thread", [](TestCase &t)
++        {
++            // Overlapping blended textured sprites across many bands, a sprite that samples what was just drawn
++            // (a queue hazard) and a full-screen fill, drawn once serially and once with four drawing threads.
++            auto render = [](const char *threads) -> std::vector<uint8_t>
++            {
++#ifdef _WIN32
++                _putenv_s("PS2X_GS_THREADS", threads);
++#else
++                setenv("PS2X_GS_THREADS", threads, 1);
++#endif
++                std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
++                GSRegisters regs{};
++                regs.pmode = 0x0001ull;
++                regs.dispfb1 = 0ull | (10ull << 9) | (static_cast<uint64_t>(GS_PSM_CT32) << 15);
++                regs.display1 = (639ull << 32) | (447ull << 44);
++                {
++                    GS gs;
++                    gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
++                    constexpr uint32_t kTexTbp = 0x2000u; // 128x128 CT32 texture, away from the frame
++                    for (uint32_t y = 0; y < 128u; ++y)
++                        for (uint32_t x = 0; x < 128u; ++x)
++                            writeReferencePSMCT32Pixel(vram, kTexTbp, 2u, x, y, 0x80000000u | (x * 0x020101u) ^ (y * 0x010203u));
++                    gs.writeRegister(GS_REG_FRAME_1, (10ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
++                    gs.writeRegister(GS_REG_ZBUF_1, 1ull << 32);
++                    gs.writeRegister(GS_REG_SCISSOR_1, (639ull << 16) | (447ull << 48));
++                    gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
++                    gs.writeRegister(GS_REG_TEST_1, 0x30000ull);
++                    gs.writeRegister(GS_REG_ALPHA_1, 0x44ull); // (Cs - Cd) * As + Cd
++                    gs.writeRegister(GS_REG_TEX0_1, static_cast<uint64_t>(kTexTbp) | (2ull << 14) |
++                                                        (static_cast<uint64_t>(GS_PSM_CT32) << 20) | (7ull << 26) |
++                                                        (7ull << 30) | (1ull << 34));
++                    gs.writeRegister(GS_REG_TEX1_1, 0x60ull); // bilinear
++                    uint32_t seed = 12345u;
++                    auto next = [&seed](uint32_t range) { seed = seed * 1103515245u + 12345u; return (seed >> 8) % range; };
++                    for (int i = 0; i < 40; ++i)
++                    {
++                        const uint32_t x0 = next(560u), y0 = next(400u), w = 8u + next(80u), h = 8u + next(120u);
++                        gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 6) | (1ull << 8));
++                        gs.writeRegister(GS_REG_RGBAQ, 0x40808080ull);
++                        gs.writeRegister(GS_REG_UV, (static_cast<uint64_t>(next(64u)) << 4) | (static_cast<uint64_t>(next(64u)) << 20));
++                        gs.writeRegister(GS_REG_XYZ2, (static_cast<uint64_t>(x0) << 4) | (static_cast<uint64_t>(y0) << 20));
++                        gs.writeRegister(GS_REG_UV, (static_cast<uint64_t>(64u + next(64u)) << 4) | (static_cast<uint64_t>(64u + next(64u)) << 20));
++                        gs.writeRegister(GS_REG_XYZ2, (static_cast<uint64_t>(x0 + w) << 4) | (static_cast<uint64_t>(y0 + h) << 20));
++                    }
++                    // Sample the frame just drawn (TBP 0) into the bottom-right corner, without a TEXFLUSH.
++                    gs.writeRegister(GS_REG_TEX0_1, 0ull | (10ull << 14) | (static_cast<uint64_t>(GS_PSM_CT32) << 20) |
++                                                        (10ull << 26) | (9ull << 30) | (1ull << 34));
++                    gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 4) | (1ull << 8));
++                    gs.writeRegister(GS_REG_UV, 0ull);
++                    gs.writeRegister(GS_REG_XYZ2, (400ull << 4) | (300ull << 20));
++                    gs.writeRegister(GS_REG_UV, (240ull << 4) | (148ull << 20));
++                    gs.writeRegister(GS_REG_XYZ2, (640ull << 4) | (448ull << 20));
++                    // A full-screen blended fill over everything.
++                    gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_SPRITE) | (1ull << 6));
++                    gs.writeRegister(GS_REG_RGBAQ, 0x20103050ull);
++                    gs.writeRegister(GS_REG_XYZ2, 0ull);
++                    gs.writeRegister(GS_REG_XYZ2, (640ull << 4) | (448ull << 20));
++                    gs.latchHostPresentationFrame(); // waits for the drawing threads
++                }
++#ifdef _WIN32
++                _putenv_s("PS2X_GS_THREADS", "");
++#else
++                unsetenv("PS2X_GS_THREADS");
++#endif
++                return vram;
++            };
++            const std::vector<uint8_t> serial = render("");
++            const std::vector<uint8_t> threaded = render("4");
++            t.IsTrue(serial == threaded, "the threaded GS should write exactly the same bytes as the serial one");
++            bool drew = false;
++            for (size_t i = 0; i < 640u * 448u * 4u && !drew; ++i)
++                drew = serial[i] != 0u;
++            t.IsTrue(drew, "the test should actually draw something");
++        });
++
+         tc.Run("latched host presentation puts an odd FRAME-mode field one line lower", [](TestCase &t)
+         {
+             // The buffer holds one field; which one is the CSR.FIELD of the last draw into it, and a TV shows the

@@ -1,0 +1,147 @@
+From 0e3664b3baf2f5432342effddc7efc83220c0b31 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 02:20:58 +0100
+Subject: [PATCH] Rollback: sceSifSendCmd DMA ids in the snapshot, no EE->IOP
+ SIF command while the IOP is frozen
+
+The id counter sceSifSendCmd returns (guest-visible busy marker) was a function static: a re-simulated frame
+got other ids than its live run. It is now saved/restored and hashed with the machine. Under CutIop the
+packet is not queued to the IOP (the live run sent it; the gate counts it).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ps2_rollback.h  |  1 +
+ ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp | 28 ++++++++++++++++++---
+ ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h   |  3 +++
+ ps2xRuntime/src/lib/ps2_rollback.cpp        |  5 ++++
+ 4 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback.h b/ps2xRuntime/include/runtime/ps2_rollback.h
+index 7799f97..170e25b 100644
+--- a/ps2xRuntime/include/runtime/ps2_rollback.h
++++ b/ps2xRuntime/include/runtime/ps2_rollback.h
+@@ -32,6 +32,7 @@ namespace ps2_rollback
+         R5900Context cpuContext;
+         std::vector<uint8_t> runtimeState; // guest heap + async callback stacks (PS2RollbackAccess)
+         std::vector<uint8_t> padState;
++        uint32_t sifSendCmdId = 1;
+         bool valid = false;
+     };
+ 
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+index 9183bd6..cfae603 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+@@ -1,6 +1,7 @@
+ #include "Common.h"
+ #include "RPC.h"
+ #include "../../ps2_iop_transport.h"
++#include "runtime/ps2_rollback_cuts.h"
+ 
+ #include <atomic>
+ #include <cstring>
+@@ -976,8 +977,27 @@ namespace ps2_syscalls
+     // then the packet goes to the IOP module that registered cid with sceSifAddCmdHandler (header words as the SIF
+     // delivers them: packet size | payload size << 8, payload destination, cid). Tekken 4's sound driver pulls sound
+     // data from EE RAM this way; with the payload read from the stack and copied into EE RAM it received nothing.
++    namespace
++    {
++        // DMA ids sceSifSendCmd hands out: guest-visible, so part of a rollback snapshot.
++        std::atomic<uint32_t> g_sifSendCmdNextId{1u};
++    }
++
++    uint32_t sifSendCmdNextId() noexcept
++    {
++        return g_sifSendCmdNextId.load();
++    }
++
++    void setSifSendCmdNextId(uint32_t id) noexcept
++    {
++        g_sifSendCmdNextId.store(id);
++    }
++
+     void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
++        // Re-simulated frame with the IOP frozen (rollback): the live run sent this already.
++        ps2_rollback::IopGate *const frozenGate =
++            ps2_rollback::cutActive(ps2_rollback::CutIop) ? ps2_rollback::iopGate() : nullptr;
+         const uint32_t cid = getRegU32(ctx, 4);
+         const uint32_t packetAddr = getRegU32(ctx, 5);
+         const uint32_t packetSize = getRegU32(ctx, 6);
+@@ -1003,7 +1023,8 @@ namespace ps2_syscalls
+             std::memcpy(packet + 0, &sizeWord, 4);
+             std::memcpy(packet + 4, &destExtra, 4);
+             std::memcpy(packet + 8, &cid, 4);
+-            ps2x::iop::queueEeSifCommand(cid, packet, packetSize);
++            if (!frozenGate || frozenGate->frozenIopWrite(destExtra, packetSize))
++                ps2x::iop::queueEeSifCommand(cid, packet, packetSize);
+         }
+ 
+         static int logCount = 0;
+@@ -1019,10 +1040,9 @@ namespace ps2_syscalls
+         }
+ 
+         // Non-zero on success: the DMA id (games keep it as a busy marker until the IOP answers).
+-        static std::atomic<uint32_t> nextId{1u};
+-        uint32_t id = nextId.fetch_add(1u) & 0x7FFFFFFFu;
++        uint32_t id = g_sifSendCmdNextId.fetch_add(1u) & 0x7FFFFFFFu;
+         if (id == 0u)
+-            id = nextId.fetch_add(1u) & 0x7FFFFFFFu;
++            id = g_sifSendCmdNextId.fetch_add(1u) & 0x7FFFFFFFu;
+         setReturnS32(ctx, static_cast<int32_t>(id));
+     }
+ 
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h
+index 5e9a446..a06f18c 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h
+@@ -15,6 +15,9 @@ namespace ps2_syscalls
+     void SifRemoveRpcQueue(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void SifRemoveRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceSifCallRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
++    // Rollback snapshots: the next DMA id sceSifSendCmd returns.
++    uint32_t sifSendCmdNextId() noexcept;
++    void setSifSendCmdNextId(uint32_t id) noexcept;
+     void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceRpcGetPacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+index 6ce567c..b966c2f 100644
+--- a/ps2xRuntime/src/lib/ps2_rollback.cpp
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "ps2_runtime.h"
+ #include "Kernel/Stubs/Pad.h"
++#include "Kernel/Syscalls/RPC.h"
+ 
+ #include <algorithm>
+ #include <cstring>
+@@ -149,6 +150,7 @@ namespace ps2_rollback
+         out.cpuContext = runtime.cpu();
+         PS2RollbackAccess::save(runtime, out.runtimeState);
+         out.padState = ps2_stubs::savePadState();
++        out.sifSendCmdId = ps2_syscalls::sifSendCmdNextId();
+         out.valid = true;
+     }
+ 
+@@ -180,6 +182,7 @@ namespace ps2_rollback
+         runtime.cpu() = in.cpuContext;
+         PS2RollbackAccess::load(runtime, in.runtimeState);
+         ps2_stubs::loadPadState(in.padState);
++        ps2_syscalls::setSifSendCmdNextId(in.sifSendCmdId);
+     }
+ 
+     StateHash hashState(PS2Runtime &runtime, const std::vector<MaskRange> &masks, std::vector<uint64_t> *pageHashes)
+@@ -277,6 +280,8 @@ namespace ps2_rollback
+                                    static_cast<uint32_t>(devices.path3MaskedFifo.size())};
+         put(sizes, sizeof(sizes));
+         other = mixFinal(other ^ hashBytes(device.data(), device.size(), 7));
++        const uint32_t sifId = ps2_syscalls::sifSendCmdNextId();
++        other = mixFinal(other ^ hashBytes(reinterpret_cast<const uint8_t *>(&sifId), sizeof(sifId), 8));
+         result.other = other;
+         result.total = mixFinal(result.rdram ^ rotl(result.other, 17));
+         return result;
+-- 
+2.55.0.windows.3
+

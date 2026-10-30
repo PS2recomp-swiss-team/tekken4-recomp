@@ -1,0 +1,160 @@
+From 9774f772782d12b7ee31c53d9e0289dc286070e4 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 01:54:53 +0100
+Subject: [PATCH 2/3] ps2xIOP: deliver the SPU2 interrupt to libsd's handler
+ (BGM stream refill clock)
+
+The sound engine noticed IRQA crossings only for TEKKEN4_SOUND_TRACE and the libsd HLE stored
+sceSdSetSpu2IntrHandler / sceSdSetIRQCallback without ever calling them. Tekken 4's zsiopdrv
+streams its BGM from CD (IOP sceCdRead into 0x160100..) through IOP 0xc79xx to the SPU ring at
+0x1bc000 (core 1 voices 16/17, 44.1 kHz stereo); the refill thread runs on the SPU2 interrupt
+(IRQA ping-pong 0x1b8000/0x1b8100, handler 0x4f644 signals it), so without it the ring kept its
+initial silence: no music.
+Now a voice decoding the block that holds a core's IRQA (IRQ enable on) raises that core's bit;
+after each mixer advance the IOP clears the IRQ enable of the cores that fired and calls the
+handler with the core bits (ps2sdk libsd Spu2Interrupt), or the old-style callback with 0.
+TEKKEN4_BGM=0 switches the delivery off (A/B against the state before).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/src/emulator/core/sound_engine.cpp | 11 ++++-
+ ps2xIOP/src/emulator/core/sound_engine.h   |  5 +++
+ ps2xIOP/src/emulator/iop_emulator.cpp      | 49 ++++++++++++++++++++--
+ 3 files changed, 60 insertions(+), 5 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.cpp b/ps2xIOP/src/emulator/core/sound_engine.cpp
+index 914ce45..f825d77 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.cpp
++++ b/ps2xIOP/src/emulator/core/sound_engine.cpp
+@@ -97,6 +97,7 @@ namespace ps2x::iop::detail
+         m_cores = {};
+         m_stream = {};
+         m_streamHalf = {};
++        m_irqPending = 0u;
+         for (Reverb &reverb : m_reverb)
+         {
+             reverb.enabled = false;
+@@ -666,8 +667,14 @@ namespace ps2x::iop::detail
+         v.nax = (block + 8u) & (RamHalfwords - 1u);
+         v.playBlock = block;
+         v.playStarted = true;
+-        // SPU2 IRQ when the block just decoded contains IRQA and the core's IRQ enable (attr bit 6) is on.
+-        // The handler itself is invoked from iop_emulator; this only counts crossings for TEKKEN4_SOUND_TRACE.
++        // SPU2 IRQ when the block just decoded contains IRQA and the core's IRQ enable (attr bit 6) is on. Each core
++        // compares its IRQA with every sample RAM read (PCSX2: both cores' voices). iop_emulator calls libsd's handler.
++        for (uint32_t k = 0; k < 2u; ++k)
++        {
++            const Core &irqCore = m_cores[k];
++            if ((irqCore.attr & 0x0040u) != 0u && irqCore.irqa >= block && irqCore.irqa < block + 8u)
++                m_irqPending |= 1u << k;
++        }
+         if (soundTrace() && (c.attr & 0x0040u) != 0u && c.irqa >= block && c.irqa < block + 8u)
+         {
+             TraceState &state = traceState();
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.h b/ps2xIOP/src/emulator/core/sound_engine.h
+index f9cdd9a..a879e17 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.h
++++ b/ps2xIOP/src/emulator/core/sound_engine.h
+@@ -61,6 +61,10 @@ namespace ps2x::iop::detail
+         [[nodiscard]] uint32_t streamPosition(uint32_t core) const { m_lastPollCycle = m_lastCycle; return m_stream[core & 1u].position; }
+         [[nodiscard]] bool takeStreamHalf(uint32_t core) noexcept; // a half was consumed since the last call
+ 
++        // SPU2 IRQ: bit n = core n's IRQA was reached by a voice (with that core's IRQ enable, attr bit 6, on) since
++        // the last call. Like the hardware, the core's IRQ enable stays set; libsd's interrupt clears it.
++        [[nodiscard]] uint32_t takeIrq() noexcept { const uint32_t bits = m_irqPending; m_irqPending = 0u; return bits; }
++
+         // time: one stereo sample every CyclesPerSample IOP cycles
+         void advanceTo(uint64_t iopCycle);
+ 
+@@ -127,6 +131,7 @@ namespace ps2x::iop::detail
+         std::array<Reverb, 2> m_reverb{};
+         std::array<StreamRing, 2> m_stream{};
+         std::array<bool, 2> m_streamHalf{};
++        uint32_t m_irqPending = 0u;
+         std::vector<int16_t> m_output;
+         mutable std::mutex m_outputMutex;
+         double m_resamplePhase = 0.0; // drainOutput: fractional read position when playing back faster
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index c5b3693..5b98890 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -591,11 +591,20 @@ namespace ps2x::iop::detail
+             }
+             case 22:
+             case 27:
+-                m_libsd.spu2Handler[0] = a0;
+-                m_libsd.spu2Arg[0] = a1;
+-                m_libsd.spu2Gp[0] = cpu.gpr[28];
++            {
++                // [0] = sceSdSetSpu2IntrHandler(handler, arg): handler(core bits, arg).
++                // [1] = sceSdSetIRQCallback(callback): callback(0), used when no handler is set (libsd).
++                const uint32_t slot = ordinal == 27u ? 0u : 1u;
++                m_libsd.spu2Handler[slot] = a0;
++                m_libsd.spu2Arg[slot] = ordinal == 27u ? a1 : 0u;
++                m_libsd.spu2Gp[slot] = cpu.gpr[28];
++                std::ostringstream out;
++                out << "[libsd] " << (ordinal == 27u ? "SetSpu2IntrHandler" : "SetIRQCallback") << " 0x" << std::hex << a0
++                    << " arg=0x" << a1;
++                log(LogLevel::Info, out.str());
+                 ret(0u);
+                 return true;
++            }
+             default:
+             {
+                 static uint32_t seen = 0u;
+@@ -612,11 +621,44 @@ namespace ps2x::iop::detail
+             }
+         }
+ 
++        // SPU2 interrupt: libsd's handler clears the IRQ enable of the cores that fired, then calls the game's
++        // handler with their bits (ps2sdk libsd Spu2Interrupt). zsiopdrv's BGM stream refills its SPU ring from it.
++        void serviceSpu2Irq()
++        {
++            // TEKKEN4_BGM=0: no SPU2 interrupts (the state before the music fix, for A/B runs).
++            static const bool off = []
++            {
++                const char *env = std::getenv("TEKKEN4_BGM");
++                return env && env[0] == '0' && env[1] == '\0';
++            }();
++            const uint32_t bits = m_sound.takeIrq() & 3u;
++            if (bits == 0u || off)
++                return;
++            for (uint32_t core = 0; core < 2u; ++core)
++                if ((bits & (1u << core)) != 0u)
++                    m_sound.setCoreAttr(4u | core, 0u);
++            const uint32_t slot = m_libsd.spu2Handler[0] != 0u ? 0u : 1u;
++            const uint32_t handler = m_libsd.spu2Handler[slot];
++            ++m_spu2IrqCount;
++            if (handler == 0u)
++                return;
++            if (m_spu2IrqCount <= 4u)
++            {
++                std::ostringstream out;
++                out << "[libsd] SPU2 IRQ cores=" << bits << " -> 0x" << std::hex << handler;
++                log(LogLevel::Info, out.str());
++            }
++            (void)callFunction(handler, slot == 0u ? bits : 0u, m_libsd.spu2Arg[slot], 0u, 0u, m_libsd.spu2Gp[slot],
++                               100000u);
++            m_idleValid = false;
++        }
++
+         void drainMixedAudio()
+         {
+             if (!soundRouteOn())
+                 return;
+             m_sound.advanceTo(totalCycles);
++            serviceSpu2Irq();
+             int16_t block[1024 * 2];
+             for (;;)
+             {
+@@ -1298,6 +1340,7 @@ namespace ps2x::iop::detail
+         };
+         LibsdState m_libsd{};
+         SoundEngine m_sound;
++        uint64_t m_spu2IrqCount = 0u;
+         int m_soundRoute = -1;
+         // TEKKEN4_IOP_IDLE_SKIP=0 turns the idle-skip cache off (paired speed runs with one exe).
+         bool m_idleCacheEnabled = []
+-- 
+2.55.0.windows.3
+

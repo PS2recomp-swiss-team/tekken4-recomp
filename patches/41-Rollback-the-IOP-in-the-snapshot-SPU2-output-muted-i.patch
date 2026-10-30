@@ -1,0 +1,929 @@
+From 090a662a3b43babf41ca619386347b0fa37772b3 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 04:40:59 +0100
+Subject: [PATCH 41/42] Rollback: the IOP in the snapshot, SPU2 output muted in
+ re-simulated frames
+
+ps2xIOP: IopSubsystem::saveState/loadState(IopSnapshot) copy the emulated IOP by value: IOP RAM and its
+ownership map, scratch, hardware registers, allocations, DMA start; the kernel (threads with CPU states,
+semaphores, event flags, ready/delay queues relinked by thread id); cdvd drive state; RPC servers; intrman;
+timrman; ioman file positions; import registry; the SPU2 (sample RAM, voices, reverb, input streams, IRQ,
+clock); the emulator's scalars, modules, pending DMA interrupts and guest callbacks, SIF command handlers,
+the EE->IOP SIF command queue and the SIF software registers. Host resources (disc image handles, the ISO
+index, the host audio queue) stay as they are. hashState for the netplay desync check.
+SoundEngine::setOutputMuted: the mix runs, nothing reaches the host output.
+
+ps2_rollback: setIncludeIop(true) puts the IOP into every capture/restore (default off: phase 2's frozen
+IOP and gate are unchanged); hashIop; setIopOutputMuted. PS2X_ROLLBACK_IOP_STATE tells game modules.
+
+Netplay needs it (Tekken 4 phase 3): with the IOP outside the state, a peer whose live frames ran on a
+predicted input fed those frames' sound commands to its IOP, the replies differed from the other peer's
+(page 0x1cca000, EE cycle +8). Rolled back with the EE, the IOP only ever keeps the timeline that sticks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xIOP/include/ps2x/iop/iop_subsystem.h   |  20 +++
+ ps2xIOP/src/emulator/core/iop_kernel.cpp   |  46 +++++
+ ps2xIOP/src/emulator/core/iop_kernel.h     |  16 ++
+ ps2xIOP/src/emulator/core/iop_memory.cpp   |  36 ++++
+ ps2xIOP/src/emulator/core/iop_memory.h     |  15 ++
+ ps2xIOP/src/emulator/core/sound_engine.cpp |  36 ++++
+ ps2xIOP/src/emulator/core/sound_engine.h   |  18 ++
+ ps2xIOP/src/emulator/imports/iop_cdvd.cpp  |  31 ++++
+ ps2xIOP/src/emulator/imports/iop_cdvd.h    |  12 ++
+ ps2xIOP/src/emulator/imports/iop_imports.h |   8 +
+ ps2xIOP/src/emulator/imports/iop_intrman.h |   9 +
+ ps2xIOP/src/emulator/imports/iop_ioman.h   |  10 ++
+ ps2xIOP/src/emulator/imports/iop_timrman.h |  10 ++
+ ps2xIOP/src/emulator/iop_emulator.cpp      | 187 +++++++++++++++++++++
+ ps2xIOP/src/emulator/iop_emulator.h        |  16 ++
+ ps2xIOP/src/emulator/services/iop_rpc.h    |  10 ++
+ ps2xIOP/src/iop_subsystem.cpp              |  36 ++++
+ ps2xRuntime/include/runtime/ps2_rollback.h |  15 ++
+ ps2xRuntime/src/lib/ps2_rollback.cpp       |  41 +++++
+ 19 files changed, 572 insertions(+)
+
+diff --git a/ps2xIOP/include/ps2x/iop/iop_subsystem.h b/ps2xIOP/include/ps2x/iop/iop_subsystem.h
+index 68fec81..425079c 100644
+--- a/ps2xIOP/include/ps2x/iop/iop_subsystem.h
++++ b/ps2xIOP/include/ps2x/iop/iop_subsystem.h
+@@ -10,6 +10,19 @@
+ 
+ namespace ps2x::iop
+ {
++    // Rollback: a saved IOP (CPU, kernel, IOP RAM, SPU2, timers, SIF/RPC bookkeeping of the emulated IOP).
++    // The HLE services (mcserv, dbcman, HLE libsd) and the module manager are boot-time state and not in it.
++    class IopSnapshot
++    {
++    public:
++        IopSnapshot();
++        ~IopSnapshot();
++        IopSnapshot(IopSnapshot &&) noexcept;
++        IopSnapshot &operator=(IopSnapshot &&) noexcept;
++        struct Data;
++        std::unique_ptr<Data> data;
++    };
++
+     class IopSubsystem
+     {
+     public:
+@@ -43,6 +56,13 @@ namespace ps2x::iop
+ 
+         [[nodiscard]] DebugSnapshot debugSnapshot() const;
+ 
++        // Rollback: only while no IOP code runs (between two runEeCycles/handleRpc calls).
++        void saveState(IopSnapshot &out) const;
++        void loadState(const IopSnapshot &in);
++        [[nodiscard]] static uint64_t hashState(const IopSnapshot &state);
++        // While set, the SPU2 mixes but hands nothing to the host audio output (re-simulated frames).
++        static void setSoundOutputMuted(bool muted) noexcept;
++
+     private:
+         class Impl;
+         std::unique_ptr<Impl> m_impl;
+diff --git a/ps2xIOP/src/emulator/core/iop_kernel.cpp b/ps2xIOP/src/emulator/core/iop_kernel.cpp
+index 7695347..233218a 100644
+--- a/ps2xIOP/src/emulator/core/iop_kernel.cpp
++++ b/ps2xIOP/src/emulator/core/iop_kernel.cpp
+@@ -108,6 +108,52 @@ namespace ps2x::iop::detail
+     {
+     }
+ 
++    void IopKernel::saveState(SavedState &out) const
++    {
++        out.threads = m_threads;
++        out.links.clear();
++        for (const auto &[id, thread] : m_threads)
++            out.links[id] = {thread.readyLink ? thread.readyLink->id : 0, thread.delayLink ? thread.delayLink->id : 0};
++        out.semaphores = m_semaphores;
++        out.eventFlags = m_eventFlags;
++        out.nextThreadId = m_nextThreadId;
++        out.nextSemaphoreId = m_nextSemaphoreId;
++        out.nextEventFlagId = m_nextEventFlagId;
++        out.currentId = m_currentThread ? m_currentThread->id : 0;
++        out.readyHeadId = m_readyHead ? m_readyHead->id : 0;
++        out.delayHeadId = m_delayHead ? m_delayHead->id : 0;
++        out.nextDelayWake = m_nextDelayWake;
++        out.schedEpoch = m_schedEpoch;
++    }
++
++    void IopKernel::loadState(const SavedState &in)
++    {
++        m_threads = in.threads;
++        const auto byId = [this](int id) -> IopThread *
++        {
++            if (id == 0)
++                return nullptr;
++            const auto it = m_threads.find(id);
++            return it == m_threads.end() ? nullptr : &it->second;
++        };
++        for (auto &[id, thread] : m_threads)
++        {
++            const auto link = in.links.find(id);
++            thread.readyLink = link == in.links.end() ? nullptr : byId(link->second.first);
++            thread.delayLink = link == in.links.end() ? nullptr : byId(link->second.second);
++        }
++        m_semaphores = in.semaphores;
++        m_eventFlags = in.eventFlags;
++        m_nextThreadId = in.nextThreadId;
++        m_nextSemaphoreId = in.nextSemaphoreId;
++        m_nextEventFlagId = in.nextEventFlagId;
++        m_currentThread = byId(in.currentId);
++        m_readyHead = byId(in.readyHeadId);
++        m_delayHead = byId(in.delayHeadId);
++        m_nextDelayWake = in.nextDelayWake;
++        m_schedEpoch = in.schedEpoch;
++    }
++
+     void IopKernel::reset()
+     {
+         m_readyHead = nullptr;
+diff --git a/ps2xIOP/src/emulator/core/iop_kernel.h b/ps2xIOP/src/emulator/core/iop_kernel.h
+index 06290e4..89283a0 100644
+--- a/ps2xIOP/src/emulator/core/iop_kernel.h
++++ b/ps2xIOP/src/emulator/core/iop_kernel.h
+@@ -117,5 +117,21 @@ namespace ps2x::iop::detail
+         IopThread *m_delayHead = nullptr;
+         uint64_t m_nextDelayWake = ~uint64_t{0};
+         uint64_t m_schedEpoch = 0;
++
++    public:
++        // Rollback: threads (with their CPU states), kernel objects, queues (links kept as thread ids).
++        struct SavedState
++        {
++            std::map<int, IopThread> threads;
++            std::map<int, std::pair<int, int>> links; // thread id -> (ready link id, delay link id), 0 = none
++            std::map<int, Semaphore> semaphores;
++            std::map<int, EventFlag> eventFlags;
++            uint32_t nextThreadId = 1, nextSemaphoreId = 1, nextEventFlagId = 1;
++            int currentId = 0, readyHeadId = 0, delayHeadId = 0;
++            uint64_t nextDelayWake = ~uint64_t{0};
++            uint64_t schedEpoch = 0;
++        };
++        void saveState(SavedState &out) const;
++        void loadState(const SavedState &in);
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.cpp b/ps2xIOP/src/emulator/core/iop_memory.cpp
+index 15aa197..0e614c1 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -31,6 +31,42 @@ namespace ps2x::iop::detail
+         reset();
+     }
+ 
++    void IopMemory::saveState(SavedState &out) const
++    {
++        out.ram.assign(m_ram.begin(), m_ram.end());
++        out.owned.assign(m_owned.begin(), m_owned.end());
++        out.scratch.assign(m_scratch.begin(), m_scratch.end());
++        out.hardware = m_hardware;
++        out.allocations = m_allocations;
++        out.heapCursor = m_heapCursor;
++        out.heapFloor = m_heapFloor;
++        out.topDown = m_topDown;
++        out.interruptStatus = m_interruptStatus;
++        out.interruptMask = m_interruptMask;
++        out.interruptControl = m_interruptControl;
++        out.dmaStart = m_dmaStart;
++    }
++
++    void IopMemory::loadState(const SavedState &in)
++    {
++        // Same sizes: copied in place, so pointers into RAM (the SPU2 stream rings) stay valid.
++        if (in.ram.size() == m_ram.size())
++            std::copy(in.ram.begin(), in.ram.end(), m_ram.begin());
++        if (in.owned.size() == m_owned.size())
++            std::copy(in.owned.begin(), in.owned.end(), m_owned.begin());
++        if (in.scratch.size() == m_scratch.size())
++            std::copy(in.scratch.begin(), in.scratch.end(), m_scratch.begin());
++        m_hardware = in.hardware;
++        m_allocations = in.allocations;
++        m_heapCursor = in.heapCursor;
++        m_heapFloor = in.heapFloor;
++        m_topDown = in.topDown;
++        m_interruptStatus = in.interruptStatus;
++        m_interruptMask = in.interruptMask;
++        m_interruptControl = in.interruptControl;
++        m_dmaStart = in.dmaStart;
++    }
++
+     void IopMemory::reset()
+     {
+         std::fill(m_ram.begin(), m_ram.end(), uint8_t{0});
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.h b/ps2xIOP/src/emulator/core/iop_memory.h
+index 869e0da..5d935c9 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -96,5 +96,20 @@ namespace ps2x::iop::detail
+         uint32_t m_interruptMask = 0;
+         uint32_t m_interruptControl = 1;
+         std::optional<DmaStart> m_dmaStart;
++
++    public:
++        // Rollback (ps2x::iop::IopSnapshot): every member above, by value.
++        struct SavedState
++        {
++            std::vector<uint8_t> ram, owned, scratch;
++            std::unordered_map<uint32_t, uint32_t> hardware;
++            std::vector<Allocation> allocations;
++            uint32_t heapCursor = 0, heapFloor = 0;
++            bool topDown = false;
++            uint32_t interruptStatus = 0, interruptMask = 0, interruptControl = 0;
++            std::optional<DmaStart> dmaStart;
++        };
++        void saveState(SavedState &out) const;
++        void loadState(const SavedState &in);
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.cpp b/ps2xIOP/src/emulator/core/sound_engine.cpp
+index ec707a0..7b977bd 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.cpp
++++ b/ps2xIOP/src/emulator/core/sound_engine.cpp
+@@ -3,6 +3,7 @@
+ #include "sound_engine.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
+@@ -91,6 +92,39 @@ namespace ps2x::iop::detail
+         reset();
+     }
+ 
++    namespace
++    {
++        std::atomic<bool> g_outputMuted{false};
++    }
++
++    void SoundEngine::setOutputMuted(bool muted) noexcept
++    {
++        g_outputMuted.store(muted, std::memory_order_relaxed);
++    }
++
++    void SoundEngine::saveState(SavedState &out) const
++    {
++        out.ram.assign(m_ram.begin(), m_ram.end());
++        out.cores = m_cores;
++        out.reverb = m_reverb;
++        out.stream = m_stream;
++        out.streamHalf = m_streamHalf;
++        out.irqPending = m_irqPending;
++        out.lastCycle = m_lastCycle;
++    }
++
++    void SoundEngine::loadState(const SavedState &in)
++    {
++        if (in.ram.size() == m_ram.size())
++            std::copy(in.ram.begin(), in.ram.end(), m_ram.begin());
++        m_cores = in.cores;
++        m_reverb = in.reverb;
++        m_stream = in.stream;
++        m_streamHalf = in.streamHalf;
++        m_irqPending = in.irqPending;
++        m_lastCycle = in.lastCycle;
++    }
++
+     void SoundEngine::reset()
+     {
+         std::fill(m_ram.begin(), m_ram.end(), uint16_t{0});
+@@ -843,6 +877,8 @@ namespace ps2x::iop::detail
+             coreOut[core][0] = left;
+             coreOut[core][1] = right;
+         }
++        if (g_outputMuted.load(std::memory_order_relaxed))
++            return; // a re-simulated frame (rollback): its samples were heard as the live frame's
+         // core 0 through its master volume, added to core 1's dry output, all through core 1's master volume
+         // (simplified MMIX routing). Same order as PCSX2 spu2Mix: clamp, master0, add core 1, clamp, master1.
+         std::lock_guard<std::mutex> lock(m_outputMutex);
+diff --git a/ps2xIOP/src/emulator/core/sound_engine.h b/ps2xIOP/src/emulator/core/sound_engine.h
+index a879e17..d9691e8 100644
+--- a/ps2xIOP/src/emulator/core/sound_engine.h
++++ b/ps2xIOP/src/emulator/core/sound_engine.h
+@@ -141,5 +141,23 @@ namespace ps2x::iop::detail
+         mutable uint64_t m_lastPollCycle = 0;
+         uint64_t m_maxAdvance = 0;
+         std::array<uint32_t, 64> m_blockHash{};
++
++    public:
++        // Rollback: the SPU2 (sample RAM, voices, reverb, input streams, IRQ, clock). Not the host output queue.
++        struct SavedState
++        {
++            std::vector<uint16_t> ram;
++            std::array<Core, 2> cores{};
++            std::array<Reverb, 2> reverb{};
++            std::array<StreamRing, 2> stream{};
++            std::array<bool, 2> streamHalf{};
++            uint32_t irqPending = 0u;
++            uint64_t lastCycle = 0;
++        };
++        void saveState(SavedState &out) const;
++        void loadState(const SavedState &in);
++        [[nodiscard]] const std::vector<uint16_t> &sampleRam() const noexcept { return m_ram; }
++        // Re-simulated frames (rollback): the mix runs, nothing reaches the host output.
++        static void setOutputMuted(bool muted) noexcept;
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+index 1a11505..a7bd27e 100644
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.cpp
+@@ -370,6 +370,7 @@ namespace ps2x::iop::detail
+         }
+ 
+     private:
++        friend class IopCdvd;
+         int ensureInterruptEventFlag()
+         {
+             if (interruptEventFlagId == 0)
+@@ -809,6 +810,36 @@ namespace ps2x::iop::detail
+         m_impl->reset();
+     }
+ 
++    void IopCdvd::saveState(SavedState &out) const
++    {
++        const Impl &d = *m_impl;
++        out.callbackAddress = d.callback.address;
++        out.callbackGp = d.callback.gp;
++        out.completionCallback = d.completionCallback;
++        out.initialized = d.initialized;
++        out.mediaMode = d.mediaMode;
++        out.currentLsn = d.currentLsn;
++        out.lastError = d.lastError;
++        out.streamFlag = d.streamFlag;
++        out.lastReadTimeout = d.lastReadTimeout;
++        out.interruptEventFlagId = d.interruptEventFlagId;
++    }
++
++    void IopCdvd::loadState(const SavedState &in)
++    {
++        Impl &d = *m_impl;
++        d.callback.address = in.callbackAddress;
++        d.callback.gp = in.callbackGp;
++        d.completionCallback = in.completionCallback;
++        d.initialized = in.initialized;
++        d.mediaMode = in.mediaMode;
++        d.currentLsn = in.currentLsn;
++        d.lastError = in.lastError;
++        d.streamFlag = in.streamFlag;
++        d.lastReadTimeout = in.lastReadTimeout;
++        d.interruptEventFlagId = in.interruptEventFlagId;
++    }
++
+     bool IopCdvd::dispatchImport(uint16_t ordinal, IopCpuState &cpu)
+     {
+         return m_impl->dispatchImport(ordinal, cpu);
+diff --git a/ps2xIOP/src/emulator/imports/iop_cdvd.h b/ps2xIOP/src/emulator/imports/iop_cdvd.h
+index 2ca6048..7a7ffbe 100644
+--- a/ps2xIOP/src/emulator/imports/iop_cdvd.h
++++ b/ps2xIOP/src/emulator/imports/iop_cdvd.h
+@@ -33,6 +33,18 @@ namespace ps2x::iop::detail
+ 
+         void reset() noexcept;
+ 
++        // Rollback: the drive's guest-visible state (host handles and the ISO index stay as they are).
++        struct SavedState
++        {
++            uint32_t callbackAddress = 0u, callbackGp = 0u;
++            std::optional<CompletionCallback> completionCallback;
++            bool initialized = false;
++            uint32_t mediaMode = 0u, currentLsn = 0u, lastError = 0u, streamFlag = 0u, lastReadTimeout = 0u;
++            int interruptEventFlagId = 0;
++        };
++        void saveState(SavedState &out) const;
++        void loadState(const SavedState &in);
++
+         [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu);
+         [[nodiscard]] std::optional<CompletionCallback> takeCompletionCallback() noexcept;
+ 
+diff --git a/ps2xIOP/src/emulator/imports/iop_imports.h b/ps2xIOP/src/emulator/imports/iop_imports.h
+index cae8d91..8f6a3e7 100644
+--- a/ps2xIOP/src/emulator/imports/iop_imports.h
++++ b/ps2xIOP/src/emulator/imports/iop_imports.h
+@@ -46,5 +46,13 @@ namespace ps2x::iop::detail
+ 
+         IopMemory &m_memory;
+         std::map<uint32_t, ExportLibrary> m_libraries;
++
++    public:
++        struct SavedState
++        {
++            std::map<uint32_t, ExportLibrary> libraries;
++        };
++        void saveState(SavedState &out) const { out.libraries = m_libraries; }
++        void loadState(const SavedState &in) { m_libraries = in.libraries; }
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/imports/iop_intrman.h b/ps2xIOP/src/emulator/imports/iop_intrman.h
+index 48fdb14..5cc8f90 100644
+--- a/ps2xIOP/src/emulator/imports/iop_intrman.h
++++ b/ps2xIOP/src/emulator/imports/iop_intrman.h
+@@ -29,5 +29,14 @@ namespace ps2x::iop::detail
+         IopMemory &m_memory;
+         std::map<int, Handler> m_handlers;
+         std::map<int, bool> m_enabled;
++
++    public:
++        struct SavedState
++        {
++            std::map<int, Handler> handlers;
++            std::map<int, bool> enabled;
++        };
++        void saveState(SavedState &out) const { out.handlers = m_handlers; out.enabled = m_enabled; }
++        void loadState(const SavedState &in) { m_handlers = in.handlers; m_enabled = in.enabled; }
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/imports/iop_ioman.h b/ps2xIOP/src/emulator/imports/iop_ioman.h
+index 22fe8b1..242ba33 100644
+--- a/ps2xIOP/src/emulator/imports/iop_ioman.h
++++ b/ps2xIOP/src/emulator/imports/iop_ioman.h
+@@ -51,5 +51,15 @@ namespace ps2x::iop::detail
+         std::vector<Device> m_devices;
+         std::vector<File> m_files;
+         uint64_t m_image = 0;
++
++    public:
++        // The disc image handle (m_image) is a host resource: it stays as it is.
++        struct SavedState
++        {
++            std::vector<Device> devices;
++            std::vector<File> files;
++        };
++        void saveState(SavedState &out) const { out.devices = m_devices; out.files = m_files; }
++        void loadState(const SavedState &in) { m_devices = in.devices; m_files = in.files; }
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/imports/iop_timrman.h b/ps2xIOP/src/emulator/imports/iop_timrman.h
+index 11b53b6..be6b609 100644
+--- a/ps2xIOP/src/emulator/imports/iop_timrman.h
++++ b/ps2xIOP/src/emulator/imports/iop_timrman.h
+@@ -63,5 +63,15 @@ namespace ps2x::iop::detail
+         std::array<Timer, 6> m_timers{};
+         uint32_t m_holdMode = 0u;
+         bool m_servicing = false;
++
++    public:
++        struct SavedState
++        {
++            std::array<Timer, 6> timers{};
++            uint32_t holdMode = 0u;
++            bool servicing = false;
++        };
++        void saveState(SavedState &out) const { out.timers = m_timers; out.holdMode = m_holdMode; out.servicing = m_servicing; }
++        void loadState(const SavedState &in) { m_timers = in.timers; m_holdMode = in.holdMode; m_servicing = in.servicing; }
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 3dc9406..b087416 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -26,6 +26,7 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <functional>
++#include <type_traits>
+ #include <deque>
+ #include <map>
+ #include <mutex>
+@@ -253,6 +254,9 @@ namespace ps2x::iop::detail
+             checkKelfPathCallback = {};
+         }
+ 
++        void saveStateTo(IopEmulatorState &out) const;
++        void loadStateFrom(const IopEmulatorState &in);
++
+         uint8_t read8(uint32_t address) const
+         {
+             return memory.read8(address);
+@@ -1495,6 +1499,189 @@ namespace ps2x::iop::detail
+     {
+     }
+ 
++    struct IopEmulatorState
++    {
++        IopMemory::SavedState memory;
++        IopKernel::SavedState kernel;
++        IopCdvd::SavedState cdvd;
++        IopRpcBridge::SavedState rpc;
++        IopIntrman::SavedState intrman;
++        IopTimrman::SavedState timrman;
++        IopIoman::SavedState ioman;
++        IopImportRegistry::SavedState imports;
++        SoundEngine::SavedState sound;
++        // The emulator's own members: trivially copyable scalars as bytes (saveStateTo), containers by value.
++        std::vector<uint8_t> scalars;
++        std::map<int, IopEmulator::Impl::Module> modules;
++        std::map<int, uint64_t> pendingDmaInterrupts;
++        std::multimap<uint64_t, IopEmulator::Impl::ScheduledGuestCallback> pendingGuestCallbacks;
++        std::map<uint32_t, std::array<uint32_t, 3>> sifCmdHandlers;
++        std::deque<EeSifCommand> eeSifCommands;
++        bool eeSifCommandPending = false;
++        std::array<uint32_t, 32> sifSoftwareRegisters{};
++    };
++
++    void IopEmulatorStateDeleter::operator()(IopEmulatorState *state) const noexcept
++    {
++        delete state;
++    }
++
++    namespace
++    {
++        template <typename T>
++        void putPod(std::vector<uint8_t> &out, const T &value)
++        {
++            static_assert(std::is_trivially_copyable_v<T>);
++            const auto *bytes = reinterpret_cast<const uint8_t *>(&value);
++            out.insert(out.end(), bytes, bytes + sizeof(T));
++        }
++
++        template <typename T>
++        void getPod(const std::vector<uint8_t> &in, size_t &at, T &value)
++        {
++            static_assert(std::is_trivially_copyable_v<T>);
++            std::memcpy(&value, in.data() + at, sizeof(T));
++            at += sizeof(T);
++        }
++
++        // Every scalar member of IopEmulator::Impl that is guest state, in one fixed order (save and load).
++        template <typename Impl, typename Fn>
++        void forEachScalar(Impl &impl, Fn &&fn)
++        {
++            fn(impl.m_libsd);
++            fn(impl.m_spu2IrqCount);
++            fn(impl.m_libsdCalls);
++            fn(impl.m_konCalls);
++            fn(impl.m_koffCalls);
++            fn(impl.m_nextSoundStats);
++            fn(impl.m_soundRoute);
++            fn(impl.m_idleValid);
++            fn(impl.m_idleUntil);
++            fn(impl.m_idleEpoch);
++            fn(impl.m_idleSkipCount);
++            fn(impl.sifCmdSlotBase);
++            fn(impl.sifCmdNextSlot);
++            fn(impl.eeSifCommandsDelivered);
++            fn(impl.nextModuleId);
++            fn(impl.moduleCursor);
++            fn(impl.totalCycles);
++            fn(impl.totalInstructions);
++            fn(impl.eeCycleCarry);
++            fn(impl.servicingDmaInterrupts);
++            fn(impl.servicingGuestCallbacks);
++            fn(impl.callDepth);
++            fn(impl.secrMcCommandHandler);
++            fn(impl.secrMcDevIdHandler);
++            fn(impl.checkKelfPathCallback);
++        }
++    }
++
++    void IopEmulator::Impl::saveStateTo(IopEmulatorState &out) const
++    {
++        memory.saveState(out.memory);
++        kernel.saveState(out.kernel);
++        cdvd.saveState(out.cdvd);
++        rpc.saveState(out.rpc);
++        intrman.saveState(out.intrman);
++        timrman.saveState(out.timrman);
++        ioman.saveState(out.ioman);
++        imports.saveState(out.imports);
++        m_sound.saveState(out.sound);
++        out.scalars.clear();
++        forEachScalar(*this, [&out](const auto &value) { putPod(out.scalars, value); });
++        out.modules = modules;
++        out.pendingDmaInterrupts = pendingDmaInterrupts;
++        out.pendingGuestCallbacks = pendingGuestCallbacks;
++        out.sifCmdHandlers.clear();
++        for (const auto &[cid, handler] : sifCmdHandlers)
++            out.sifCmdHandlers[cid] = {handler.function, handler.data, handler.gp};
++        {
++            std::lock_guard<std::mutex> lock(eeSifCommandMutex());
++            out.eeSifCommands = eeSifCommandQueue();
++            out.eeSifCommandPending = eeSifCommandPending().load(std::memory_order_acquire);
++        }
++        for (uint32_t i = 0; i < out.sifSoftwareRegisters.size(); ++i)
++            out.sifSoftwareRegisters[i] = sifSoftwareRegister(i);
++    }
++
++    void IopEmulator::Impl::loadStateFrom(const IopEmulatorState &in)
++    {
++        memory.loadState(in.memory);
++        kernel.loadState(in.kernel);
++        cdvd.loadState(in.cdvd);
++        rpc.loadState(in.rpc);
++        intrman.loadState(in.intrman);
++        timrman.loadState(in.timrman);
++        ioman.loadState(in.ioman);
++        imports.loadState(in.imports);
++        m_sound.loadState(in.sound);
++        size_t at = 0;
++        forEachScalar(*this, [&in, &at](auto &value) { getPod(in.scalars, at, value); });
++        modules = in.modules;
++        pendingDmaInterrupts = in.pendingDmaInterrupts;
++        pendingGuestCallbacks = in.pendingGuestCallbacks;
++        sifCmdHandlers.clear();
++        for (const auto &[cid, handler] : in.sifCmdHandlers)
++            sifCmdHandlers[cid] = SifCmdHandler{handler[0], handler[1], handler[2]};
++        {
++            std::lock_guard<std::mutex> lock(eeSifCommandMutex());
++            eeSifCommandQueue() = in.eeSifCommands;
++            eeSifCommandPending().store(in.eeSifCommandPending, std::memory_order_release);
++        }
++        for (uint32_t i = 0; i < in.sifSoftwareRegisters.size(); ++i)
++            setSifSoftwareRegister(i, in.sifSoftwareRegisters[i]);
++        activeCpu = nullptr;
++    }
++
++    IopEmulatorStatePtr IopEmulator::newState()
++    {
++        return IopEmulatorStatePtr(new IopEmulatorState());
++    }
++
++    void IopEmulator::saveState(IopEmulatorState &out) const
++    {
++        m_impl->saveStateTo(out);
++    }
++
++    void IopEmulator::loadState(const IopEmulatorState &in)
++    {
++        m_impl->loadStateFrom(in);
++    }
++
++    uint64_t IopEmulator::hashState(const IopEmulatorState &state)
++    {
++        // Over 8-byte words: IOP RAM, SPU2 sample RAM, the scalar block, every thread's registers and state.
++        uint64_t h = 0xcbf29ce484222325ull;
++        const auto mix = [&h](const void *data, size_t size)
++        {
++            const auto *bytes = static_cast<const uint8_t *>(data);
++            size_t at = 0;
++            for (; at + 8u <= size; at += 8u)
++            {
++                uint64_t word;
++                std::memcpy(&word, bytes + at, 8u);
++                h = (h ^ word) * 0x100000001b3ull;
++                h ^= h >> 29;
++            }
++            for (; at < size; ++at)
++                h = (h ^ bytes[at]) * 0x100000001b3ull;
++        };
++        mix(state.memory.ram.data(), state.memory.ram.size());
++        mix(state.sound.ram.data(), state.sound.ram.size() * sizeof(uint16_t));
++        mix(state.scalars.data(), state.scalars.size());
++        mix(&state.sound.lastCycle, sizeof(state.sound.lastCycle));
++        for (const auto &[id, thread] : state.kernel.threads)
++        {
++            mix(&id, sizeof(id));
++            mix(thread.cpu.gpr.data(), sizeof(uint32_t) * thread.cpu.gpr.size());
++            mix(&thread.cpu.pc, sizeof(thread.cpu.pc));
++            const uint8_t threadState = static_cast<uint8_t>(thread.state);
++            mix(&threadState, 1u);
++            mix(&thread.wakeCycle, sizeof(thread.wakeCycle));
++        }
++        return h;
++    }
++
+     IopEmulator::~IopEmulator() = default;
+ 
+     void IopEmulator::reset()
+diff --git a/ps2xIOP/src/emulator/iop_emulator.h b/ps2xIOP/src/emulator/iop_emulator.h
+index 070c473..348feb1 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -11,6 +11,15 @@
+ 
+ namespace ps2x::iop::detail
+ {
++    // Rollback (Tekken 4 netplay, docs/ROLLBACK_PHASE3.md of the port): the whole guest-visible IOP -- CPU and
++    // kernel, IOP RAM, SPU2, timers, interrupts, SIF/RPC bookkeeping -- as a value that can be put back.
++    struct IopEmulatorState;
++    struct IopEmulatorStateDeleter
++    {
++        void operator()(IopEmulatorState *state) const noexcept;
++    };
++    using IopEmulatorStatePtr = std::unique_ptr<IopEmulatorState, IopEmulatorStateDeleter>;
++
+     class IopEmulator
+     {
+     public:
+@@ -37,6 +46,12 @@ namespace ps2x::iop::detail
+         [[nodiscard]] bool isMemoryRange(uint32_t address, size_t size) const;
+ 
+         [[nodiscard]] uint64_t cycles() const noexcept;
++
++        // Only between two runEeCycles/handleRpc calls (no guest code running).
++        [[nodiscard]] static IopEmulatorStatePtr newState();
++        void saveState(IopEmulatorState &out) const;
++        void loadState(const IopEmulatorState &in);
++        [[nodiscard]] static uint64_t hashState(const IopEmulatorState &state);
+         // When set, runCycles skips kernel entry while no ready thread can appear before a sealed cycle.
+         // Tests turn it off to lock the same wake cycle, and reseal to prove one invalidation.
+         void setIdleSkipCache(bool enabled) noexcept;
+@@ -49,6 +64,7 @@ namespace ps2x::iop::detail
+ 
+     private:
+         class Impl;
++        friend struct IopEmulatorState;
+         std::unique_ptr<Impl> m_impl;
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/services/iop_rpc.h b/ps2xIOP/src/emulator/services/iop_rpc.h
+index a4286ba..9a82bf1 100644
+--- a/ps2xIOP/src/emulator/services/iop_rpc.h
++++ b/ps2xIOP/src/emulator/services/iop_rpc.h
+@@ -74,5 +74,15 @@ namespace ps2x::iop::detail
+         std::unordered_map<uint32_t, RpcServer> m_servers;
+         uint32_t m_nextDmaId = 1u;
+         bool m_sifInitialized = false;
++
++    public:
++        struct SavedState
++        {
++            std::unordered_map<uint32_t, RpcServer> servers;
++            uint32_t nextDmaId = 1u;
++            bool sifInitialized = false;
++        };
++        void saveState(SavedState &out) const { out.servers = m_servers; out.nextDmaId = m_nextDmaId; out.sifInitialized = m_sifInitialized; }
++        void loadState(const SavedState &in) { m_servers = in.servers; m_nextDmaId = in.nextDmaId; m_sifInitialized = in.sifInitialized; }
+     };
+ }
+diff --git a/ps2xIOP/src/iop_subsystem.cpp b/ps2xIOP/src/iop_subsystem.cpp
+index b498155..3454684 100644
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -3,6 +3,7 @@
+ #include "iop_service.h"
+ #include "iop_module_manager.h"
+ #include "emulator/iop_emulator.h"
++#include "emulator/core/sound_engine.h"
+ #include "module_factories.h"
+ #include "ps2x/iop/ps2_path.h"
+ 
+@@ -249,6 +250,41 @@ namespace ps2x::iop
+         return m_impl->emulator.isMemoryRange(address, size);
+     }
+ 
++    struct IopSnapshot::Data
++    {
++        detail::IopEmulatorStatePtr emulator;
++    };
++
++    IopSnapshot::IopSnapshot() = default;
++    IopSnapshot::~IopSnapshot() = default;
++    IopSnapshot::IopSnapshot(IopSnapshot &&) noexcept = default;
++    IopSnapshot &IopSnapshot::operator=(IopSnapshot &&) noexcept = default;
++
++    void IopSubsystem::saveState(IopSnapshot &out) const
++    {
++        if (!out.data)
++            out.data = std::make_unique<IopSnapshot::Data>();
++        if (!out.data->emulator)
++            out.data->emulator = detail::IopEmulator::newState();
++        m_impl->emulator.saveState(*out.data->emulator);
++    }
++
++    void IopSubsystem::loadState(const IopSnapshot &in)
++    {
++        if (in.data && in.data->emulator)
++            m_impl->emulator.loadState(*in.data->emulator);
++    }
++
++    uint64_t IopSubsystem::hashState(const IopSnapshot &state)
++    {
++        return state.data && state.data->emulator ? detail::IopEmulator::hashState(*state.data->emulator) : 0u;
++    }
++
++    void IopSubsystem::setSoundOutputMuted(bool muted) noexcept
++    {
++        detail::SoundEngine::setOutputMuted(muted);
++    }
++
+     DebugSnapshot IopSubsystem::debugSnapshot() const
+     {
+         DebugSnapshot snapshot;
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback.h b/ps2xRuntime/include/runtime/ps2_rollback.h
+index 170e25b..1f21066 100644
+--- a/ps2xRuntime/include/runtime/ps2_rollback.h
++++ b/ps2xRuntime/include/runtime/ps2_rollback.h
+@@ -12,6 +12,7 @@
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/ps2_memory.h"
+ #include "runtime/ps2_vu1.h"
++#include "ps2x/iop/iop_subsystem.h"
+ 
+ #include <cstdint>
+ #include <memory>
+@@ -19,6 +20,10 @@
+ 
+ class PS2Runtime;
+ 
++// Netplay (Tekken 4 phase 3): the IOP can be part of a snapshot (setIncludeIop), so a re-simulated frame runs the
++// IOP like a live one and both peers' IOPs only ever hear the timeline that sticks. Game modules test this macro.
++#define PS2X_ROLLBACK_IOP_STATE 1
++
+ namespace ps2_rollback
+ {
+     struct Snapshot
+@@ -33,9 +38,19 @@ namespace ps2_rollback
+         std::vector<uint8_t> runtimeState; // guest heap + async callback stacks (PS2RollbackAccess)
+         std::vector<uint8_t> padState;
+         uint32_t sifSendCmdId = 1;
++        ps2x::iop::IopSnapshot iop; // filled only while includeIop()
++        bool hasIop = false;
+         bool valid = false;
+     };
+ 
++    // Off by default (phase 2: the IOP stays outside and is frozen/gated in re-simulated frames).
++    void setIncludeIop(bool on) noexcept;
++    bool includeIop() noexcept;
++    // Hash of the IOP part of a snapshot (0 when it has none).
++    uint64_t hashIop(const Snapshot &snapshot);
++    // Re-simulated frames with the IOP running: the SPU2 output of those frames is not played.
++    void setIopOutputMuted(bool muted) noexcept;
++
+     // Both at a boundary only (inside the EeScheduler boundary hook, executor thread).
+     void capture(PS2Runtime &runtime, Snapshot &out);
+     void restore(PS2Runtime &runtime, const Snapshot &in);
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+index 3732878..f0e97bc 100644
+--- a/ps2xRuntime/src/lib/ps2_rollback.cpp
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -4,6 +4,7 @@
+ #include "ps2_runtime.h"
+ #include "Kernel/Stubs/Pad.h"
+ #include "Kernel/Syscalls/RPC.h"
++#include "ps2x/iop/iop_subsystem.h"
+ 
+ #include <algorithm>
+ #include <cstring>
+@@ -41,6 +42,20 @@ public:
+         put(&runtime.m_asyncCallbackStackTop, sizeof(uint32_t));
+     }
+ 
++    static bool saveIop(PS2Runtime &runtime, ps2x::iop::IopSnapshot &out)
++    {
++        if (!runtime.m_iopSubsystem)
++            return false;
++        runtime.m_iopSubsystem->saveState(out);
++        return true;
++    }
++
++    static void loadIop(PS2Runtime &runtime, const ps2x::iop::IopSnapshot &in)
++    {
++        if (runtime.m_iopSubsystem)
++            runtime.m_iopSubsystem->loadState(in);
++    }
++
+     static void load(PS2Runtime &runtime, const std::vector<uint8_t> &in)
+     {
+         std::lock_guard<std::mutex> heapLock(runtime.m_guestHeapMutex);
+@@ -151,6 +166,9 @@ namespace ps2_rollback
+         PS2RollbackAccess::save(runtime, out.runtimeState);
+         out.padState = ps2_stubs::savePadState();
+         out.sifSendCmdId = ps2_syscalls::sifSendCmdNextId();
++        out.hasIop = false;
++        if (includeIop())
++            out.hasIop = PS2RollbackAccess::saveIop(runtime, out.iop);
+         out.valid = true;
+     }
+ 
+@@ -183,6 +201,8 @@ namespace ps2_rollback
+         PS2RollbackAccess::load(runtime, in.runtimeState);
+         ps2_stubs::loadPadState(in.padState);
+         ps2_syscalls::setSifSendCmdNextId(in.sifSendCmdId);
++        if (in.hasIop)
++            PS2RollbackAccess::loadIop(runtime, in.iop);
+     }
+ 
+     StateHash hashState(PS2Runtime &runtime, const std::vector<MaskRange> &masks, std::vector<uint64_t> *pageHashes)
+@@ -297,6 +317,27 @@ namespace ps2_rollback
+     namespace
+     {
+         IopGate *g_iopGate = nullptr;
++        std::atomic<bool> g_includeIop{false};
++    }
++
++    void setIncludeIop(bool on) noexcept
++    {
++        g_includeIop.store(on, std::memory_order_relaxed);
++    }
++
++    bool includeIop() noexcept
++    {
++        return g_includeIop.load(std::memory_order_relaxed);
++    }
++
++    uint64_t hashIop(const Snapshot &snapshot)
++    {
++        return snapshot.hasIop ? ps2x::iop::IopSubsystem::hashState(snapshot.iop) : 0u;
++    }
++
++    void setIopOutputMuted(bool muted) noexcept
++    {
++        ps2x::iop::IopSubsystem::setSoundOutputMuted(muted);
+     }
+ 
+     void setIopGate(IopGate *gate) noexcept
+-- 
+2.55.0.windows.3
+

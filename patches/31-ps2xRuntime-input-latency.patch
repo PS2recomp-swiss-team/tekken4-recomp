@@ -1,0 +1,803 @@
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index c57e33a..42662be 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -383,6 +383,7 @@ add_library(ps2_runtime STATIC
+     src/lib/gs/ps2_gs_memory.cpp
+     src/lib/gs/gs_frontend.cpp
+     src/lib/gs/gs_cpu_backend.cpp
++    src/lib/ps2_input_latency.cpp
+     src/lib/ps2_iop_host.cpp
+     src/lib/ps2_memory.cpp
+     src/lib/ps2_pad.cpp
+diff --git a/ps2xRuntime/include/runtime/ps2_input_latency.h b/ps2xRuntime/include/runtime/ps2_input_latency.h
+new file mode 100644
+index 0000000..79432e6
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_input_latency.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++#include <cstdint>
++
++// Host input-latency path. Instrumentation (QPC log, frame hash) runs only when
++// TEKKEN4_INPUT_LAG=1. TEKKEN4_INPUT_LEGACY=1 keeps the old once-per-host-frame
++// raylib poll. The fast path samples posted keys from the window thread and
++// physical keys with GetAsyncKeyState at pad-read time.
++namespace ps2_input_latency
++{
++    bool enabled();
++    bool legacy();
++    // "paced" (default): present on a 16.667 ms clock.
++    // "tick" (TEKKEN4_INPUT_PRESENT=tick): present when the guest vsync tick
++    // changes. Measured slower (readback lands while the GS is still drawing).
++    // Ignored when legacy() is set.
++    bool presentOnTick();
++
++    void attachWindow(void *hwnd);
++    void detachWindow();
++
++    // Window thread. Returns after a queued input message or timeoutMs.
++    void waitMessage(unsigned timeoutMs);
++
++    // Game thread. Active-high pad bits. False: caller uses raylib IsKeyDown.
++    bool sampleKeyboard(uint16_t &padDownMask);
++
++    // Game thread, after scePadRead wrote the pad packet. pressedMask is active-high.
++    void notePad(uint16_t pressedMask, uint64_t vsyncTick);
++
++    // Window thread, around the latch that actually calls GS present.
++    void onLatchBegin(uint64_t vsyncTick);
++    void onLatchPixels(const uint8_t *rgba, uint32_t width, uint32_t height);
++    void onSwapReturned();
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index cadbef6..c5d37ff 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -1,5 +1,6 @@
+ #include "Common.h"
+ #include "Pad.h"
++#include "runtime/ps2_input_latency.h"
+ 
+ namespace ps2_stubs
+ {
+@@ -746,6 +747,13 @@ namespace ps2_stubs
+             }
+         });
+ 
++        if (ps2_input_latency::enabled())
++        {
++            const uint16_t activeLow = static_cast<uint16_t>(data[2] | (static_cast<uint16_t>(data[3]) << 8));
++            const uint64_t tick = runtime ? runtime->memory().gs().vsyncTick.load(std::memory_order_relaxed) : 0u;
++            ps2_input_latency::notePad(static_cast<uint16_t>(~activeLow), tick);
++        }
++
+         setReturnS32(ctx, 1);
+     }
+ 
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+new file mode 100644
+index 0000000..4345902
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -0,0 +1,476 @@
++// Compiled into the GS GL translation unit (that file already includes windows.h
++// and does not include raylib). src/lib/*.cpp is an explicit CMake list; this
++// file is #included from gs/gpu/gs_gl.cpp so it links without a CMake edit.
++#include "runtime/ps2_input_latency.h"
++
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++
++#if defined(_WIN32)
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++
++namespace
++{
++    constexpr uint16_t kUp = 0x0010u;
++    constexpr uint16_t kDown = 0x0040u;
++    constexpr uint16_t kLeft = 0x0080u;
++    constexpr uint16_t kRight = 0x0020u;
++    constexpr uint16_t kStart = 0x0008u;
++    constexpr uint16_t kSelect = 0x0001u;
++    constexpr uint16_t kSquare = 0x8000u;
++    constexpr uint16_t kCross = 0x4000u;
++    constexpr uint16_t kCircle = 0x2000u;
++    constexpr uint16_t kTriangle = 0x1000u;
++    constexpr uint16_t kR1 = 0x0800u;
++    constexpr uint16_t kL1 = 0x0400u;
++    constexpr uint16_t kR2 = 0x0200u;
++    constexpr uint16_t kL2 = 0x0100u;
++
++    constexpr int kSlots = 32;
++
++    struct Press
++    {
++        uint32_t seq = 0;
++        uint32_t vk = 0;
++        uint16_t bit = 0;
++        uint64_t t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0;
++        uint64_t tickAtT2 = 0;
++        uint64_t hashBefore = 0;
++        uint64_t hashAtT5 = 0;
++        int stage = 0; // 1 t1, 2 t2, 3 t3, 4 t4, 5 printed
++        int latchesAfterT2 = 0;
++    };
++
++    std::atomic<uint16_t> g_posted{0};
++    std::atomic<uintptr_t> g_hwnd{0};
++    std::atomic<uint16_t> g_asyncCache{0};
++    std::atomic<uint64_t> g_asyncCacheQpc{0};
++    std::atomic<uint64_t> g_lastHash{0};
++    WNDPROC g_oldProc = nullptr;
++    bool g_timerPeriod = false;
++    bool g_latched = false;
++
++    std::mutex g_pressMu;
++    Press g_press[kSlots];
++    uint32_t g_seq = 0;
++
++    bool envIs1(const char *name)
++    {
++        const char *v = std::getenv(name);
++        return v && v[0] == '1';
++    }
++
++    uint64_t qpc()
++    {
++        LARGE_INTEGER c;
++        QueryPerformanceCounter(&c);
++        return static_cast<uint64_t>(c.QuadPart);
++    }
++
++    uint64_t qpcFreq()
++    {
++        LARGE_INTEGER f;
++        QueryPerformanceFrequency(&f);
++        return static_cast<uint64_t>(f.QuadPart);
++    }
++
++    // Same keys as PSPadBackend::readState. Letters match the VK the capture
++    // script posts; arrows and Enter are the other bindings.
++    uint16_t vkToPad(WPARAM vk)
++    {
++        switch (vk)
++        {
++        case 'W':
++            return kUp;
++        case 'S':
++            return kDown;
++        case 'A':
++            return kLeft;
++        case 'D':
++            return kRight;
++        case VK_DOWN:
++        case 'X':
++        case VK_SPACE:
++            return kCross;
++        case VK_RIGHT:
++        case 'C':
++        case VK_ESCAPE:
++            return kCircle;
++        case VK_LEFT:
++        case 'Z':
++        case VK_NUMPAD0:
++            return kSquare;
++        case VK_UP:
++        case 'V':
++        case VK_NUMPAD1:
++            return kTriangle;
++        case 'Q':
++            return kL1;
++        case 'E':
++            return kR1;
++        case VK_LSHIFT:
++        case VK_SHIFT:
++            return kL2;
++        case VK_RSHIFT:
++            return kR2;
++        case VK_RETURN:
++            return kStart;
++        case VK_TAB:
++            return kSelect;
++        default:
++            return 0;
++        }
++    }
++
++    uint16_t asyncPadMask()
++    {
++        uint16_t m = 0;
++        const auto down = [](int vk)
++        { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
++        if (down('W'))
++            m = static_cast<uint16_t>(m | kUp);
++        if (down('S'))
++            m = static_cast<uint16_t>(m | kDown);
++        if (down('A'))
++            m = static_cast<uint16_t>(m | kLeft);
++        if (down('D'))
++            m = static_cast<uint16_t>(m | kRight);
++        if (down(VK_DOWN) || down('X') || down(VK_SPACE))
++            m = static_cast<uint16_t>(m | kCross);
++        if (down(VK_RIGHT) || down('C') || down(VK_ESCAPE))
++            m = static_cast<uint16_t>(m | kCircle);
++        if (down(VK_LEFT) || down('Z') || down(VK_NUMPAD0))
++            m = static_cast<uint16_t>(m | kSquare);
++        if (down(VK_UP) || down('V') || down(VK_NUMPAD1))
++            m = static_cast<uint16_t>(m | kTriangle);
++        if (down('Q'))
++            m = static_cast<uint16_t>(m | kL1);
++        if (down('E'))
++            m = static_cast<uint16_t>(m | kR1);
++        if (down(VK_LSHIFT))
++            m = static_cast<uint16_t>(m | kL2);
++        if (down(VK_RSHIFT))
++            m = static_cast<uint16_t>(m | kR2);
++        if (down(VK_RETURN))
++            m = static_cast<uint16_t>(m | kStart);
++        if (down(VK_TAB))
++            m = static_cast<uint16_t>(m | kSelect);
++        return m;
++    }
++
++    void printPress(const Press &p)
++    {
++        std::fprintf(stderr,
++                     "[input-lag] seq=%u vk=%u t1=%llu t2=%llu t3=%llu t4=%llu t5=%llu before=%llu hash=%llu\n",
++                     p.seq, p.vk,
++                     static_cast<unsigned long long>(p.t1),
++                     static_cast<unsigned long long>(p.t2),
++                     static_cast<unsigned long long>(p.t3),
++                     static_cast<unsigned long long>(p.t4),
++                     static_cast<unsigned long long>(p.t5),
++                     static_cast<unsigned long long>(p.hashBefore),
++                     static_cast<unsigned long long>(p.hashAtT5));
++        std::fflush(stderr);
++    }
++
++    void openPress(uint32_t vk, uint16_t bit)
++    {
++        std::lock_guard<std::mutex> lock(g_pressMu);
++        Press *slot = nullptr;
++        for (Press &p : g_press)
++        {
++            if (p.stage == 0 || p.stage == 5)
++            {
++                slot = &p;
++                break;
++            }
++        }
++        if (!slot)
++            slot = &g_press[0];
++        *slot = Press{};
++        slot->seq = ++g_seq;
++        slot->vk = vk;
++        slot->bit = bit;
++        slot->t1 = qpc();
++        slot->hashBefore = g_lastHash.load(std::memory_order_relaxed);
++        slot->stage = 1;
++    }
++
++    LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
++    {
++        if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)
++        {
++            const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
++            const bool repeat = down && ((lp & (static_cast<LPARAM>(1) << 30)) != 0);
++            const uint16_t bit = vkToPad(wp);
++            if (bit != 0)
++            {
++                if (down)
++                    g_posted.fetch_or(bit, std::memory_order_release);
++                else
++                    g_posted.fetch_and(static_cast<uint16_t>(~bit), std::memory_order_release);
++                if (down && !repeat && ps2_input_latency::enabled())
++                    openPress(static_cast<uint32_t>(wp), bit);
++            }
++        }
++        if (g_oldProc)
++            return CallWindowProcW(g_oldProc, hwnd, msg, wp, lp);
++        return DefWindowProcW(hwnd, msg, wp, lp);
++    }
++
++    void setTimerPeriod(bool on)
++    {
++        const auto begin = reinterpret_cast<UINT(WINAPI *)(UINT)>(GetProcAddress(GetModuleHandleA("winmm.dll"), "timeBeginPeriod"));
++        const auto end = reinterpret_cast<UINT(WINAPI *)(UINT)>(GetProcAddress(GetModuleHandleA("winmm.dll"), "timeEndPeriod"));
++        HMODULE winmm = nullptr;
++        auto beginFn = begin;
++        auto endFn = end;
++        if (!beginFn || !endFn)
++        {
++            winmm = LoadLibraryA("winmm.dll");
++            beginFn = reinterpret_cast<UINT(WINAPI *)(UINT)>(GetProcAddress(winmm, "timeBeginPeriod"));
++            endFn = reinterpret_cast<UINT(WINAPI *)(UINT)>(GetProcAddress(winmm, "timeEndPeriod"));
++        }
++        if (on && beginFn && !g_timerPeriod)
++        {
++            if (beginFn(1) == 0)
++                g_timerPeriod = true;
++        }
++        else if (!on && endFn && g_timerPeriod)
++        {
++            endFn(1);
++            g_timerPeriod = false;
++        }
++        (void)winmm;
++    }
++
++    uint64_t hashImage(const uint8_t *rgba, uint32_t width, uint32_t height)
++    {
++        // 16x16 block-mean luma, quantised. A menu cursor moves several blocks.
++        // A one-line interlace shift does not, which a per-pixel sample did.
++        uint64_t h = 14695981039346656037ull;
++        if (!rgba || width < 16u || height < 16u)
++            return 0;
++        for (uint32_t y = 0; y + 16u <= height; y += 16u)
++        {
++            for (uint32_t x = 0; x + 16u <= width; x += 16u)
++            {
++                uint32_t sum = 0;
++                for (uint32_t by = 0; by < 16u; by += 2u)
++                {
++                    const uint8_t *row = rgba + (static_cast<size_t>(y + by) * width + x) * 4u;
++                    for (uint32_t bx = 0; bx < 16u; bx += 2u)
++                    {
++                        const uint8_t *p = row + static_cast<size_t>(bx) * 4u;
++                        sum += (static_cast<unsigned>(p[0]) * 3u + static_cast<unsigned>(p[1]) * 4u +
++                                static_cast<unsigned>(p[2])) >>
++                               3;
++                    }
++                }
++                const unsigned q = (sum / 64u) >> 4;
++                h ^= q;
++                h *= 1099511628211ull;
++            }
++        }
++        return h == 0 ? 1 : h;
++    }
++}
++
++namespace ps2_input_latency
++{
++    bool enabled()
++    {
++        static const bool on = envIs1("TEKKEN4_INPUT_LAG");
++        return on;
++    }
++
++    bool legacy()
++    {
++        static const bool on = envIs1("TEKKEN4_INPUT_LEGACY");
++        return on;
++    }
++
++    bool presentOnTick()
++    {
++        static const bool tick = []
++        {
++            const char *v = std::getenv("TEKKEN4_INPUT_PRESENT");
++            return v && std::strcmp(v, "tick") == 0;
++        }();
++        return tick;
++    }
++
++    void attachWindow(void *hwnd)
++    {
++        if (!hwnd)
++            return;
++        if (legacy() && !enabled())
++            return;
++        auto window = static_cast<HWND>(hwnd);
++        g_hwnd.store(reinterpret_cast<uintptr_t>(window), std::memory_order_release);
++        if (!legacy())
++            setTimerPeriod(true);
++        if (!g_oldProc)
++        {
++            g_oldProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(wndProc)));
++        }
++        if (enabled())
++        {
++            std::fprintf(stderr, "[input-lag] enabled legacy=%d present=%s qpc_freq=%llu\n",
++                         legacy() ? 1 : 0, presentOnTick() ? "tick" : "paced",
++                         static_cast<unsigned long long>(qpcFreq()));
++            std::fflush(stderr);
++        }
++    }
++
++    void detachWindow()
++    {
++        const uintptr_t raw = g_hwnd.exchange(0, std::memory_order_acq_rel);
++        if (raw && g_oldProc)
++        {
++            SetWindowLongPtrW(reinterpret_cast<HWND>(raw), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_oldProc));
++            g_oldProc = nullptr;
++        }
++        setTimerPeriod(false);
++    }
++
++    void waitMessage(unsigned timeoutMs)
++    {
++        MsgWaitForMultipleObjects(0, nullptr, FALSE, timeoutMs, QS_ALLINPUT);
++    }
++
++    bool sampleKeyboard(uint16_t &padDownMask)
++    {
++        if (legacy())
++            return false;
++        const uintptr_t raw = g_hwnd.load(std::memory_order_acquire);
++        if (raw == 0)
++            return false;
++        uint16_t mask = g_posted.load(std::memory_order_acquire);
++        const uint64_t now = qpc();
++        const uint64_t cachedAt = g_asyncCacheQpc.load(std::memory_order_acquire);
++        const uint64_t freq = qpcFreq();
++        const uint64_t budget = freq / 5000u; // 200 us
++        uint16_t asyncMask = g_asyncCache.load(std::memory_order_acquire);
++        if (cachedAt == 0 || now - cachedAt >= budget)
++        {
++            const bool focused = GetForegroundWindow() == reinterpret_cast<HWND>(raw);
++            asyncMask = focused ? asyncPadMask() : 0;
++            g_asyncCache.store(asyncMask, std::memory_order_release);
++            g_asyncCacheQpc.store(now, std::memory_order_release);
++        }
++        padDownMask = static_cast<uint16_t>(mask | asyncMask);
++        return true;
++    }
++
++    void notePad(uint16_t pressedMask, uint64_t vsyncTick)
++    {
++        if (!enabled() || pressedMask == 0)
++            return;
++        std::lock_guard<std::mutex> lock(g_pressMu);
++        const uint64_t now = qpc();
++        for (Press &p : g_press)
++        {
++            if (p.stage == 1 && (pressedMask & p.bit) != 0)
++            {
++                p.t2 = now;
++                p.tickAtT2 = vsyncTick;
++                p.stage = 2;
++            }
++        }
++    }
++
++    void onLatchBegin(uint64_t vsyncTick)
++    {
++        (void)vsyncTick;
++        g_latched = true;
++        if (!enabled())
++            return;
++        std::lock_guard<std::mutex> lock(g_pressMu);
++        const uint64_t now = qpc();
++        for (Press &p : g_press)
++        {
++            if (p.stage == 2)
++            {
++                p.t3 = now;
++                p.stage = 3;
++            }
++        }
++    }
++
++    void onLatchPixels(const uint8_t *rgba, uint32_t width, uint32_t height)
++    {
++        if (!enabled())
++            return;
++        g_lastHash.store(hashImage(rgba, width, height), std::memory_order_relaxed);
++    }
++
++    void onSwapReturned()
++    {
++        if (!enabled())
++        {
++            g_latched = false;
++            return;
++        }
++        const bool latched = g_latched;
++        g_latched = false;
++        const uint64_t now = qpc();
++        const uint64_t hash = g_lastHash.load(std::memory_order_relaxed);
++        std::lock_guard<std::mutex> lock(g_pressMu);
++        for (Press &p : g_press)
++        {
++            if (p.stage == 0 || p.stage == 5)
++                continue;
++            if (p.stage == 3 && latched)
++            {
++                p.t4 = now;
++                p.stage = 4;
++            }
++            // Pixels hashed for this swap were latched in onLatchBegin. That
++            // latch is only after the pad read once t3 is set. A swap that
++            // was already in flight when the key arrived must not become t5.
++            if (latched && p.t3 != 0 && p.t5 == 0 && p.hashBefore != 0 && hash != 0 && hash != p.hashBefore)
++            {
++                p.t5 = now;
++                p.hashAtT5 = hash;
++            }
++            if (latched)
++                ++p.latchesAfterT2;
++            const bool done = p.t4 != 0 && p.t5 != 0;
++            const bool gaveUp = p.latchesAfterT2 > 45;
++            if ((done || gaveUp) && p.stage < 5)
++            {
++                p.stage = 5;
++                printPress(p);
++            }
++        }
++    }
++}
++
++#else
++
++namespace ps2_input_latency
++{
++    bool enabled() { return false; }
++    bool legacy() { return false; }
++    bool presentOnTick() { return false; }
++    void attachWindow(void *) {}
++    void detachWindow() {}
++    void waitMessage(unsigned) {}
++    bool sampleKeyboard(uint16_t &) { return false; }
++    void notePad(uint16_t, uint64_t) {}
++    void onLatchBegin(uint64_t) {}
++    void onLatchPixels(const uint8_t *, uint32_t, uint32_t) {}
++    void onSwapReturned() {}
++}
++
++#endif
+diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
+index 51a61e1..d2d5631 100644
+--- a/ps2xRuntime/src/lib/ps2_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_pad.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/ps2_pad.h"
++#include "runtime/ps2_input_latency.h"
+ #include "ps2_host_backend.h"
+ #include <cstring>
+ 
+@@ -91,34 +92,44 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+     // The keyboard always works, also with a gamepad plugged in:
+     // D-pad = WASD, Cross/Circle/Square/Triangle = Down/Right/Left/Up arrows
+     // (or X/C/Z/V), L1/R1 = Q/E, L2/R2 = LeftShift/RightShift, Start = Enter, Select = Tab.
+-    if (IsKeyDown(KEY_W))
+-        clearBit(PAD_UP);
+-    if (IsKeyDown(KEY_S))
+-        clearBit(PAD_DOWN);
+-    if (IsKeyDown(KEY_A))
+-        clearBit(PAD_LEFT);
+-    if (IsKeyDown(KEY_D))
+-        clearBit(PAD_RIGHT);
+-    if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_X) || IsKeyDown(KEY_SPACE))
+-        clearBit(PAD_CROSS);
+-    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_C) || IsKeyDown(KEY_ESCAPE))
+-        clearBit(PAD_CIRCLE);
+-    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_Z) || IsKeyDown(KEY_KP_0))
+-        clearBit(PAD_SQUARE);
+-    if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_V) || IsKeyDown(KEY_KP_1))
+-        clearBit(PAD_TRIANGLE);
+-    if (IsKeyDown(KEY_Q))
+-        clearBit(PAD_L1);
+-    if (IsKeyDown(KEY_E))
+-        clearBit(PAD_R1);
+-    if (IsKeyDown(KEY_LEFT_SHIFT))
+-        clearBit(PAD_L2);
+-    if (IsKeyDown(KEY_RIGHT_SHIFT))
+-        clearBit(PAD_R2);
+-    if (IsKeyDown(KEY_ENTER))
+-        clearBit(PAD_START);
+-    if (IsKeyDown(KEY_TAB))
+-        clearBit(PAD_SELECT);
++    // Fast path: the window thread publishes posted keys and this thread samples
++    // the physical keyboard. Legacy keeps raylib's once-per-frame IsKeyDown.
++    uint16_t hostKeys = 0;
++    if (ps2_input_latency::sampleKeyboard(hostKeys))
++    {
++        btns &= ~hostKeys;
++    }
++    else
++    {
++        if (IsKeyDown(KEY_W))
++            clearBit(PAD_UP);
++        if (IsKeyDown(KEY_S))
++            clearBit(PAD_DOWN);
++        if (IsKeyDown(KEY_A))
++            clearBit(PAD_LEFT);
++        if (IsKeyDown(KEY_D))
++            clearBit(PAD_RIGHT);
++        if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_X) || IsKeyDown(KEY_SPACE))
++            clearBit(PAD_CROSS);
++        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_C) || IsKeyDown(KEY_ESCAPE))
++            clearBit(PAD_CIRCLE);
++        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_Z) || IsKeyDown(KEY_KP_0))
++            clearBit(PAD_SQUARE);
++        if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_V) || IsKeyDown(KEY_KP_1))
++            clearBit(PAD_TRIANGLE);
++        if (IsKeyDown(KEY_Q))
++            clearBit(PAD_L1);
++        if (IsKeyDown(KEY_E))
++            clearBit(PAD_R1);
++        if (IsKeyDown(KEY_LEFT_SHIFT))
++            clearBit(PAD_L2);
++        if (IsKeyDown(KEY_RIGHT_SHIFT))
++            clearBit(PAD_R2);
++        if (IsKeyDown(KEY_ENTER))
++            clearBit(PAD_START);
++        if (IsKeyDown(KEY_TAB))
++            clearBit(PAD_SELECT);
++    }
+ 
+     data[2] = static_cast<uint8_t>(btns & 0xFF);
+     data[3] = static_cast<uint8_t>(btns >> 8);
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 58cca01..db5be56 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -11,6 +11,7 @@
+ #include "Kernel/Stubs/GS.h"
+ #include "Kernel/Stubs/MPEG.h"
+ #include "ps2_host_backend.h"
++#include "runtime/ps2_input_latency.h"
+ #include "ps2_iop_host.h"
+ #include "ps2x/iop/iop_subsystem.h"
+ 
+@@ -391,6 +392,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
+     if (needsLatch)
+     {
++        ps2_input_latency::onLatchBegin(currentTick);
+         rt->gs().latchHostPresentationFrame();
+         s_lastPresentationTick = currentTick;
+         s_hasLatchedInitialFrame = true;
+@@ -476,6 +478,8 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     outWidth = width;
+     outHeight = height;
+     s_hasUploadedFrame = true;
++    if (needsLatch)
++        ps2_input_latency::onLatchPixels(s_scratch.data(), width, height);
+ }
+ 
+ PS2Runtime::PS2Runtime()
+@@ -2393,7 +2397,51 @@ void PS2Runtime::run()
+         }
+         gameThreadFinished.store(true, std::memory_order_release); });
+ 
++    const bool legacyPresent = ps2_input_latency::legacy();
++    // Swap returns inside EndDrawing, before raylib's frame limiter. Stamp t4
++    // against that return: the legacy limiter sleep happens after the stamp.
++    if (!legacyPresent || ps2_input_latency::enabled())
++        SetTargetFPS(0);
++    ps2_input_latency::attachWindow(GetWindowHandle());
++
++    auto presentHostFrame = [this, &frameTex]()
++    {
++        uint32_t presentWidth = FB_WIDTH;
++        uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
++        UploadFrame(frameTex, this, presentWidth, presentHeight);
++        // Keys posted during the readback are dispatched before the swap, so the
++        // game thread can see them for the rest of this guest frame.
++        if (!ps2_input_latency::legacy())
++            PollInputEvents();
++
++        BeginDrawing();
++        ClearBackground(BLACK);
++        const float srcWidth = static_cast<float>(std::max<uint32_t>(1u, presentWidth));
++        const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
++        const float screenWidth = static_cast<float>(GetScreenWidth());
++        const float screenHeight = static_cast<float>(GetScreenHeight());
++        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
++        const float dstWidth = srcWidth * scale;
++        const float dstHeight = srcHeight * scale;
++        const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
++        const Rectangle dstRect{
++            (screenWidth - dstWidth) * 0.5f,
++            (screenHeight - dstHeight) * 0.5f,
++            dstWidth,
++            dstHeight};
++        DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
++        if (m_debugUiInitialized && m_debugUiDrawCallback)
++        {
++            m_debugUiDrawCallback(*this, m_debugUiUserData);
++        }
++        EndDrawing();
++        ps2_input_latency::onSwapReturned();
++    };
++
+     uint64_t tick = 0;
++    uint64_t shownTick = std::numeric_limits<uint64_t>::max();
++    auto nextPaced = std::chrono::steady_clock::now();
++    auto nextIdle = nextPaced + std::chrono::milliseconds(100);
+     while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
+     {
+         PS2_IF_AGRESSIVE_LOGS({
+@@ -2428,31 +2476,47 @@ void PS2Runtime::run()
+ 
+             }
+         });
+-        uint32_t presentWidth = FB_WIDTH;
+-        uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+-        UploadFrame(frameTex, this, presentWidth, presentHeight);
+-
+-        BeginDrawing();
+-        ClearBackground(BLACK);
+-        const float srcWidth = static_cast<float>(std::max<uint32_t>(1u, presentWidth));
+-        const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
+-        const float screenWidth = static_cast<float>(GetScreenWidth());
+-        const float screenHeight = static_cast<float>(GetScreenHeight());
+-        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
+-        const float dstWidth = srcWidth * scale;
+-        const float dstHeight = srcHeight * scale;
+-        const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
+-        const Rectangle dstRect{
+-            (screenWidth - dstWidth) * 0.5f,
+-            (screenHeight - dstHeight) * 0.5f,
+-            dstWidth,
+-            dstHeight};
+-        DrawTexturePro(frameTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+-        if (m_debugUiInitialized && m_debugUiDrawCallback)
++        if (!legacyPresent)
++        {
++            const uint64_t guestTick = m_eeScheduler->currentVSyncTick();
++            const auto now = std::chrono::steady_clock::now();
++            const bool tickDue = ps2_input_latency::presentOnTick() && guestTick != shownTick;
++            const bool clockDue = !ps2_input_latency::presentOnTick() && now >= nextPaced;
++            const bool idleDue = now >= nextIdle;
++            if (!tickDue && !clockDue && !idleDue)
++            {
++                ps2_input_latency::waitMessage(1);
++                PollInputEvents();
++                if (WindowShouldClose())
++                {
++                    RUNTIME_LOG("[run] window close requested, breaking out of loop");
++                    requestStop();
++                    break;
++                }
++                continue;
++            }
++            presentHostFrame();
++            // The tick we just showed, including one that landed during readback,
++            // so a slow present does not tight-loop.
++            shownTick = m_eeScheduler->currentVSyncTick();
++            // Fixed 60 Hz cadence: scheduling from "now" would add the ~1 ms wake granularity every frame and drift
++            // below 60 Hz; re-anchor only after falling a whole frame behind.
++            nextPaced += std::chrono::microseconds(16667);
++            if (nextPaced < now)
++                nextPaced = now + std::chrono::microseconds(16667);
++            nextIdle = now + std::chrono::milliseconds(100);
++        }
++        else
+         {
+-            m_debugUiDrawCallback(*this, m_debugUiUserData);
++            const auto frameStart = std::chrono::steady_clock::now();
++            presentHostFrame();
++            if (ps2_input_latency::enabled())
++            {
++                const auto deadline = frameStart + std::chrono::microseconds(16667);
++                if (std::chrono::steady_clock::now() < deadline)
++                    std::this_thread::sleep_until(deadline);
++            }
+         }
+-        EndDrawing();
+ 
+         if (WindowShouldClose())
+         {
+@@ -2461,6 +2525,7 @@ void PS2Runtime::run()
+             break;
+         }
+     }
++    ps2_input_latency::detachWindow();
+ 
+     requestStop();
+     if (gameThread.joinable())

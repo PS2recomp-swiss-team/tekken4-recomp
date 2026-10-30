@@ -1,0 +1,42 @@
+From 6ad4de8bc273185e22f7dc61a306a8e4155fa6c6 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Thu, 29 Oct 2026 07:19:05 +0100
+Subject: [PATCH] GL backend: same-bytes upload check off by default
+ (PS2X_GL_UPLOAD_SAME=1 turns it on)
+
+With the partial index-texture decodes, hashing every upload twice costs more
+GL time than the decodes it saves (arena, two runs each: GL 9.5-10.2 ms per
+frame with it, 8.5-8.7 without).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+index f7615a4..cc42f67 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp
+@@ -2400,7 +2400,9 @@ struct GSHwBackend::Impl
+     // Tekken 4 port (perf): the game re-uploads many textures every frame with the same bytes. A host->local upload's
+     // texture invalidation waits until the transfer's data is in (the next draw, transfer or present): when the raw
+     // blocks hash as before, nothing changed and the textures stay valid (no re-decode, no revalidation hash).
+-    // Uploads spanning more than kUploadHashMaxBlocks are invalidated right away as before. PS2X_GL_UPLOAD_SAME=0: off.
++    // Uploads spanning more than kUploadHashMaxBlocks are invalidated right away as before. Off by default since the
++    // partial index-texture decodes: hashing every upload twice then cost more GL time than the decodes it saved
++    // (arena: GL 9.5-10.2 ms per frame with it, 8.5-8.7 without). PS2X_GL_UPLOAD_SAME=1: on.
+     static constexpr uint32_t kUploadHashMaxBlocks = 2048u; // 512 KB
+     struct DeferredUpload
+     {
+@@ -2414,7 +2416,7 @@ struct GSHwBackend::Impl
+         static const bool on = []
+         {
+             const char *value = std::getenv("PS2X_GL_UPLOAD_SAME");
+-            return !value || *value != '0';
++            return value && *value == '1';
+         }();
+         return on;
+     }
+-- 
+2.55.0.windows.3
+
