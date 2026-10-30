@@ -47,6 +47,7 @@
 // TEKKEN4_RB_IOPSTATE=1    (phase 3) the IOP is part of every snapshot: re-simulated frames run the IOP like live ones
 //                          (no IOP cut, no gate), the SPU2 output of re-simulated frames is not played. Default in
 //                          netplay; available to test/selfnet/measure (measure: NETHASH lines comparable with netplay).
+// TEKKEN4_RB_AUDIO_TIMELINE=1  mute host SPU2 output by logical resim state, including no-cut frames (default off).
 // TEKKEN4_RB_FRAMEHASH=0   no full-state hash per boundary in rb_frames.log (h=0; default 0 in netplay: 3 ms a frame).
 //
 // Netplay (phase 3, docs/ROLLBACK_PHASE3.md): two game instances over UDP (transport: tekken4_net.cpp), GGPO-style.
@@ -80,6 +81,7 @@
 // The desync hash (and its dump copy) runs on a worker thread. RDRAM snapshots are incremental where the runtime
 // keeps RDRAM under a write watch (PS2X_RDRAM_WRITE_WATCH, PS2X_RB_INCREMENTAL, PS2X_RB_WW_VERIFY=1 checks it).
 // TEKKEN4_NET_HASH_PROFILE=1  host-only hash queue/collection age and snapshot reader-wait diagnostics (default off).
+// TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
 #include "game_overrides.h"
 #include "ps2_log.h"
 #include "ps2_runtime.h"
@@ -176,6 +178,7 @@ namespace tekken4_rollback
         bool sndTrace = false;
         uint64_t netStart = 2100, netDelay = 4, netJitter = 0, netMax = 8;
         bool iopState = false;   // TEKKEN4_RB_IOPSTATE / netplay: the IOP is in every snapshot
+        bool audioTimeline = false; // TEKKEN4_RB_AUDIO_TIMELINE: host output only, independent of render cuts
         bool frameHash = true;   // TEKKEN4_RB_FRAMEHASH
         uint64_t hashEvery = 0;  // NETHASH every N frames (netplay; measure with TEKKEN4_NET_HASH_EVERY)
     };
@@ -763,6 +766,22 @@ namespace tekken4_rollback
                      g_test.cycle, g_test.depth, from, fromFrame, g_frame, ms, ok ? "OK" : "BAD");
     }
 
+    bool frameIsResimulating()
+    {
+        if (g_cfg.mode == Mode::Test)
+            return g_test.resim || g_test.wrong;
+        if (g_cfg.mode == Mode::SelfNet)
+            return g_net.resim;
+#ifdef TEKKEN4_NETPLAY
+        if (g_cfg.mode == Mode::Net)
+        {
+            uint64_t target = 0;
+            return npResimulating(&target);
+        }
+#endif
+        return false;
+    }
+
     // Which cuts the frame about to execute (g_frame) runs with.
     uint32_t cutsForNextFrame()
     {
@@ -1070,6 +1089,40 @@ namespace tekken4_rollback
     constexpr int kMaxLockDelay = 12;
     constexpr auto kVblank = std::chrono::microseconds(16667);
 
+    // Quarter-ms upper-bound buckets through 64 ms, then one overflow bucket. These are host diagnostics only:
+    // never serialized, hashed, used to choose inputs/cuts or used to advance the emulated machine.
+    struct NetCostHistogram
+    {
+        uint64_t bins[258]{}, count = 0;
+        double sum = 0, maximum = 0;
+
+        void add(double ms)
+        {
+            if (!std::isfinite(ms) || ms < 0.0)
+                return;
+            const size_t bin = ms > 64.0 ? 257u : static_cast<size_t>(std::ceil(ms * 4.0));
+            ++bins[bin];
+            ++count;
+            sum += ms;
+            maximum = std::max(maximum, ms);
+        }
+
+        double upper(double fraction) const
+        {
+            if (!count)
+                return 0.0;
+            const uint64_t rank = static_cast<uint64_t>(std::ceil(fraction * static_cast<double>(count)));
+            uint64_t seen = 0;
+            for (size_t bin = 0; bin < 258u; ++bin)
+            {
+                seen += bins[bin];
+                if (seen >= rank)
+                    return bin == 257u ? maximum : static_cast<double>(bin) * 0.25;
+            }
+            return maximum;
+        }
+    };
+
     struct NetplayState
     {
         bool on = false, started = false, failed = false;
@@ -1086,6 +1139,9 @@ namespace tekken4_rollback
         double earlyMs = 4.0;
         bool lazy = true; // re-simulated boundaries no rollback can reach again are not captured (T5 sec. 33.4)
         bool hashProfile = false;
+        bool costProfile = false;
+        NetCostHistogram frameCost[4][5]; // boot / live / cut resim / drawn resim tail; EE busy / GS / VIF / VU / IOP
+        NetCostHistogram captureCost[2], restoreCost, rollbackCost;
         int padDevice = 0;
         std::vector<uint64_t> shots;
         size_t shotNext = 0;
@@ -1392,7 +1448,10 @@ namespace tekken4_rollback
         ps2_rollback::capture(*g_runtime, g_np.ring[slot]);
         g_np.ringFrame[slot] = g_frame;
         g_np.ringCycle[slot] = cycle;
-        g_np.captureMs += msSince(t0);
+        const double ms = msSince(t0);
+        g_np.captureMs += ms;
+        if (g_np.costProfile)
+            g_np.captureCost[g_frame < g_np.rbStart ? 0u : 1u].add(ms);
         ++g_np.captures;
     }
 
@@ -1408,7 +1467,10 @@ namespace tekken4_rollback
         g_np.liveVblank = g_runtime->eeScheduler().nextVblankHostDeadline();
         g_np.rbT0 = std::chrono::steady_clock::now();
         ps2_rollback::restore(*g_runtime, g_np.ring[slot]);
-        g_np.restoreMs += msSince(g_np.rbT0);
+        const double ms = msSince(g_np.rbT0);
+        g_np.restoreMs += ms;
+        if (g_np.costProfile)
+            g_np.restoreCost.add(ms);
         const uint64_t depth = f - g;
         ++g_np.rollbacks;
         if (early)
@@ -1428,7 +1490,10 @@ namespace tekken4_rollback
     void npEndResim()
     {
         g_np.resim = false;
-        g_np.rbCost.push_back(msSince(g_np.rbT0));
+        const double ms = msSince(g_np.rbT0);
+        g_np.rbCost.push_back(ms);
+        if (g_np.costProfile)
+            g_np.rollbackCost.add(ms);
         // the restored scheduler carries the host times of the snapshot's day: put the live schedule back
         const auto now = g_runtime->eeScheduler().nextVblankHostDeadline();
         if (now.time_since_epoch().count() != 0 && g_np.liveVblank.time_since_epoch().count() != 0)
@@ -1585,6 +1650,27 @@ namespace tekken4_rollback
                          g_np.hashes ? g_np.hashQueueMs / static_cast<double>(g_np.hashes) : 0.0, g_np.hashQueueMaxMs,
                          g_np.hashes ? g_np.hashAgeMs / static_cast<double>(g_np.hashes) : 0.0, g_np.hashAgeMaxMs,
                          g_np.hashWaitCalls, g_np.hashReaderWaits, g_np.hashWaitMs, g_np.hashWaitMaxMs);
+        if (g_np.costProfile)
+        {
+            const auto report = [](const char *pass, const char *part, const NetCostHistogram &cost)
+            {
+                if (!cost.count)
+                    return;
+                std::fprintf(g_log, "NETCOST f=%" PRIu64 " pass=%s part=%s n=%" PRIu64
+                                    " avg=%.3f p50_upper=%.3f p90_upper=%.3f p99_upper=%.3f max=%.3f ms\n",
+                             g_frame, pass, part, cost.count, cost.sum / static_cast<double>(cost.count),
+                             cost.upper(0.5), cost.upper(0.9), cost.upper(0.99), cost.maximum);
+            };
+            const char *passes[] = {"boot", "live", "cut", "tail"};
+            const char *parts[] = {"ee_busy", "gs", "vif", "vu", "iop"};
+            for (size_t p = 0; p < 4u; ++p)
+                for (size_t part = 0; part < 5u; ++part)
+                    report(passes[p], parts[part], g_np.frameCost[p][part]);
+            report("boot", "capture", g_np.captureCost[0]);
+            report("boundary", "capture", g_np.captureCost[1]);
+            report("rollback", "restore", g_np.restoreCost);
+            report("rollback", "whole", g_np.rollbackCost);
+        }
     }
 
     void npHandshake()
@@ -1932,6 +2018,8 @@ namespace tekken4_rollback
             g_np.lazy = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_HASH_PROFILE"))
             g_np.hashProfile = parseNumber(v) != 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_COST_PROFILE"))
+            g_np.costProfile = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCALPAD"))
             g_np.localPad = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_PAD"))
@@ -2010,6 +2098,16 @@ namespace tekken4_rollback
         g_lastProfile = prof;
 
         const char *pass = passLabel();
+#ifdef TEKKEN4_NETPLAY
+        if (g_cfg.mode == Mode::Net && g_np.costProfile && wallMs > 0.0 && g_frame > 2u)
+        {
+            const size_t kind = pass[0] == 'R' ? ((executedCuts & ps2_rollback::CutDraw) ? 2u : 3u)
+                                             : (g_frame - 1u < g_np.rbStart ? 0u : 1u);
+            const double costs[] = {eeMs, gsMs, vifMs, vuMs, iopMs};
+            for (size_t part = 0; part < 5u; ++part)
+                g_np.frameCost[kind][part].add(costs[part]);
+        }
+#endif
         uint32_t in1 = scriptedButtons(0, g_frame), in2 = g_cfg.pad2 ? scriptedButtons(1, g_frame) : 0u;
 #ifdef TEKKEN4_NETPLAY
         if (g_cfg.mode == Mode::Net) // the inputs the frame that just ended ran with
@@ -2066,9 +2164,10 @@ namespace tekken4_rollback
         ps2_rollback::setActiveCuts(g_frameCuts);
         startFrameIop((g_frameCuts & ps2_rollback::CutIop) == 0u);
 #ifdef PS2X_ROLLBACK_IOP_STATE
-        // IOP in the state: a re-simulated frame (any cut) runs the IOP, its SPU2 output was already heard live
+        // IOP in the state: keep its bookkeeping running. Host samples from a repeated frame must not be queued
+        // again, even with no render cuts or a drawn tail. The opt-in policy uses the timeline, not the cut mask.
         if (g_cfg.iopState)
-            ps2_rollback::setIopOutputMuted(g_frameCuts != 0u);
+            ps2_rollback::setIopOutputMuted(g_cfg.audioTimeline ? frameIsResimulating() : g_frameCuts != 0u);
 #endif
 
         if (g_wallFrames % 600u == 0u)
@@ -2199,6 +2298,8 @@ namespace tekken4_rollback
         }
         if (const char *v = std::getenv("TEKKEN4_RB_IOPSTATE"))
             g_cfg.iopState = parseNumber(v) != 0;
+        if (const char *v = std::getenv("TEKKEN4_RB_AUDIO_TIMELINE"))
+            g_cfg.audioTimeline = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_RB_FRAMEHASH"))
             g_cfg.frameHash = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_HASH_EVERY"))
@@ -2340,6 +2441,8 @@ namespace tekken4_rollback
                      mode, g_cfg.cuts, g_cfg.cutTail, g_cfg.sndForward ? "forward" : "replay", g_cfg.pad2 ? 1 : 0,
                      g_cfg.netStart, g_cfg.netDelay, g_cfg.netJitter, g_cfg.netMax, g_cfg.iopState ? 1 : 0,
                      g_cfg.frameHash ? 1 : 0, g_cfg.hashEvery);
+        if (g_cfg.audioTimeline)
+            std::fprintf(g_log, "AUDIO_TIMELINE logical-resim mute; iopstate=%d\n", g_cfg.iopState ? 1 : 0);
         if (g_cfg.scripted)
             ps2_stubs::setPadInputProvider(padProvider);
         if (const char *perf = std::getenv("TEKKEN4_PERF_LOG"); !perf || !*perf)

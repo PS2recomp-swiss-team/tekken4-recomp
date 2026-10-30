@@ -1,3 +1,26 @@
+/*
+ * Adapted from T5DR Online's src/netplay/netplay_core.cpp.
+ * MIT License
+ * Copyright (c) 2026 TheWishin and the T5DR Online contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 // Tekken 4 netplay transport -- see tekken4_net.h. Ported from T5DR Online's src/netplay/netplay_core.cpp (the
 // user's own code): the same packet types and redundancy rules, without the lobby/persistent-session/costume/pick
 // parts (character select is played in the game, both pads exchanged like any other frame).
@@ -169,6 +192,10 @@ namespace t4net
             sockaddr_in peer{};
             bool peerKnown = false, envPeer = false;
             bool keyed = false;
+            bool strictHello = false;
+            bool matchDelay = false;
+            uint8_t netVersion = kNetVersion;
+            in_addr expectedPeerIp{}; // original configured peer, unaffected by address rebinding
             uint8_t key[16]{};
             uint32_t session = 0, nonce = 0, peerNonce = 0;
             uint32_t seed = 0;
@@ -308,7 +335,7 @@ namespace t4net
         Hdr makeHdr(uint8_t type)
         {
             State &s = S();
-            return {kMagic, type, kNetVersion, static_cast<uint8_t>(std::max(0, s.delay)),
+            return {kMagic, type, s.netVersion, static_cast<uint8_t>(std::max(0, s.delay)),
                     static_cast<uint8_t>(s.cfg.role == Role::Host ? 0 : 1), s.session, s.nonce};
         }
 
@@ -508,11 +535,23 @@ namespace t4net
                 return;
             const int payloadBytes = n; // keep the authentication tag in the byte count
             std::lock_guard<std::mutex> lk(s.mu);
-            if (h.ver != kNetVersion)
+            if (h.ver != s.netVersion)
             {
-                if (!s.connected && h.type == PKT_HELLO)
+                // A foreign HELLO must prove it belongs to this match before it can cancel it.
+                // T5DR Online fixed the same pre-authentication failure (NETPLAY.md, Connection problems).
+                bool trusted = !s.strictHello;
+                if (s.strictHello && s.keyed && n >= static_cast<int>(sizeof(Hdr)) + kTag)
+                {
+                    uint64_t tag;
+                    std::memcpy(&tag, p + n - kTag, kTag);
+                    trusted = tag == siphash24(s.key, p, static_cast<size_t>(n - kTag));
+                }
+                else if (s.strictHello && !s.keyed)
+                    trusted = s.envPeer ? from.sin_addr.s_addr == s.expectedPeerIp.s_addr
+                                        : s.peerKnown && sameAddr(from, s.peer);
+                if (!s.connected && h.type == PKT_HELLO && trusted)
                     failLocked("build_mismatch", addrText(from) + " speaks netplay protocol v" + std::to_string(h.ver) +
-                                                     ", this game v" + std::to_string(kNetVersion));
+                                                     ", this game v" + std::to_string(s.netVersion));
                 return;
             }
             if (s.keyed)
@@ -530,13 +569,23 @@ namespace t4net
                 }
             }
             const bool fromPeer = s.peerKnown && sameAddr(from, s.peer);
+            const bool trustedSource = s.keyed || !s.envPeer || from.sin_addr.s_addr == s.expectedPeerIp.s_addr;
             if (h.type == PKT_HELLO)
             {
                 if (n < static_cast<int>(sizeof(Hdr) + sizeof(HelloExt)))
                     return;
+                if (s.strictHello && ((!s.connected && !trustedSource) ||
+                                      (s.connected && !s.keyed && !fromPeer)))
+                    return;
                 HelloExt x;
                 std::memcpy(&x, p + sizeof(Hdr), sizeof x);
-                if (x.build && s.cfg.buildId && x.build != s.cfg.buildId)
+                const uint32_t ds = (x.flags >> 8) & 0xFFu;
+                if ((s.strictHello || s.matchDelay) && (h.slot != (s.cfg.role == Role::Host ? 1 : 0) || !h.nonce ||
+                                                        (s.cfg.role == Role::Join && !h.session) ||
+                                                        (ds != 0xFFu && ds > static_cast<uint32_t>(kMaxDelay))))
+                    return; // malformed HELLO cannot establish or restart a session
+                if ((x.build && s.cfg.buildId && x.build != s.cfg.buildId) ||
+                    (s.strictHello && (!x.build || !s.cfg.buildId)))
                 {
                     if (!s.connected)
                     {
@@ -573,7 +622,6 @@ namespace t4net
                     return;
                 }
                 s.peerBuild = x.build;
-                const uint32_t ds = (x.flags >> 8) & 0xFFu;
                 s.peerDelaySetting = ds == 0xFFu ? -1 : static_cast<int>(ds);
                 if (s.cfg.role == Role::Host)
                 {
@@ -600,6 +648,9 @@ namespace t4net
             }
             if (h.type == PKT_REJECT)
             {
+                if (s.strictHello && !s.keyed &&
+                    !(s.envPeer ? from.sin_addr.s_addr == s.expectedPeerIp.s_addr : fromPeer))
+                    return;
                 if (s.connected && h.nonce != s.peerNonce)
                     return;
                 const uint8_t why = n >= static_cast<int>(sizeof(Hdr) + 1) ? p[sizeof(Hdr)] : 0;
@@ -620,6 +671,9 @@ namespace t4net
             {
                 // the joiner's session echo was lost, but its packets carry our session id
                 if (s.cfg.role != Role::Host || h.type == PKT_BYE)
+                    return;
+                // New policies need a checked HELLO first: its build in strict mode, its setting in match mode.
+                if ((s.strictHello || s.matchDelay) && (!s.peerNonce || h.nonce != s.peerNonce || (!s.keyed && !fromPeer)))
                     return;
                 if (s.peerNonce && h.nonce != s.peerNonce)
                     return;
@@ -863,6 +917,15 @@ namespace t4net
         if (s.on || config.role == Role::Off)
             return s.on;
         s.cfg = config;
+        const char *strictHello = std::getenv("TEKKEN4_NET_STRICT_HELLO");
+        s.strictHello = strictHello && std::strcmp(strictHello, "1") == 0;
+        const char *matchDelay = std::getenv("TEKKEN4_NET_DELAY_MATCH");
+        s.matchDelay = matchDelay && std::strcmp(matchDelay, "1") == 0;
+        s.netVersion = s.matchDelay ? (s.strictHello ? kNetVersionStrictDelayMatch : kNetVersionDelayMatch)
+                                   : (s.strictHello ? kNetVersionStrict : kNetVersion);
+        // Normalize before HELLO so the setting compared by both players is the setting sent on the wire.
+        if (s.matchDelay)
+            s.cfg.delaySetting = s.cfg.delaySetting < 0 ? -1 : std::min(s.cfg.delaySetting, kMaxDelay);
         const char *coalesce = std::getenv("TEKKEN4_NET_COALESCE");
         s.coalesce = coalesce && std::strcmp(coalesce, "1") == 0;
         s.lastInputBytes = 0;
@@ -934,6 +997,8 @@ namespace t4net
             s.keyed = true;
         }
         s.envPeer = !config.peer.empty() && parseAddr(config.peer, &s.peer);
+        if (s.envPeer)
+            s.expectedPeerIp = s.peer.sin_addr;
         if (!config.peer.empty() && !s.envPeer)
             note("cannot parse the peer address '%s'", config.peer.c_str());
         s.peerKnown = s.envPeer;
@@ -968,10 +1033,14 @@ namespace t4net
         s.on = true;
         note("netplay %s on %s:%u%s%s, build %016llx, protocol v%u, input delay setting %s%s", config.role == Role::Host ? "host" : "join",
              bind.c_str(), config.port, s.envPeer ? ", peer " : "", s.envPeer ? addrText(s.peer).c_str() : "",
-             static_cast<unsigned long long>(config.buildId), kNetVersion,
-             config.delaySetting < 0 ? "auto" : std::to_string(config.delaySetting).c_str(), s.keyed ? ", keyed" : "");
+             static_cast<unsigned long long>(config.buildId), s.netVersion,
+             s.cfg.delaySetting < 0 ? "auto" : std::to_string(s.cfg.delaySetting).c_str(), s.keyed ? ", keyed" : "");
         if (s.coalesce)
             note("TEKKEN4_NET_COALESCE=1: duplicate boundary INPUT sends coalesced for up to 15 ms; sampled inputs and stalled resends unchanged");
+        if (s.strictHello)
+            note("TEKKEN4_NET_STRICT_HELLO=1: protocol v%u requires nonzero matching build ids and validates HELLO/REJECT identity", s.netVersion);
+        if (s.matchDelay)
+            note("TEKKEN4_NET_DELAY_MATCH=1: protocol v%u uses equal explicit settings or measured-RTT auto, fixed for this session", s.netVersion);
         if (s.sim)
             note("network simulator on this side's sends: one-way %.1f ms +- %.1f ms, %.1f %% loss", config.simLatencyMs,
                  config.simJitterMs, config.simLossPercent);
@@ -1052,6 +1121,15 @@ namespace t4net
     int agreeDelay(uint32_t waitMs)
     {
         State &s = S();
+        if (s.matchDelay && s.cfg.role == Role::Host)
+        {
+            std::lock_guard<std::mutex> lk(s.mu);
+            if (s.decided >= 0)
+            {
+                s.delay = s.decided;
+                return s.delay;
+            }
+        }
         const uint64_t t0 = nowMs();
         if (s.cfg.role == Role::Host)
         {
@@ -1066,18 +1144,26 @@ namespace t4net
             }
             int samples = 0;
             const int rtt = rttMs(&samples);
+            int peerSetting;
+            {
+                std::lock_guard<std::mutex> lk(s.mu);
+                peerSetting = s.peerDelaySetting;
+            }
             int pick;
             std::string why;
-            if (s.cfg.delaySetting >= 0)
+            if (s.cfg.delaySetting >= 0 && (!s.matchDelay || s.cfg.delaySetting == peerSetting))
             {
                 pick = std::min(s.cfg.delaySetting, kMaxDelay);
-                why = "the host's setting";
+                why = s.matchDelay ? "both players set " + std::to_string(pick) : "the host's setting";
             }
             else
             {
                 pick = rtt < 0 ? 2 : rtt <= 60 ? 1 : rtt <= 150 ? 2 : rtt <= 250 ? 3 : 4;
                 why = "auto: round trip " + std::to_string(rtt) + " ms (" + std::to_string(samples) +
                       " samples; 1 frame up to 60 ms, 2 above, 3 above 150, 4 above 250)";
+                if (s.matchDelay)
+                    why += "; settings " + (s.cfg.delaySetting < 0 ? std::string("auto") : std::to_string(s.cfg.delaySetting)) +
+                           " / " + (peerSetting < 0 ? std::string("auto") : std::to_string(peerSetting));
             }
             {
                 std::lock_guard<std::mutex> lk(s.mu);
@@ -1086,7 +1172,7 @@ namespace t4net
                 sendPingLocked();
             }
             note("input delay for this session: %d frame(s) (%s; the peer's setting %s)", pick, why.c_str(),
-                 s.peerDelaySetting < 0 ? "auto" : std::to_string(s.peerDelaySetting).c_str());
+                 peerSetting < 0 ? "auto" : std::to_string(peerSetting).c_str());
             return pick;
         }
         std::unique_lock<std::mutex> lk(s.mu);
