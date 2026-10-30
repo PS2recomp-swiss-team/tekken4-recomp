@@ -1,0 +1,128 @@
+From a3314884648681e33b96b90e5ee08da9a81052b0 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:20:34 +0100
+Subject: [PATCH] EE scheduler: vblank catch-up capped at 2 frames in normal
+ play; idle-loop skip caches the thread record
+
+The vblank chain's host deadlines were anchored at boot: after a stage load or any slow stretch the game ran unpaced
+until the whole backlog was caught up (seconds at 61-80 fps after a load). Normal play now keeps at most
+PS2X_VBLANK_CATCHUP frames of backlog (default 2, 0 = old unlimited chain). Host times only; the EE cycles of all
+events are unchanged, and cycle-ordered (rollback/netplay) mode keeps the boot-anchored chain.
+
+skipIdleIterations runs at every checkpoint once idle pcs are set (now also in normal play, via the game override):
+cache the running thread's record instead of an unordered_map lookup per checkpoint (~1.6% of the game thread).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 1167e4cb47f59a831a0610149f8ddecb54549072)
+---
+ ps2xRuntime/include/runtime/ee_scheduler.h |  2 ++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 35 ++++++++++++++++++++--
+ 2 files changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 1e64c4e..2629dc3 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -533,6 +533,8 @@ private:
+     std::vector<uint32_t> m_idleLoopPcs;
+     uint64_t m_idleSkippedCycles = 0;
+     void skipIdleIterations(uint32_t cycles) noexcept;
++    const GuestThread *m_idleThread = nullptr; // skipIdleIterations: cached record of m_idleThreadId
++    int m_idleThreadId = -1;
+     bool m_mainWakePending = false;
+     bool m_vblankPending = false;
+     EeWaitReason m_mainWakeReason = EeWaitReason::None;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 3381dac..f79a382 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include <algorithm>
+ #include <cassert>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
+@@ -91,6 +92,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     m_rdram = rdram;
+     m_readyQueues = {};
+     m_threads.clear();
++    m_idleThread = nullptr;
+     m_semaphores.clear();
+     m_eventFlags.clear();
+     m_alarms.clear();
+@@ -418,7 +420,14 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ 
+ void EeScheduler::skipIdleIterations(uint32_t cycles) noexcept
+ {
+-    const GuestThread *running = currentThread();
++    // Called at every checkpoint while idle pcs are set: the thread record is cached (map nodes stay put; the cache
++    // is dropped wherever m_threads loses or replaces nodes).
++    if (m_idleThread == nullptr || m_idleThreadId != m_currentThreadId)
++    {
++        m_idleThread = currentThread();
++        m_idleThreadId = m_currentThreadId;
++    }
++    const GuestThread *running = m_idleThread;
+     if (!running || m_pendingEeTimerInterrupts != 0u || m_checkpointPending.load(std::memory_order_acquire))
+         return;
+     if (!running->invocations.empty()) // an interrupt handler runs: not the idle loop
+@@ -527,6 +536,7 @@ int EeScheduler::deleteThread(int id, uint32_t &ownedStack)
+         ownedStack = it->second.stack;
+     }
+     m_threads.erase(it);
++    m_idleThread = nullptr;
+     publishSnapshot();
+     return KE_OK;
+ }
+@@ -575,6 +585,7 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
+     if (deleteThreadRecord && id != kMainThreadId)
+     {
+         m_threads.erase(id);
++        m_idleThread = nullptr;
+     }
+     if (ownedStack != 0u)
+     {
+@@ -1981,11 +1992,28 @@ void EeScheduler::processDueDeadlines()
+         {
+             if (scheduled.event.type == EeEventType::VBlankStart)
+             {
++                // The vblank chain's host times are anchored at boot. When the EE falls far behind them (a load, a
++                // slow stretch), the old chain made the game run unpaced until it had caught up the whole backlog
++                // (seconds of fast-forward after a hitch). Normal play keeps at most PS2X_VBLANK_CATCHUP frames of
++                // backlog (default 2; 0 = unlimited, the old chain). Host times only: the EE cycles of every event
++                // stay the same, and rollback/netplay (cycle-ordered events, own pacing) keep the boot-anchored chain.
++                auto hostBase = scheduled.hostDeadline;
++                static const int catchUpFrames = []
++                {
++                    const char *v = std::getenv("PS2X_VBLANK_CATCHUP");
++                    return v && *v ? std::atoi(v) : 2;
++                }();
++                if (!m_cycleOrderedEvents && catchUpFrames > 0)
++                {
++                    const auto floor = std::chrono::steady_clock::now() - kVBlankPeriod * catchUpFrames;
++                    if (hostBase < floor)
++                        hostBase = floor;
++                }
+                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
+-                              scheduled.hostDeadline + kVBlankDuration,
++                              hostBase + kVBlankDuration,
+                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
+                 scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
+-                              scheduled.hostDeadline + kVBlankPeriod,
++                              hostBase + kVBlankPeriod,
+                               EeEvent{EeEventType::VBlankStart, 0, 0});
+             }
+             processEvent(scheduled.event);
+@@ -2367,6 +2395,7 @@ void EeScheduler::loadState(const SavedState &in)
+     assertExecutor();
+     m_readyQueues = in.readyQueues;
+     m_threads = in.threads;
++    m_idleThread = nullptr;
+     m_semaphores = in.semaphores;
+     m_eventFlags = in.eventFlags;
+     m_alarms = in.alarms;
+-- 
+2.55.0.windows.3
+

@@ -1,0 +1,197 @@
+From 0f8f5932b6e1d182c763c09442bff5916b08f19d Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:20:34 +0100
+Subject: [PATCH] Perf counters: [frames] line per second with present and
+ guest vblank intervals, repeated / skipped frames
+
+PS2X_PERF_STATS also prints every present interval (window swaps) and every guest vblank interval (as the EE processes
+VBlankStart) in 0.1 ms, plus guest frames shown twice / never shown (tools/perf_smooth.py summarises them).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 977945781cc525018034db9ac22fa46259e210da)
+---
+ ps2xRuntime/include/runtime/ps2_perf_stats.h |  6 ++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp   |  2 +
+ ps2xRuntime/src/lib/ps2_perf_stats.cpp       | 74 ++++++++++++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp          |  6 ++
+ 4 files changed, 88 insertions(+)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+index 9d3540d..edb172b 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf_stats.h
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -66,6 +66,12 @@ namespace ps2_perf_stats
+ 
+     // Starts the reporter thread (once) when PS2X_PERF_STATS is set.
+     void start(PS2Runtime &runtime);
++
++    // Frame pacing ("[frames]" line per second when the stats are on): the window thread notes every present with the
++    // guest vsync tick it shows (interval between swaps; a tick shown twice = repeat, ticks never shown = skipped), the
++    // EE thread every VBlankStart it processes (interval between guest frames in host time).
++    void notePresent(uint64_t shownTick) noexcept;
++    void noteVblank() noexcept;
+ }
+ 
+ // Counts one event in g_counters.<name> when the stats are on (an expression, usable after a comma).
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 9ee6175..3381dac 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -4,6 +4,7 @@
+ #include "ps2_runtime.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "ps2_runtime_macros.h"
++#include "runtime/ps2_perf_stats.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -2016,6 +2017,7 @@ void EeScheduler::processEvent(const EeEvent &event)
+         }
+         ps2_input_latency::noteVBlank(m_vsyncTick + 1u);
+         ++m_vsyncTick;
++        ps2_perf_stats::noteVblank();
+         m_vblankPending = static_cast<bool>(m_boundaryHook);
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+index d432eb9..23b34d5 100644
+--- a/ps2xRuntime/src/lib/ps2_perf_stats.cpp
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -5,8 +5,10 @@
+ 
+ #include <cstdio>
+ #include <cstdlib>
++#include <mutex>
+ #include <string>
+ #include <thread>
++#include <vector>
+ 
+ namespace ps2_perf_stats
+ {
+@@ -31,6 +33,62 @@ namespace ps2_perf_stats
+         return on;
+     }
+ 
++    namespace
++    {
++        struct FrameLog
++        {
++            std::mutex mutex;
++            std::vector<uint32_t> presentUs, vblankUs; // intervals in microseconds
++            uint64_t lastPresentNs = 0, lastVblankNs = 0, lastTick = 0;
++            uint32_t repeats = 0, skipped = 0;
++            bool haveTick = false;
++        };
++        FrameLog g_frames;
++
++        std::string joinUs(const std::vector<uint32_t> &v)
++        {
++            std::string s;
++            char buf[16];
++            for (uint32_t us : v)
++            {
++                std::snprintf(buf, sizeof(buf), s.empty() ? "%u" : ",%u", us / 100u); // 0.1 ms units
++                s += buf;
++            }
++            return s;
++        }
++    }
++
++    void notePresent(uint64_t shownTick) noexcept
++    {
++        if (!enabled())
++            return;
++        const uint64_t t = nowNs();
++        std::lock_guard lock(g_frames.mutex);
++        if (g_frames.lastPresentNs)
++            g_frames.presentUs.push_back(static_cast<uint32_t>((t - g_frames.lastPresentNs) / 1000u));
++        g_frames.lastPresentNs = t;
++        if (g_frames.haveTick)
++        {
++            if (shownTick == g_frames.lastTick)
++                ++g_frames.repeats;
++            else if (shownTick > g_frames.lastTick + 1u)
++                g_frames.skipped += static_cast<uint32_t>(shownTick - g_frames.lastTick - 1u);
++        }
++        g_frames.lastTick = shownTick;
++        g_frames.haveTick = true;
++    }
++
++    void noteVblank() noexcept
++    {
++        if (!enabled())
++            return;
++        const uint64_t t = nowNs();
++        std::lock_guard lock(g_frames.mutex);
++        if (g_frames.lastVblankNs)
++            g_frames.vblankUs.push_back(static_cast<uint32_t>((t - g_frames.lastVblankNs) / 1000u));
++        g_frames.lastVblankNs = t;
++    }
++
+     void start(PS2Runtime &runtime)
+     {
+         static std::atomic<bool> started{false};
+@@ -89,6 +147,22 @@ namespace ps2_perf_stats
+                 }
+                 if (!by.empty())
+                     std::printf("[perf] t=%.1f drains_by=%s\n", static_cast<double>(now.t - t0) / 1e9, by.c_str());
++                {
++                    std::vector<uint32_t> pres, vbl;
++                    uint32_t rep = 0, skip = 0;
++                    {
++                        std::lock_guard lock(g_frames.mutex);
++                        pres.swap(g_frames.presentUs);
++                        vbl.swap(g_frames.vblankUs);
++                        rep = g_frames.repeats;
++                        skip = g_frames.skipped;
++                        g_frames.repeats = g_frames.skipped = 0;
++                    }
++                    // intervals in 0.1 ms: p = presents (window swaps), g = guest vblanks; rep/skip = guest frames
++                    // shown twice / never shown (tools/perf_smooth.py)
++                    std::printf("[frames] t=%.1f rep=%u skip=%u p=%s g=%s\n", static_cast<double>(now.t - t0) / 1e9, rep,
++                                skip, joinUs(pres).c_str(), joinUs(vbl).c_str());
++                }
+                 std::fflush(stdout);
+                 last = now;
+             } })
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 6b2b509..98947bb 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -381,6 +381,8 @@ namespace
+     }
+ }
+ 
++// The guest vsync tick of the picture the last present latched (perf counters: repeated / skipped frames).
++static uint64_t s_presentedTick = 0;
+ // Tekken 4 port (PC graphics options, docs/GRAPHICS.md): how the presented picture is scaled to the window.
+ // TEKKEN4_WINDOW_FILTER=area (default: area average when the picture is larger than the window, i.e. supersampling at
+ // a high internal resolution; bilinear when it is smaller) | sharp (sharp bilinear when enlarging: crisp pixels, smooth
+@@ -457,6 +459,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+                 ps2_perf_stats::add(ps2_perf_stats::g_counters.latches);
+             s_lastPresentationTick = currentTick;
+             s_hasLatchedInitialFrame = true;
++            s_presentedTick = currentTick;
+         }
+         if (!needsLatch && s_lastRunaheadLatch != ps2_runahead::latchSequence())
+         {
+@@ -507,6 +510,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+             ps2_perf_stats::add(ps2_perf_stats::g_counters.latches);
+         s_lastPresentationTick = currentTick;
+         s_hasLatchedInitialFrame = true;
++        s_presentedTick = currentTick;
+     }
+     else if (s_hasUploadedFrame && s_lastRunaheadLatch == ps2_runahead::latchSequence())
+     {
+@@ -2663,6 +2667,8 @@ void PS2Runtime::run()
+         EndDrawing(); // polls input too
+         padBackend().publishHostPads();
+         ps2_input_latency::onSwapReturned();
++        ps2_perf_stats::notePresent(s_presentedTick);
++        ps2_input_latency::onSwapReturned();
+     };
+ 
+     uint64_t tick = 0;
+-- 
+2.55.0.windows.3
+

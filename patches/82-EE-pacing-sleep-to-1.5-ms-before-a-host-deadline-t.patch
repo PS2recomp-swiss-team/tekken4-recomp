@@ -1,0 +1,163 @@
+From bb583141a8b32650ef1e9da6627523b551aca8f8 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:51:40 +0100
+Subject: [PATCH] EE pacing: sleep to 1.5 ms before a host deadline, then yield
+ to it; the presenter wakes on each guest vblank
+
+Normal play's host pacing waits (processDueDeadlines, waitForEvent) woke on the 1 ms timer tick, so guest frames came
+15.7-17.5 ms apart on a 60 fps stage. They now wait on the condition variable until PS2X_PACING_SPIN_US (default
+1500, 0 = old plain wait) before the deadline and yield to it. The EE thread sets an event at every VBlankStart that
+the window thread's message wait includes, so the tick-driven present starts at once instead of at the next 1 ms poll.
+Cycle-ordered (rollback/netplay) waits are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 2e19679d941cefb6b37047c104864c0753611367)
+---
+ .../include/runtime/ps2_input_latency.h       |  5 ++-
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    | 43 ++++++++++++++++---
+ ps2xRuntime/src/lib/ps2_input_latency.cpp     | 21 ++++++++-
+ 3 files changed, 61 insertions(+), 8 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_input_latency.h b/ps2xRuntime/include/runtime/ps2_input_latency.h
+index e0a1902..b689935 100644
+--- a/ps2xRuntime/include/runtime/ps2_input_latency.h
++++ b/ps2xRuntime/include/runtime/ps2_input_latency.h
+@@ -19,8 +19,11 @@ namespace ps2_input_latency
+     void attachWindow(void *hwnd);
+     void detachWindow();
+ 
+-    // Window thread. Returns after a queued input message or timeoutMs.
++    // Window thread. Returns after a queued input message, a guest vblank
++    // (notifyTick) or timeoutMs.
+     void waitMessage(unsigned timeoutMs);
++    // EE thread, at every guest VBlankStart: wakes waitMessage.
++    void notifyTick();
+ 
+     // Game thread. Active-high pad bits. False: caller uses raylib IsKeyDown.
+     bool sampleKeyboard(uint16_t &padDownMask);
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index f79a382..f5930da 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -4,6 +4,7 @@
+ #include "ps2_runtime.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "ps2_runtime_macros.h"
++#include "runtime/ps2_input_latency.h"
+ #include "runtime/ps2_perf_stats.h"
+ 
+ #include <algorithm>
+@@ -54,6 +55,33 @@ namespace
+         return std::chrono::seconds(wholeSeconds) + std::chrono::nanoseconds(remainingNanoseconds);
+     }
+ 
++    // Host pacing waits of normal play: a condition-variable wait wakes on the 1 ms timer tick, so guest frames came
++    // 15.7-17.5 ms apart. Sleep until PS2X_PACING_SPIN_US (default 1500, 0 = plain wait) before the deadline, then
++    // yield until it (checking pred under the lock). Returns pred's value at the end, like wait_until.
++    template <typename Pred>
++    bool pacedWaitUntil(std::condition_variable &cv, std::unique_lock<std::mutex> &lock,
++                        std::chrono::steady_clock::time_point deadline, Pred pred)
++    {
++        static const auto spin = []
++        {
++            const char *v = std::getenv("PS2X_PACING_SPIN_US");
++            return std::chrono::microseconds(v && *v ? std::atoi(v) : 1500);
++        }();
++        if (spin.count() <= 0)
++            return cv.wait_until(lock, deadline, pred);
++        if (std::chrono::steady_clock::now() < deadline - spin && cv.wait_until(lock, deadline - spin, pred))
++            return true;
++        while (!pred())
++        {
++            if (std::chrono::steady_clock::now() >= deadline)
++                return false;
++            lock.unlock();
++            std::this_thread::yield();
++            lock.lock();
++        }
++        return true;
++    }
++
+     constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
+     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
+     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
+@@ -1942,9 +1970,9 @@ void EeScheduler::processDueDeadlines()
+ 
+             if (now < pacingDeadline)
+             {
+-                m_eventCv.wait_until(lock, pacingDeadline, [this]()
+-                                     { return !m_events.empty() ||
+-                                              m_stopRequested.load(std::memory_order_acquire); });
++                pacedWaitUntil(m_eventCv, lock, pacingDeadline, [this]()
++                               { return !m_events.empty() ||
++                                        m_stopRequested.load(std::memory_order_acquire); });
+                 m_hostWaitNs += static_cast<uint64_t>(
+                     std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - now).count());
+                 if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
+@@ -2046,6 +2074,7 @@ void EeScheduler::processEvent(const EeEvent &event)
+         ps2_input_latency::noteVBlank(m_vsyncTick + 1u);
+         ++m_vsyncTick;
+         ps2_perf_stats::noteVblank();
++        ps2_input_latency::notifyTick();
+         m_vblankPending = static_cast<bool>(m_boundaryHook);
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+@@ -2223,9 +2252,11 @@ void EeScheduler::waitForEvent()
+ 
+     // Host time the EE thread spends idle (perf counters, rollback profile): measured in every mode.
+     const auto waitStart = std::chrono::steady_clock::now();
+-    const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this]()
+-                                               { return !m_events.empty() ||
+-                                                        m_stopRequested.load(std::memory_order_acquire); });
++    const auto woken = [this]()
++    { return !m_events.empty() || m_stopRequested.load(std::memory_order_acquire); };
++    const bool signaled = m_cycleOrderedEvents || hostDeadline == std::chrono::steady_clock::time_point::max()
++                              ? m_eventCv.wait_until(lock, hostDeadline, woken)
++                              : pacedWaitUntil(m_eventCv, lock, hostDeadline, woken);
+     m_hostWaitNs += static_cast<uint64_t>(
+         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - waitStart).count());
+     if (!signaled)
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+index 02296f8..1d5140f 100644
+--- a/ps2xRuntime/src/lib/ps2_input_latency.cpp
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -353,9 +353,27 @@ namespace ps2_input_latency
+         setTimerPeriod(false);
+     }
+ 
++    namespace
++    {
++        // Auto-reset event the EE thread sets at every guest VBlankStart: the window thread wakes for the present
++        // right away instead of at the next 1 ms poll (present jitter).
++        HANDLE tickEvent()
++        {
++            static const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
++            return event;
++        }
++    }
++
++    void notifyTick()
++    {
++        if (const HANDLE event = tickEvent())
++            SetEvent(event);
++    }
++
+     void waitMessage(unsigned timeoutMs)
+     {
+-        MsgWaitForMultipleObjects(0, nullptr, FALSE, timeoutMs, QS_ALLINPUT);
++        const HANDLE event = tickEvent();
++        MsgWaitForMultipleObjects(event ? 1u : 0u, event ? &event : nullptr, FALSE, timeoutMs, QS_ALLINPUT);
+     }
+ 
+     bool sampleKeyboard(uint16_t &padDownMask)
+@@ -555,6 +573,7 @@ namespace ps2_input_latency
+     void attachWindow(void *) {}
+     void detachWindow() {}
+     void waitMessage(unsigned) {}
++    void notifyTick() {}
+     bool sampleKeyboard(uint16_t &) { return false; }
+     void notePad(uint16_t, uint64_t) {}
+     void openTestPress(uint32_t, uint16_t) {}
+-- 
+2.55.0.windows.3
+
