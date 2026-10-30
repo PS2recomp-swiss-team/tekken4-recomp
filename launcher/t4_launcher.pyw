@@ -592,13 +592,18 @@ class App(tk.Tk):
         self.var_full = tk.BooleanVar(value=s["fullscreen"])
         self.var_aa = tk.BooleanVar(value=s["aa"])
         self.var_prog = tk.BooleanVar(value=s["progressive"])
+        self.var_excl = tk.BooleanVar(value=s["fullscreen_exclusive"])
+        self.var_unlock = tk.BooleanVar(value=s["unlock_all"])
         self.chk = {}
         rows = [("sound", "Sound (music, effects, voices)", self.var_sound, "TEKKEN4_SOUND"),
                 ("debug", "Show the debug panel at start (off for normal play; F1 toggles it in the game)",
                  self.var_debug, "PS2X_DEBUG_PANEL"),
                 ("full", "Start in fullscreen", self.var_full, "fullscreen"),
                 ("aa", "Anti-aliasing", self.var_aa, "aa"),
-                ("prog", "Progressive scan (sharper picture, no interlace flicker)", self.var_prog, "progressive")]
+                ("prog", "Progressive scan (sharper picture, no interlace flicker)", self.var_prog, "progressive"),
+                ("excl", "Exclusive fullscreen (a little less input lag; F11 / Alt+Enter toggle)", self.var_excl,
+                 "TEKKEN4_FULLSCREEN"),
+                ("unlock", "All characters unlocked (your save is not changed)", self.var_unlock, "TEKKEN4_UNLOCK_ALL")]
         for i, (key, text, var, _) in enumerate(rows):
             c = ttk.Checkbutton(f, text=text, variable=var, command=self.on_setting)
             c.grid(row=4 + i, column=0, columnspan=2, sticky="w", pady=4)
@@ -639,6 +644,7 @@ class App(tk.Tk):
                 s["resolution"] = k
         s["sound"], s["debug_panel"] = bool(self.var_sound.get()), bool(self.var_debug.get())
         s["fullscreen"], s["aa"], s["progressive"] = bool(self.var_full.get()), bool(self.var_aa.get()), bool(self.var_prog.get())
+        s["fullscreen_exclusive"], s["unlock_all"] = bool(self.var_excl.get()), bool(self.var_unlock.get())
         self.save()
         self.update_settings_notes()
         self.refresh_play()

@@ -58,6 +58,8 @@ DEFAULTS = {
     "fullscreen": False,       # needs a runtime that knows TEKKEN4_FULLSCREEN (checked in the exe)
     "sound": True,             # TEKKEN4_SOUND
     "debug_panel": False,      # PS2X_DEBUG_PANEL (F1 in the game)
+    "fullscreen_exclusive": False,  # TEKKEN4_FULLSCREEN=exclusive instead of borderless (a little less input lag)
+    "unlock_all": True,        # TEKKEN4_UNLOCK_ALL: all characters unlocked from the start (save file untouched)
     "aa": True,                # TEKKEN4_AA: on = fxaa (the runtime's default), off = off
     "progressive": True,       # TEKKEN4_PROGRESSIVE: the game's own 480p mode (no interlace lines)
     "runtime_exe": "",         # optional: use this ps2EntryRunner.exe instead of the one the build made
@@ -480,7 +482,8 @@ def game_env(s, exe=None):
     env["TEKKEN4_WINDOW_TITLE"] = "TEKKEN 4"
     names, sup = graphics_env_names(), graphics_support(exe)
     if sup["fullscreen"] and s.get("fullscreen"):
-        env[names["fullscreen"]] = "1"
+        env[names["fullscreen"]] = "exclusive" if s.get("fullscreen_exclusive") else "1"
+    env["TEKKEN4_UNLOCK_ALL"] = "1" if s.get("unlock_all", True) else "0"
     if sup["aa"]:
         env[names["aa"]] = "fxaa" if s.get("aa") else "off"
     if sup["progressive"]:
