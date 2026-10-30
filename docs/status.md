@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-29 19:34 (session 7)_
+_Last updated: 2026-10-30 01:36 (session 7, end)_
 
 ## Resume here
 To continue, open Claude Code in this folder and say: "read docs/status.md and continue".
@@ -1160,6 +1160,14 @@ The user pre-authorized publishing every successful milestone on three channels:
     US build's netplay (user: online support focuses on US) running since 19:23 (report logs/grok/netplay-us-report.md).
     User cleanup (no-delete rule): 466 empty zips *-20261029T173145Z.zip in ~/tekken4-saves and ~/tekken4-saves/cloud;
     logs/databin/pal/manifest.json (0 bytes; real one manifest-2.json).
+  - **netplay-hash (US) reviewed; US one-step builds now include netplay** (us-iso aff2a4c): stage_generated.cmd stages
+    runtime/tekken4_net*.cpp/.h and re-touches tekken4_rollback_overrides.cpp (unity batch reused a netplay-off object);
+    build_game.ps1 writes t4net_build.txt (id 40f7094523f87dd6). Pair rtt 150 / jitter 5 / loss 3 / 12000 frames:
+    399 hashes, 0 mismatches, fps window 58-59 (us-iso docs/NETPLAY_CHECK_PABLO_PC.md section 7).
+  - **SESSION END 2026-10-30 (user: stop after the current work, save, explain for TheWishin):** handoff
+    docs/HANDOFF_WISHIN.md (same file on master and us-iso 770c647). Grok idle, nothing running. Next session: read
+    TheWishin's answers to its 4 questions; port PAL features to US by hand (patch 39 first for widescreen) with
+    tools/pal_us_map.py; user play-test of F2 graphics + Controls; console-skill tools need the user's permission to run.
 - **Project repo before (private since 2026-10-21, the user's choice; was public):** https://github.com/Lautreck/tekken4-recomp. Commits use
   `Pablo <8440795+Lautreck@users.noreply.github.com>` (set in this repo's git config; history was rewritten to it
   before the first push). Never push game files, Ghidra DBs, generated C++, BIOS or disc data.
