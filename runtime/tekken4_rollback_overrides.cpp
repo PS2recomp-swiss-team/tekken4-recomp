@@ -64,6 +64,10 @@
 //                          (one-way; give each side half the round trip)
 // TEKKEN4_NET_LOCALPAD=0   the local player is the script only (TEKKEN4_RB_INPUT/FUZZ on the host, TEKKEN4_RB_INPUT2/
 //                          FUZZ2 on the joiner; frame = the frame the input takes effect in); otherwise script | device
+// TEKKEN4_NET_AUTO_VS=1   bounded shared boot script on both pads through normal net input; devices held neutral.
+//                          TEKKEN4_RB_INPUT supplies finite presses (else the pair-test VS menu prefix); no fuzz.
+// TEKKEN4_NET_AUTO_VS_END  logical timeout/release frame, default 1200, range 1..3600; normal input from END+1.
+//                          Select is not detected: timeout logs an unverified handoff. Settings must match peers.
 // TEKKEN4_NET_PAD          the local device: 0 keyboard + first gamepad (default), -1 keyboard, n n-th gamepad
 // TEKKEN4_NET_BUILD        build id (16 hex digits, tools/t4_buildid.py); else t4net_build.txt next to the exe;
 //                          a peer with another id is refused at HELLO
@@ -110,6 +114,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -1138,6 +1143,9 @@ namespace tekken4_rollback
         int lockDelaySetting = -1, lockDelay = 0;
         uint64_t maxPred = 8, rbStart = 600, endFrame = ~0ull, tsFrom = 0;
         bool timeSync = true, localPad = true, dump = false, ended = false;
+        bool autoVs = false, autoVsReleased = false;
+        uint64_t autoVsEnd = 1200;
+        PadScript autoVsScript;
         // phase 3b: early rollback (T5 sec. 27): the boundary may come up to earlyMs before its vblank time; what is
         // already known to be mispredicted is rolled back in that wait, and inputs that arrive during it too
         bool early = true;
@@ -1411,7 +1419,29 @@ namespace tekken4_rollback
     t4net::PadInput npSampleLocal(uint64_t frame)
     {
         t4net::PadInput in;
-        in.buttons = scriptedButtons(g_np.slot, frame);
+        if (g_np.autoVs && frame <= g_np.autoVsEnd)
+        {
+            // Use the EFFECTIVE target frame, including ahead-of-time priming. Repeated boundaries and
+            // rollback read the normal input history; host clocks and live expiry logging cannot alter it.
+            if (frame < g_np.autoVsEnd)
+                for (const ScriptPress &press : g_np.autoVsScript.presses)
+                    if (frame >= press.frame && frame - press.frame < press.hold)
+                        in.buttons |= press.buttons;
+            return in; // END is one neutral release frame, including all axes; no real device or fuzz here.
+        }
+        if (g_np.autoVs)
+        {
+            // A long boot press cannot leak past the bounded window. Later per-slot test presses and fuzz
+            // remain available (the pair harness can continue from select into a fight).
+            const PadScript &script = g_cfg.pads[g_np.slot];
+            for (const ScriptPress &press : script.presses)
+                if (press.frame > g_np.autoVsEnd && frame >= press.frame && frame - press.frame < press.hold)
+                    in.buttons |= press.buttons;
+            if (frame >= script.fuzzFrom && frame < script.fuzzTo)
+                in.buttons |= fuzzButtons(frame, script.salt);
+        }
+        else
+            in.buttons = scriptedButtons(g_np.slot, frame);
         if (g_np.localPad)
         {
             uint16_t buttons = 0xFFFFu;
@@ -1754,6 +1784,12 @@ namespace tekken4_rollback
         {
             std::fprintf(g_log, "NET no session (%s): the game runs offline\n", t4net::failure() ? t4net::failure() : "?");
             g_np.failed = true;
+            if (g_np.autoVs)
+            {
+                ps2_stubs::setPadInputProvider(nullptr);
+                std::fprintf(g_log, "NETAUTO_VS aborted: handshake failed; normal offline input restored\n");
+                std::fflush(g_log);
+            }
             npFinishResult("handshake_failed", g_frame, t4net::failure());
             return;
         }
@@ -1934,6 +1970,14 @@ namespace tekken4_rollback
 
             // ---- live part (at the vblank time): time sync, the prediction window, the late rollback
             g_np.liveDone = f;
+            if (g_np.autoVs && !g_np.autoVsReleased && f >= g_np.autoVsEnd)
+            {
+                g_np.autoVsReleased = true; // logging only: never used to decide target-frame input.
+                std::fprintf(g_log, "NETAUTO_VS timeout f=%" PRIu64 ": select unverified; neutral release at %" PRIu64
+                                    "; normal input restored from %" PRIu64 " (check language/save dialogs)\n",
+                             f, g_np.autoVsEnd, g_np.autoVsEnd + 1u);
+                std::fflush(g_log);
+            }
             npFrameTiming();
             npShots(f);
             t4net::sendNow();
@@ -1978,6 +2022,17 @@ namespace tekken4_rollback
                              need - 1u, lockstep ? "lockstep" : "prediction window");
         }
 
+        if (g_np.autoVs && t4net::peerLost())
+        {
+            // A lost peer may have last sent a held boot press. End the session instead of predicting that
+            // press forever; offline recovery uses the native pad path, never an unsynchronized script.
+            g_np.failed = true;
+            ps2_stubs::setPadInputProvider(nullptr);
+            std::fprintf(g_log, "NETAUTO_VS aborted: peer lost at f=%" PRIu64 "; normal offline input restored\n", f);
+            std::fflush(g_log);
+            npFinishResult("peer_lost", f, t4net::lostReason());
+            return;
+        }
         const uint64_t firstWrong = npScan(f, rc);
         if (firstWrong != ~0ull && npStartRollback(f, firstWrong, false))
             return;
@@ -2042,8 +2097,99 @@ namespace tekken4_rollback
         return 0;
     }
 
+    bool autoVsNumber(const std::string &text, uint64_t &value)
+    {
+        if (text.empty() || text[0] < '0' || text[0] > '9')
+            return false;
+        char *end = nullptr;
+        errno = 0;
+        value = std::strtoull(text.c_str(), &end, 0);
+        return errno != ERANGE && end && *end == '\0';
+    }
+
+    bool npConfigureAutoVs(t4net::Config &c)
+    {
+        if (!g_np.autoVs)
+            return true;
+        if (const char *end = std::getenv("TEKKEN4_NET_AUTO_VS_END"))
+            if (!autoVsNumber(end, g_np.autoVsEnd) || !g_np.autoVsEnd || g_np.autoVsEnd > 3600u)
+            {
+                std::fprintf(g_log, "NETAUTO_VS aborted: AUTO_VS_END must be 1..3600; normal offline input restored\n");
+                return false;
+            }
+        const char *input = std::getenv("TEKKEN4_RB_INPUT");
+        if (input)
+        {
+            // The old script parser is permissive. Do not silently negotiate malformed automation as neutral
+            // input: validate the finite presses here while leaving ordinary RB_INPUT behavior unchanged.
+            const std::string text = input;
+            bool valid = text.empty() || (text.front() != ',' && text.back() != ',' && text.find(",,") == std::string::npos);
+            for (const std::string &item : split(text, ','))
+            {
+                const auto parts = split(item, ':');
+                uint64_t frame = 0, hold = 6;
+                if (parts.size() < 2u || parts.size() > 3u || item.front() == ':' ||
+                    item.find("::") != std::string::npos || item.back() == ':' ||
+                    !autoVsNumber(parts[0], frame) || (parts.size() == 3u && !autoVsNumber(parts[2], hold)) ||
+                    !hold || hold > ~0ull - frame)
+                {
+                    valid = false;
+                    break;
+                }
+                const std::string &buttons = parts[1];
+                if (buttons.front() == '+' || buttons.back() == '+' || buttons.find("++") != std::string::npos)
+                    valid = false;
+                for (const std::string &name : split(buttons, '+'))
+                    if (!buttonByName(name))
+                        valid = false;
+            }
+            if (!valid)
+            {
+                std::fprintf(g_log, "NETAUTO_VS aborted: invalid TEKKEN4_RB_INPUT; normal offline input restored\n");
+                return false;
+            }
+            g_np.autoVsScript.presses = g_cfg.pads[0].presses;
+        }
+        else
+        {
+            // Only the VS-menu prefix of the documented pair script. Later Cross presses select fighters/stage.
+            g_np.autoVsScript.presses = {{500, 6, kBtnStart}, {800, 6, kBtnStart}, {960, 6, kBtnDown},
+                                         {1020, 6, kBtnDown}, {1080, 6, kBtnCross}};
+        }
+        g_np.rbStart = std::max(g_np.rbStart, g_np.autoVsEnd + 1u);
+        // Hash the effective buttons, not spelling/order of the input list. The transport checks the nonzero
+        // fingerprint even with an unknown build ID, before any input is primed. No host time enters this hash.
+        uint64_t fingerprint = 14695981039346656037ull;
+        const auto mix = [&fingerprint](uint64_t value)
+        {
+            for (unsigned i = 0; i < 8u; ++i)
+            {
+                fingerprint ^= static_cast<uint8_t>(value >> (i * 8u));
+                fingerprint *= 1099511628211ull;
+            }
+        };
+        mix(1u); // automation contract version
+        mix(g_np.autoVsEnd);
+        mix(g_np.rbStart);
+        mix(g_cfg.boundaryVblank ? 1u : 0u);
+        mix(g_cfg.boundaryAny ? 1u : 0u);
+        mix(static_cast<uint32_t>(g_cfg.boundaryReason));
+        mix(static_cast<uint32_t>(g_cfg.boundaryId));
+        for (uint64_t frame = 0; frame <= g_np.autoVsEnd; ++frame)
+            mix(npSampleLocal(frame).buttons);
+        c.autoVsFingerprint = fingerprint ? fingerprint : 1u;
+        std::fprintf(g_log, "NETAUTO_VS enabled: source=%s end=%" PRIu64 " normal_from=%" PRIu64
+                            " lockstep_until=%" PRIu64 " fingerprint=%016" PRIx64
+                            "; both pads shared, devices neutral, select unverified\n",
+                     input ? "TEKKEN4_RB_INPUT" : "pair_prefix", g_np.autoVsEnd, g_np.autoVsEnd + 1u,
+                     g_np.rbStart, c.autoVsFingerprint);
+        return true;
+    }
+
     bool npConfigure(PS2Runtime &runtime)
     {
+        const char *autoVs = std::getenv("TEKKEN4_NET_AUTO_VS");
+        g_np.autoVs = autoVs && std::strcmp(autoVs, "1") == 0;
         const char *spec = std::getenv("TEKKEN4_NET");
         if (!spec || !*spec)
             return false;
@@ -2130,6 +2276,8 @@ namespace tekken4_rollback
                 g_np.shots.push_back(parseNumber(item));
             std::sort(g_np.shots.begin(), g_np.shots.end());
         }
+        if (!npConfigureAutoVs(c))
+            return false;
         const size_t ring = static_cast<size_t>(g_np.maxPred + 3u);
         g_np.ring.resize(ring);
         g_np.ringFrame.assign(ring, ~0ull);
@@ -2544,6 +2692,12 @@ namespace tekken4_rollback
         {
             std::fprintf(g_log, "NET not started (TEKKEN4_NET missing or invalid, or the socket failed): netplay off\n");
             g_np.failed = true;
+            if (g_np.autoVs)
+            {
+                g_cfg.scripted = false; // no provider installed yet: retain the normal offline pad path.
+                std::fprintf(g_log, "NETAUTO_VS aborted: netplay configuration failed; normal offline input restored\n");
+                std::fflush(g_log);
+            }
             npFinishResult("configure_failed", g_frame);
         }
 #endif

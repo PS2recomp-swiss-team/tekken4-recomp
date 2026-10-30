@@ -1,8 +1,17 @@
 # Status
 
-_Last updated: 2026-10-31 (Sunday internet-test preparation, source copy only)_
+_Last updated: 2026-10-31 (automatic online Versus boot input, source copy only)_
 
 ## Resume here
+- **Automatic online Versus boot input (2026-10-31, unbuilt):** default-off `TEKKEN4_NET_AUTO_VS=1`
+  exchanges the same bounded menu script for both players through normal netplay input. Both peers must agree
+  on its fingerprint; the window runs in lockstep with real pads suppressed and ends with a neutral release.
+  There is no proven select address: the timeout log explicitly says select is unverified and normal input resumes.
+  `tools/net_pair.ps1 -AutoVs` includes those records in its report. No standalone verify report exists in this copy.
+  Save menus/options are not normalized; earlier pair evidence used empty cards and existing cards can change boot.
+  Details and required fresh/existing-save pair checks: `docs/DIRECTFIGHT_T4.md`. Static review only, no build or game
+  run. A real build, rollback self-test and pair runs must show 0 mismatches; observe actual select/fight progression,
+  neutral real pads during boot and recovery after the timeout. Full direct fight still needs the state probe's map.
 - **Sunday internet test preparation (2026-10-31, unbuilt):** `TEST_ONLINE_DE.txt` covers each player's local ISO build,
   router forwarding or VPN, a 15-minute menu/Versus/rematch check and returning evidence. `tools/make_test_zip.ps1`
   packages scanned source; `tools/net_play.ps1` adds peer build/compiler/ISO comparison, UDP preflight and default-on

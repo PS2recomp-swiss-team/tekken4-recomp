@@ -78,6 +78,7 @@ namespace t4net
         {
             REJ_BUILD = 1,
             REJ_SESSION = 2,
+            REJ_AUTO_VS = 3,
         };
         constexpr uint8_t kNoDelay = 0xFF;
 
@@ -94,6 +95,11 @@ namespace t4net
             uint64_t build;
             uint32_t seed;
             uint32_t flags; // bits 8-15: the sender's input delay setting (0xFF auto)
+        };
+        struct AutoVsHelloExt
+        {
+            HelloExt hello;
+            uint64_t fingerprint;
         };
         struct InputHdr
         {
@@ -356,13 +362,25 @@ namespace t4net
         void sendHelloLocked(const sockaddr_in *to = nullptr)
         {
             State &s = S();
+            const HelloExt hello = {
+                s.cfg.buildId, s.seed,
+                static_cast<uint32_t>((s.cfg.delaySetting < 0 ? 0xFFu : static_cast<uint32_t>(s.cfg.delaySetting)) << 8)};
+            if (s.cfg.autoVsFingerprint)
+            {
+                struct
+                {
+                    Hdr h;
+                    AutoVsHelloExt x;
+                } p = {makeHdr(PKT_HELLO), {hello, s.cfg.autoVsFingerprint}};
+                sendTo(&p, sizeof p, to);
+                s.lastHelloMs = nowMs();
+                return;
+            }
             struct
             {
                 Hdr h;
                 HelloExt x;
-            } p = {makeHdr(PKT_HELLO),
-                   {s.cfg.buildId, s.seed,
-                    static_cast<uint32_t>((s.cfg.delaySetting < 0 ? 0xFFu : static_cast<uint32_t>(s.cfg.delaySetting)) << 8)}};
+            } p = {makeHdr(PKT_HELLO), hello};
             sendTo(&p, sizeof p, to);
             s.lastHelloMs = nowMs();
         }
@@ -549,19 +567,21 @@ namespace t4net
             {
                 // A foreign HELLO must prove it belongs to this match before it can cancel it.
                 // T5DR Online fixed the same pre-authentication failure (NETPLAY.md, Connection problems).
-                bool trusted = !s.strictHello;
-                if (s.strictHello && s.keyed && n >= static_cast<int>(sizeof(Hdr)) + kTag)
+                const bool checkedHello = s.strictHello || s.cfg.autoVsFingerprint;
+                bool trusted = !checkedHello;
+                if (checkedHello && s.keyed && n >= static_cast<int>(sizeof(Hdr)) + kTag)
                 {
                     uint64_t tag;
                     std::memcpy(&tag, p + n - kTag, kTag);
                     trusted = tag == siphash24(s.key, p, static_cast<size_t>(n - kTag));
                 }
-                else if (s.strictHello && !s.keyed)
+                else if (checkedHello && !s.keyed)
                     trusted = s.envPeer ? from.sin_addr.s_addr == s.expectedPeerIp.s_addr
                                         : s.peerKnown && sameAddr(from, s.peer);
                 if (!s.connected && h.type == PKT_HELLO && trusted)
                     failLocked("build_mismatch", addrText(from) + " speaks netplay protocol v" + std::to_string(h.ver) +
-                                                     ", this game v" + std::to_string(s.netVersion));
+                                                     ", this game v" + std::to_string(s.netVersion) +
+                                                     "; check AUTO_VS, STRICT_HELLO and DELAY_MATCH on both PCs");
                 return;
             }
             if (s.keyed)
@@ -584,13 +604,30 @@ namespace t4net
             {
                 if (n < static_cast<int>(sizeof(Hdr) + sizeof(HelloExt)))
                     return;
-                if (s.strictHello && ((!s.connected && !trustedSource) ||
+                if ((s.strictHello || s.cfg.autoVsFingerprint) && ((!s.connected && !trustedSource) ||
                                       (s.connected && !s.keyed && !fromPeer)))
                     return;
                 HelloExt x;
                 std::memcpy(&x, p + sizeof(Hdr), sizeof x);
+                if (s.cfg.autoVsFingerprint)
+                {
+                    if (n < static_cast<int>(sizeof(Hdr) + sizeof(AutoVsHelloExt)))
+                        return;
+                    AutoVsHelloExt boot;
+                    std::memcpy(&boot, p + sizeof(Hdr), sizeof boot);
+                    if (boot.fingerprint != s.cfg.autoVsFingerprint)
+                    {
+                        if (!s.connected)
+                        {
+                            sendRejectLocked(from, REJ_AUTO_VS);
+                            failLocked("auto_vs_mismatch", addrText(from) +
+                                       " has a different AUTO_VS script/window; use the same settings on both PCs");
+                        }
+                        return;
+                    }
+                }
                 const uint32_t ds = (x.flags >> 8) & 0xFFu;
-                if ((s.strictHello || s.matchDelay) && (h.slot != (s.cfg.role == Role::Host ? 1 : 0) || !h.nonce ||
+                if ((s.strictHello || s.matchDelay || s.cfg.autoVsFingerprint) && (h.slot != (s.cfg.role == Role::Host ? 1 : 0) || !h.nonce ||
                                                         (s.cfg.role == Role::Join && !h.session) ||
                                                         (ds != 0xFFu && ds > static_cast<uint32_t>(kMaxDelay))))
                     return; // malformed HELLO cannot establish or restart a session
@@ -658,7 +695,7 @@ namespace t4net
             }
             if (h.type == PKT_REJECT)
             {
-                if (s.strictHello && !s.keyed &&
+                if ((s.strictHello || s.cfg.autoVsFingerprint) && !s.keyed &&
                     !(s.envPeer ? from.sin_addr.s_addr == s.expectedPeerIp.s_addr : fromPeer))
                     return;
                 if (s.connected && h.nonce != s.peerNonce)
@@ -668,6 +705,11 @@ namespace t4net
                 {
                     if (!s.connected)
                         failLocked("build_mismatch", addrText(from) + " refused us: it runs a different build");
+                }
+                else if (why == REJ_AUTO_VS)
+                {
+                    if (!s.connected)
+                        failLocked("auto_vs_mismatch", addrText(from) + " refused us: AUTO_VS script/window differs");
                 }
                 else if (!s.connected)
                     failLocked("rejected", addrText(from) + " is playing another session");
@@ -683,7 +725,8 @@ namespace t4net
                 if (s.cfg.role != Role::Host || h.type == PKT_BYE)
                     return;
                 // New policies need a checked HELLO first: its build in strict mode, its setting in match mode.
-                if ((s.strictHello || s.matchDelay) && (!s.peerNonce || h.nonce != s.peerNonce || (!s.keyed && !fromPeer)))
+                if ((s.strictHello || s.matchDelay || s.cfg.autoVsFingerprint) &&
+                    (!s.peerNonce || h.nonce != s.peerNonce || (!s.keyed && !fromPeer)))
                     return;
                 if (s.peerNonce && h.nonce != s.peerNonce)
                     return;
@@ -992,6 +1035,8 @@ namespace t4net
         s.matchDelay = matchDelay && std::strcmp(matchDelay, "1") == 0;
         s.netVersion = s.matchDelay ? (s.strictHello ? kNetVersionStrictDelayMatch : kNetVersionDelayMatch)
                                    : (s.strictHello ? kNetVersionStrict : kNetVersion);
+        if (s.cfg.autoVsFingerprint)
+            s.netVersion += kNetVersionAutoVsOffset;
         // Normalize before HELLO so the setting compared by both players is the setting sent on the wire.
         if (s.matchDelay)
             s.cfg.delaySetting = s.cfg.delaySetting < 0 ? -1 : std::min(s.cfg.delaySetting, kMaxDelay);
@@ -1117,6 +1162,9 @@ namespace t4net
             note("TEKKEN4_NET_STRICT_HELLO=1: protocol v%u requires nonzero matching build ids and validates HELLO/REJECT identity", s.netVersion);
         if (s.matchDelay)
             note("TEKKEN4_NET_DELAY_MATCH=1: protocol v%u uses equal explicit settings or measured-RTT auto, fixed for this session", s.netVersion);
+        if (s.cfg.autoVsFingerprint)
+            note("TEKKEN4_NET_AUTO_VS=1: protocol v%u requires matching boot script/window fingerprint %016llx",
+                 s.netVersion, static_cast<unsigned long long>(s.cfg.autoVsFingerprint));
         if (s.sim)
             note("network simulator on this side's sends: one-way %.1f ms +- %.1f ms, %.1f %% loss", config.simLatencyMs,
                  config.simJitterMs, config.simLossPercent);

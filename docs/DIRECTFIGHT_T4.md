@@ -1,7 +1,8 @@
 ﻿# Tekken 4: direct-fight discovery and session results
 
-2026-10-30. Source work for **SLUS-20328 v1.00 only**. Default-off diagnostics and an
-incomplete online-session result are implemented; direct fight and a persistent game are plans.
+2026-10-31. Source work for **SLUS-20328 v1.00 only**. Default-off diagnostics, scripted
+online boot navigation and an incomplete online-session result are implemented;
+direct fight and a persistent game are plans.
 Nothing was built or run in this working copy. Existing documents report real-game tests elsewhere;
 those reports are not new validation of these changes.
 
@@ -29,6 +30,83 @@ comments/docs may still be PAL names, including the main-loop name `FUN_001969f8
 does not repair a semantic label. Re-find callers/writers in the actual US build before treating any
 such name as a mode-manager anchor. The unlock constants above are explicitly documented US
 constants; no guessed gameplay address is published here.
+
+## Default-off online boot navigation
+
+`TEKKEN4_NET_AUTO_VS=1` enables a bounded script for a netplay session. Unset or any
+other value is off. It uses the existing pad/input exchange, with the same presses for both
+players on both PCs at the same logical input frames. Real pad input is held neutral in this
+window. This is a first step toward entering VS without menu clicks; it does not call a game
+mode manager or skip a loader by writing memory.
+
+The default script is the existing pair-test prefix:
+
+```
+500:Start,800:Start,960:Down,1020:Down,1080:Cross
+```
+
+Presses last six frames by default, using the existing script parser. The prefix is intended to
+reach VS character select; it omits the later character/stage confirms used by the fight test.
+`TEKKEN4_RB_INPUT` can supply a shared boot script; an explicitly empty value supplies neutral
+input for the whole window. Malformed presses abort netplay configuration with a log line and
+restore native offline input. Invalid auto-VS/netplay configuration, a failed handshake or
+detected peer loss also logs `NETAUTO_VS aborted:` and restores the native pad path, without
+retaining a scripted provider. Peer loss uses the transport's existing timeout; its last remote
+boot press cannot repeat forever after that abort.
+Presses are clipped by the window and cannot extend it. During the window,
+pad 2's separate script, fuzz input and local devices do not affect either player's buttons.
+Both peers must agree on the normalized boot schedule, window, effective rollback start and
+boundary configuration before the handshake can succeed; enabling the switch on only one peer
+or using a different schedule is rejected.
+
+`TEKKEN4_NET_AUTO_VS_END` is the logical handoff frame, default 1200, bounded to 1..3600.
+Frame END supplies neutral input to release the last scripted press; the normal input path
+resumes from END+1. Finite per-slot presses whose start frame is at or before END are discarded
+after handoff, so a long boot press cannot leak into manual select. Later per-slot presses,
+fuzz and local devices use the normal path. Boot runs in lockstep through this handoff even if
+the configured rollback start was earlier. The script depends on logical frames, not elapsed host time, keyboard
+sampling, local slot, or replay count.
+
+There is no proven select/mode field, so reaching the end cannot prove that select was reached.
+The `NETAUTO_VS` timeout log always describes an unverified handoff and restores ordinary
+input. If a save or language dialog consumed a press, players can recover manually after the
+bounded window. The script neither retries indefinitely nor reports a successful select detection.
+The bound is in simulated frames: it cannot resolve an unrelated stalled loader. Peer loss uses
+the separate transport timeout and abort path above.
+
+The maintainer must run the real pair with sound on in three separate cases: fresh/fresh cards,
+matching existing/existing cards, and mixed fresh/existing cards. Require **0 mismatches**,
+visible VS character select without manual menu input, neutral physical pads during boot,
+and working normal input after handoff.
+Continue through character/stage confirms into a VS fight using the existing pair-test tail.
+Mixed cards may expose save-dependent divergence or a different menu path; support for them is
+unproved until this case passes, and automatic input must still release on its scheduled frame.
+Also hold physical buttons during the boot window, use an altered dialog path to check manual
+recovery after the timeout line, and verify mismatched on/off/scripts are rejected. Equal hashes
+alone can mean both games reached the same wrong screen. Compare with the switch off and retain
+the effective script, handoff frame, save identity and both logs. Two physical PCs must repeat the
+checks; no such run was performed here.
+
+Full direct fight remains deferred until the state probe and writer investigation prove T4's
+mode manager, select state and safe transition contract. No new game addresses are guessed.
+
+## Save and boot-path evidence
+
+The older T4 netplay reports used cold, empty memory cards (`docs/ROLLBACK_PHASE3.md`,
+"The loop" and "What is left"). That document and `docs/ROLLBACK_PHASE01.md`, phase 0 item 7,
+explicitly warn that a player's own card changes the boot path. No inspected T4 source or
+document proves the exact fresh-card versus existing-card dialog sequence, or a language/save
+dialog state address. A timed input sequence cannot infer which screen accepted a press.
+
+`tools/net_pair.ps1` keeps `mc0`/`mc1` in each side's run directory. Its directory creation
+does not reset an existing card: reusing a pair name can reuse saves. Use distinct run names
+for fresh-card checks and deliberately prepared, matching existing cards for the old-save checks
+in the real game setup. Do not put those cards in this clean copy.
+
+The current unlock override answers the save-dependent fighter/costume availability callback
+without changing the profile or memory card (`runtime/tekken4_unlock_overrides.cpp`). It does
+not normalize saved options or boot dialogs. A fixed online profile remains future work;
+automatic menu input does not make different personal cards equivalent.
 
 ## Default-off read-only probe
 

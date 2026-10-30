@@ -24,6 +24,13 @@ Suggested: a strong graphics card at a 1440p screen: `TEKKEN4_INTERNAL_RES=auto`
 picture `TEKKEN4_INTERNAL_RES=1440p` + `TEKKEN4_AA=ssaa2+fxaa` (draws at 2880 lines; fps not measured yet). Integrated graphics: auto
 (1080p at most) or native.
 
+## Online boot input
+
+| setting | switch | values | notes |
+|---|---|---|---|
+| Automatic Versus menu input | `TEKKEN4_NET_AUTO_VS` | **off** (unset or anything except 1), 1 | Opt-in netplay boot script through the normal pad path. Both players receive the same agreed presses; real pads are neutral during the bounded boot window. `TEKKEN4_RB_INPUT`, when set, supplies the shared finite script in this window. The deadline logs an unverified handoff: no select/mode address is assumed. Fresh and existing saves may need different menu timing. See `docs/DIRECTFIGHT_T4.md` for the script, limits and required pair checks. Unbuilt and untested in this source copy. |
+| Automatic Versus deadline | `TEKKEN4_NET_AUTO_VS_END` | **1200**, integer 1..3600 | Shared logical input frame: neutral release at this frame, normal input after it. Used only with automatic Versus input; peers must agree on the schedule and deadline. This timeout restores control even if a dialog or menu takes a different path. |
+
 ## What was wrong and what changed
 
 ### 1. Interlace lines -> the game's own progressive mode (runtime/tekken4_overrides.cpp)
