@@ -1,5 +1,9 @@
 # End-to-end player build test (2026-10-30)
 
+This is the historical installed-MSVC checkout result. It does not validate the bundled clang-cl path B scripts.
+No build, download, packaging or game run was performed for that change. The required clean-PC checks are in
+[RELEASE_PATH_B.md](RELEASE_PATH_B.md). Paths below are the original test record, not defaults used by the player zip.
+
 Fresh clone `D:\t4-e2e\tekken4-recomp` (plain `git clone` of D:\tekken4-us, branch us-slus20328, HEAD cbe9004, so only
 committed files; the uncommitted work in D:\tekken4-us was not part of it), ISO `D:\tekken4-us\Tekken 4 (USA).iso`,
 `TEKKEN4_SRC=D:\t4-e2e\tekken4-fork-ps2recomp`, `TEKKEN4_BUILD_DIR=runtime`. The pipeline is `tools\build_game.ps1`.

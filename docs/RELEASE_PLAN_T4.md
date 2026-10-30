@@ -3,6 +3,11 @@
 Status 2026-10-30: plan plus a working prototype of the switch (nothing downloaded, no zip built yet).
 Goal (owner): download one zip, start the launcher, BUILD GAME from your own ISO (no BIOS), play. Like T5DR Online.
 
+Implementation update 2026-10-30: path B scripts now exist. See [RELEASE_PATH_B.md](RELEASE_PATH_B.md) for the current
+workflow, limits and clean-PC gates, [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md) for all inputs, and
+[MSVC_SYSROOT.md](MSVC_SYSROOT.md) for the Microsoft fetcher. No download, build or packaging was run here.
+The prototype copies remain behind the marker switch in the common build entry points. The older inventory and
+"still to do" list below describe the original plan; they are not a claim that a portable release has passed testing.
 ## 1. How T5DR ships its toolchain (read from its launcher/tools/docs, measured values from its docs/RELEASE.md)
 
 * `package_release.py --release` stages a folder and a zip. The player needs no Visual Studio, Git or Python:

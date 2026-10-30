@@ -4,8 +4,10 @@
 # Each instance gets its own run dir (logs\net\play_<side>: memory cards mc0/mc1, rb_frames.log, net.log); two on one
 # PC need different -Pad (keyboard -1 / gamepad 1) so each player has a device. Not a timed run: no run lock.
 param([Alias("Host")][switch]$AsHost, [string]$Join = "", [int]$Port = 7400, [int]$Pad = 0, [string]$Delay = "auto",
-      [int]$Sound = 1, [string]$Sim = "", [string]$RunDir = "", [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net")
+      [int]$Sound = 1, [string]$Sim = "", [string]$RunDir = "", [string]$Src = $env:TEKKEN4_SRC, [string]$BuildDir = $env:TEKKEN4_BUILD_DIR)
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-net" }
+if (-not $BuildDir) { $BuildDir = "net" }
 $side = if ($AsHost) { "host" } elseif ($Join) { "join" } else { throw "give -Host or -Join <ip>" }
 if (-not $RunDir) { $RunDir = Join-Path $root "logs\net\play_$side" }
 New-Item -ItemType Directory -Force $RunDir | Out-Null

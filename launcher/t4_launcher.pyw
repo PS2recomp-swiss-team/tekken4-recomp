@@ -425,6 +425,33 @@ class App(tk.Tk):
         el = time.time() - self.build_started if self.build_started else 0
         self.lbl_prog.config(text="%d%%   %s elapsed" % (int(val * 100), self.fmt_secs(el)))
 
+    def ask_microsoft_terms(self):
+        try:
+            terms = core.microsoft_license_terms()
+        except (OSError, ValueError) as error:
+            messagebox.showerror(TITLE, str(error))
+            return False
+        window = tk.Toplevel(self)
+        window.title("Microsoft build libraries - licence terms")
+        window.transient(self)
+        ttk.Label(window, text="Read these terms before accepting. Acceptance downloads build libraries from Microsoft.",
+                  wraplength=760).pack(padx=12, pady=10)
+        text = ScrolledText(window, width=95, height=25, wrap="word")
+        text.pack(fill="both", expand=True, padx=12)
+        text.insert("1.0", terms)
+        text.config(state="disabled")
+        answer = [False]
+        def accept():
+            answer[0] = True
+            window.destroy()
+        row = ttk.Frame(window)
+        row.pack(pady=12)
+        ttk.Button(row, text="I accept - download build libraries", command=accept).pack(side="left", padx=6)
+        ttk.Button(row, text="Cancel", command=window.destroy).pack(side="left", padx=6)
+        window.grab_set()
+        self.wait_window(window)
+        return answer[0]
+
     def on_build(self, dry):
         if self.build_busy:
             return
@@ -435,6 +462,11 @@ class App(tk.Tk):
             return
         self.settings["iso"] = iso
         self.save()
+        accept_microsoft = False
+        if not dry and core.bundled_toolchain() and not core.sysroot_ready():
+            if not self.ask_microsoft_terms():
+                return
+            accept_microsoft = True
         script = core.build_script()
         if not os.path.isfile(script):
             messagebox.showerror(TITLE, "Missing: %s\nThis folder is incomplete." % script)
@@ -452,7 +484,7 @@ class App(tk.Tk):
         self.log.delete("1.0", "end")
         self.log.config(state="disabled")
         self.refresh_play()
-        cmd = core.build_command(iso, dry)
+        cmd = core.build_command(iso, dry, accept_microsoft)
         self.log_add("> " + " ".join('"%s"' % c if " " in c else c for c in cmd), "step")
         self.tail = core.LogTail(core.BUILD_LOG, lambda a, b: self.post("ninja", a, b))
         self.tail.start()

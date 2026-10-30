@@ -40,7 +40,8 @@ param(
     [switch]$Force,
     [switch]$WhatIf,
     [string[]]$Steps,
-    [string]$LogDir
+    [string]$LogDir,
+    [switch]$AcceptMicrosoftLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,7 +68,7 @@ $VendoredTree = Join-Path $Root 'deps\ps2recomp'
 $IsVendored = Test-Path -LiteralPath (Join-Path $VendoredTree '.t4-vendored.json')
 $Bundle = Join-Path $Root 'toolchain'
 $Portable = Test-Path -LiteralPath (Join-Path $Bundle 'toolchain.json')
-$Tree = if ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC } elseif ($IsVendored) { $VendoredTree } else { Join-Path $Root '..\tekken4-fork-ps2recomp' }
+$Tree = if ($Portable) { $VendoredTree } elseif ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC } elseif ($IsVendored) { $VendoredTree } else { Join-Path $Root '..\tekken4-fork-ps2recomp' }
 $Tree = [IO.Path]::GetFullPath($Tree).TrimEnd('\')
 $BuildDirName = if ($env:TEKKEN4_BUILD_DIR) { $env:TEKKEN4_BUILD_DIR } else { 'runtime' }
 $RecompExe  = Join-Path $Tree 'out\tools\ps2xRecomp\ps2_recomp.exe'
@@ -186,6 +187,7 @@ function Get-TreeHead {
 $Timings = New-Object System.Collections.ArrayList
 $Changed = @{}      # step -> $true when it ran (or would run in a dry run); later steps depend on that
 $Script:Tools = @{}
+if ($Portable) { $Script:Tools['py'] = @{ Exe = (Join-Path $Root 'python\python.exe'); Pre = @(); Version = 'bundled' } }
 $StepNo = 0
 function Step([string]$Name, [string]$Title, [scriptblock]$Body) {
     if ($Steps -notcontains $Name) { return }
@@ -216,11 +218,17 @@ Step 'prereq' 'Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja' {
 
     # PORTABLE: the release zip's own toolchain. Nothing is looked up through vswhere / the registry / PATH.
     if ($Portable) {
+        if ($AcceptMicrosoftLicense -and -not $WhatIf) {
+            $code = Invoke-Logged -File (Join-Path $Root 'python\python.exe') -ArgList @('-I', (Join-Path $PSScriptRoot 'fetch_msvc_sysroot.py'), '--accept-license', '--root', $Root) -Label 'Microsoft headers and libraries'
+            if ($code -ne 0) { throw "Microsoft sysroot fetch failed (exit $code). See the log; no build was started." }
+        }
         $parts = @(
             @('Python (python\python.exe)', (Join-Path $Root 'python\python.exe')),
             @('clang-cl',                   (Join-Path $Bundle 'llvm\bin\clang-cl.exe')),
             @('lld-link',                   (Join-Path $Bundle 'llvm\bin\lld-link.exe')),
             @('llvm-lib',                   (Join-Path $Bundle 'llvm\bin\llvm-lib.exe')),
+            @('llvm-rc',                    (Join-Path $Bundle 'llvm\bin\llvm-rc.exe')),
+            @('llvm-mt',                    (Join-Path $Bundle 'llvm\bin\llvm-mt.exe')),
             @('CMake',                      (Join-Path $Bundle 'cmake\bin\cmake.exe')),
             @('Ninja',                      (Join-Path $Bundle 'ninja\ninja.exe')))
         foreach ($p in $parts) {
@@ -231,7 +239,7 @@ Step 'prereq' 'Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja' {
         $sysroot = (Test-Path -LiteralPath (Join-Path $Bundle 'msvc\include\vector')) -and (Test-Path -LiteralPath (Join-Path $Bundle 'winsdk\include\um\windows.h')) -and (Test-Path -LiteralPath (Join-Path $Bundle 'winsdk\lib\um\x64\kernel32.lib'))
         if ($sysroot) { Say "    MSVC STL/CRT + Windows SDK: $Bundle\msvc, $Bundle\winsdk" }
         else { [void]$missing.Add("The MSVC headers/libraries and the Windows SDK are not in toolchain\msvc and toolchain\winsdk`n      Run: python\python.exe -I tools\fetch_msvc_sysroot.py   (downloads them from Microsoft; you accept Microsoft's licence there)") }
-        if (-not $IsVendored -and -not (Test-Path -LiteralPath (Join-Path $Tree '.git'))) { [void]$missing.Add("deps\ps2recomp is missing (the PS2Recomp source is part of the release zip)") }
+        if (-not $IsVendored) { [void]$missing.Add("deps\ps2recomp is missing (the PS2Recomp source is part of the release zip)") }
         if ($missing.Count -gt 0) {
             Say ''
             Say 'Missing parts of the bundled toolchain:'
@@ -397,11 +405,25 @@ Step 'extract' 'SYSTEM.CNF, SLUS_203.28, IRX\IOPRP243.IMG, TEKKEN\DATA.BIN -> ga
 
 # ================================================================ PS2Recomp tree
 Step 'fork' "PS2Recomp tree at $PinnedCommit + patches\*.patch ($Tree)" {
-    if (Test-Path -LiteralPath (Join-Path $Tree '.t4-vendored.json')) {   # PORTABLE: shipped pre-patched, no Git
+    if (-not $Portable -and (Test-Path -LiteralPath (Join-Path $Tree '.t4-vendored.json'))) {
         Say "    vendored PS2Recomp source (patches already applied): $Tree"
         return 'vendored'
     }
     $patches = @(Get-ChildItem -LiteralPath (Join-Path $Root 'patches') -Filter '*.patch' -File | Sort-Object Name)
+    if ($Portable) {
+        $markerPath = Join-Path $Tree '.t4-vendored.json'
+        if (-not (Test-Path -LiteralPath $markerPath)) { throw 'The release is missing its vendored PS2Recomp marker.' }
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+        if ([string]$marker.head -ne 'eb8688b2fd191129f103a39543002c005b33409c') { throw 'Wrong vendored PS2Recomp revision.' }
+        if ($patches.Count -eq 0 -or @($marker.patches).Count -ne $patches.Count) { throw 'Incomplete vendored patch receipt.' }
+        foreach ($patch in $patches) {
+            $entry = @($marker.patches | Where-Object { $_.name -eq $patch.Name })
+            if ($entry.Count -ne 1 -or $entry[0].sha256 -ne (Get-FileHash -LiteralPath $patch.FullName -Algorithm SHA256).Hash.ToLower()) {
+                throw "Vendored patch receipt does not match $($patch.Name). Extract the release again."
+            }
+        }
+        return 'vendored (no Git)'
+    }
     if ($patches.Count -eq 0) { throw 'patches\*.patch not found (incomplete checkout of this repo?)' }
     $inProgress = [bool](Get-StateValue 'fork' 'inProgress') -and ((Get-StateValue 'fork' 'tree') -eq $Tree)
     $exists = Test-Path -LiteralPath (Join-Path $Tree '.git')

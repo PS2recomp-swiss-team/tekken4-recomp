@@ -96,9 +96,23 @@ def toolchain(build):
 def code_id(src, tool_lines):
     h = hashlib.sha1()
     h.update(b"toolchain:" + "\n".join(tool_lines).encode())
-    h.update(b"tree:" + git(src, "rev-parse", "HEAD^{tree}").strip())
-    # uncommitted edits of the tree, without the staged generated code / game modules (hashed below)
-    h.update(b"diff:" + git(src, "diff", "HEAD", "--", ".", ":(exclude)ps2xRuntime/src/runner"))
+    marker = os.path.join(src, ".t4-vendored.json")
+    if os.path.isfile(marker):
+        # Released sources have no Git. Hash actual source contents, never absolute paths or build outputs.
+        h.update(b"vendored:" + sha1_text(marker).encode())
+        for folder, dirs, files in os.walk(src):
+            dirs[:] = sorted(d for d in dirs if d not in (".git", "out", "build", "generated", "__pycache__"))
+            for name in sorted(files):
+                path = os.path.join(folder, name)
+                rel = os.path.relpath(path, src).replace("\\", "/")
+                if rel.startswith("ps2xRuntime/src/runner/"):
+                    continue  # generated code is identified by the ELF; overrides are hashed below
+                if name.endswith((".cpp", ".c", ".h", ".hpp", ".inl", ".cmake", ".txt")):
+                    h.update(b"source:" + rel.encode() + b":" + sha1_text(path).encode())
+    else:
+        h.update(b"tree:" + git(src, "rev-parse", "HEAD^{tree}").strip())
+        # uncommitted edits of the tree, without the staged generated code / game modules (hashed below)
+        h.update(b"diff:" + git(src, "diff", "HEAD", "--", ".", ":(exclude)ps2xRuntime/src/runner"))
     for path in sorted(glob.glob(os.path.join(ROOT, "patches", "*.patch"))):
         h.update(b"patch:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     for pattern in ("*.toml", "*.csv"):

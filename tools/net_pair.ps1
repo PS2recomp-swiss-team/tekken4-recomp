@@ -12,6 +12,8 @@ param([string]$Name = "", [int]$Rtt = 0, [double]$Jitter = 0, [double]$Loss = 0,
       [string]$Env = "", [string]$HostEnv = "", [string]$JoinEnv = "", [string]$Shots = "", [int]$Port = 7400,
       [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net", [switch]$NoLock, [switch]$TimingDiag)
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-net" }
+if (-not $BuildDir) { $BuildDir = "net" }
 if (-not $Name) { $Name = "pair_" + (Get-Date -Format "yyyyMMdd_HHmmss") }
 $base = Join-Path $root "logs\net\$Name"
 $exe = Join-Path $Src "out\$BuildDir\ps2xRuntime\ps2EntryRunner.exe"
