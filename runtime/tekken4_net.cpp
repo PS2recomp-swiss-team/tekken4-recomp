@@ -179,6 +179,15 @@ namespace t4net
             bool connected = false, lost = false, sentInputs = false, peerSentInputs = false;
             std::string failReason, lostReason;
             uint64_t startMs = 0, lastRxMs = 0, lastSendMs = 0, lastHelloMs = 0, lastPingMs = 0, connectMs = 0;
+            // TEKKEN4_NET_COALESCE=1: only redundant sendNow calls may be skipped. Protected by mu.
+            bool coalesce = false;
+            std::array<uint8_t, sizeof(Hdr) + sizeof(InputHdr) + kMaxBatch * sizeof(WireIn) + kHashes * sizeof(WireHash)> lastInput{};
+            size_t lastInputBytes = 0;
+            sockaddr_in lastInputPeer{};
+            uint32_t lastInputPeerNonce = 0;
+            uint64_t lastInputMs = 0;
+            uint64_t coalesced = 0;
+            bool coalesceReported = false;
             uint32_t base = 0;         // frames < base are neutral (both sides)
             Ring local, remote;
             uint32_t localMax = 0, remoteContig = 0, peerAck = 0;
@@ -349,7 +358,7 @@ namespace t4net
         }
 
         // Every input the peer may still need (from its ack, at least the last 8), plus our latest hashes.
-        void sendInputsLocked()
+        void sendInputsLocked(bool allowCoalesce = false)
         {
             State &s = S();
             if (!s.connected || s.lost)
@@ -389,8 +398,25 @@ namespace t4net
                     ++nh;
                 }
             ih->nhash = static_cast<uint8_t>(nh);
-            sendTo(buf, static_cast<int>(reinterpret_cast<uint8_t *>(wh + nh) - buf));
+            const size_t bytes = static_cast<size_t>(reinterpret_cast<uint8_t *>(wh + nh) - buf);
+            if (s.coalesce && allowCoalesce && s.lastInputBytes == bytes &&
+                s.lastInputPeerNonce == s.peerNonce && sameAddr(s.lastInputPeer, s.peer) &&
+                std::memcmp(s.lastInput.data(), buf, bytes) == 0 && nowMs() - s.lastInputMs < 15)
+            {
+                if (s.coalesced < UINT64_MAX)
+                    ++s.coalesced;
+                return; // keep the resend deadline: a skipped call is not a send attempt
+            }
+            sendTo(buf, static_cast<int>(bytes));
             s.lastSendMs = nowMs();
+            if (s.coalesce)
+            {
+                std::memcpy(s.lastInput.data(), buf, bytes);
+                s.lastInputBytes = bytes;
+                s.lastInputPeer = s.peer;
+                s.lastInputPeerNonce = s.peerNonce;
+                s.lastInputMs = s.lastSendMs;
+            }
             s.sentInputs = s.sentInputs || count > 0;
         }
 
@@ -837,6 +863,11 @@ namespace t4net
         if (s.on || config.role == Role::Off)
             return s.on;
         s.cfg = config;
+        const char *coalesce = std::getenv("TEKKEN4_NET_COALESCE");
+        s.coalesce = coalesce && std::strcmp(coalesce, "1") == 0;
+        s.lastInputBytes = 0;
+        s.coalesced = 0;
+        s.coalesceReported = false;
         s.startMs = nowMs();
         s.log = std::fopen(config.logPath.c_str(), "w");
         // Two games on one PC (tests, a local session): Windows 11 runs a process without the foreground window with
@@ -939,6 +970,8 @@ namespace t4net
              bind.c_str(), config.port, s.envPeer ? ", peer " : "", s.envPeer ? addrText(s.peer).c_str() : "",
              static_cast<unsigned long long>(config.buildId), kNetVersion,
              config.delaySetting < 0 ? "auto" : std::to_string(config.delaySetting).c_str(), s.keyed ? ", keyed" : "");
+        if (s.coalesce)
+            note("TEKKEN4_NET_COALESCE=1: duplicate boundary INPUT sends coalesced for up to 15 ms; sampled inputs and stalled resends unchanged");
         if (s.sim)
             note("network simulator on this side's sends: one-way %.1f ms +- %.1f ms, %.1f %% loss", config.simLatencyMs,
                  config.simJitterMs, config.simLossPercent);
@@ -1180,7 +1213,7 @@ namespace t4net
     {
         State &s = S();
         std::lock_guard<std::mutex> lk(s.mu);
-        sendInputsLocked();
+        sendInputsLocked(true);
         compareHashesLocked();
     }
 
@@ -1250,6 +1283,12 @@ namespace t4net
         if (!s.on)
             return;
         std::lock_guard<std::mutex> lk(s.mu);
+        if (s.coalesce && !s.coalesceReported)
+        {
+            note("NETCOALESCE skipped=%llu (identical boundary INPUT calls; not send attempts)",
+                 static_cast<unsigned long long>(s.coalesced));
+            s.coalesceReported = true;
+        }
         if (!s.connected || s.sock == INVALID_SOCKET)
             return;
         const Hdr h = makeHdr(PKT_BYE);

@@ -79,6 +79,7 @@
 // TEKKEN4_NET_LAZY=0       capture every re-simulated boundary (default: not the ones no rollback can reach again)
 // The desync hash (and its dump copy) runs on a worker thread. RDRAM snapshots are incremental where the runtime
 // keeps RDRAM under a write watch (PS2X_RDRAM_WRITE_WATCH, PS2X_RB_INCREMENTAL, PS2X_RB_WW_VERIFY=1 checks it).
+// TEKKEN4_NET_HASH_PROFILE=1  host-only hash queue/collection age and snapshot reader-wait diagnostics (default off).
 #include "game_overrides.h"
 #include "ps2_log.h"
 #include "ps2_runtime.h"
@@ -1084,6 +1085,7 @@ namespace tekken4_rollback
         bool early = true;
         double earlyMs = 4.0;
         bool lazy = true; // re-simulated boundaries no rollback can reach again are not captured (T5 sec. 33.4)
+        bool hashProfile = false;
         int padDevice = 0;
         std::vector<uint64_t> shots;
         size_t shotNext = 0;
@@ -1119,6 +1121,11 @@ namespace tekken4_rollback
                  earlyRollbacks = 0, lazySkips = 0, over20 = 0, over34 = 0, timedFrames = 0;
         double stallMs = 0, lockWaitMs = 0, correctionMs = 0, rebaseMs = 0, restoreMs = 0, captureMs = 0, hashMs = 0,
                earlyWaitMs = 0;
+        // Host-only diagnostics, written/read by the EE thread; never part of a snapshot or hash.
+        size_t hashQueuePeak = 0;
+        uint64_t hashWaitCalls = 0, hashReaderWaits = 0;
+        double hashWaitMs = 0, hashWaitMaxMs = 0, hashQueueMs = 0, hashQueueMaxMs = 0,
+               hashAgeMs = 0, hashAgeMaxMs = 0;
         std::vector<double> rbCost, frameTimes;
         std::chrono::steady_clock::time_point lastLive{}, winT0{}, runT0{};
         uint64_t winFrames = 0, runFrames = 0;
@@ -1137,6 +1144,8 @@ namespace tekken4_rollback
         size_t slot = 0;
         NetHash h;
         double ms = 0;
+        std::chrono::steady_clock::time_point submitted{}; // profiling only, passed with the job under g_hw.mu
+        double queueMs = 0;
         std::vector<uint8_t> ram; // desync dump copy
     };
     struct HashWorker
@@ -1165,6 +1174,8 @@ namespace tekken4_rollback
                 g_hw.busySlot = static_cast<long>(job.slot);
             }
             const auto t0 = std::chrono::steady_clock::now();
+            if (g_np.hashProfile)
+                job.queueMs = std::chrono::duration<double, std::milli>(t0 - job.submitted).count();
             const ps2_rollback::Snapshot &snap = g_np.ring[job.slot];
             job.h = netHashOf(snap, job.cycle);
             if (g_np.dump)
@@ -1195,22 +1206,41 @@ namespace tekken4_rollback
         job.frame = frame;
         job.slot = slot;
         job.cycle = cycle;
+        if (g_np.hashProfile)
+            job.submitted = std::chrono::steady_clock::now();
         g_hw.todo.push_back(std::move(job));
+        if (g_np.hashProfile)
+            g_np.hashQueuePeak = std::max(g_np.hashQueuePeak, g_hw.todo.size() + (g_hw.busySlot >= 0 ? 1u : 0u));
         g_hw.cv.notify_one();
     }
 
     // Before a ring slot is written again: no hash job may still read it.
     void hashWaitSlot(size_t slot)
     {
+        const auto t0 = g_np.hashProfile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         std::unique_lock<std::mutex> lk(g_hw.mu);
-        g_hw.doneCv.wait(lk, [slot]
-                         {
-                             if (g_hw.busySlot == static_cast<long>(slot))
-                                 return false;
-                             for (const HashJob &j : g_hw.todo)
-                                 if (j.slot == slot)
-                                     return false;
-                             return true; });
+        const auto ready = [slot]
+        {
+            if (g_hw.busySlot == static_cast<long>(slot))
+                return false;
+            for (const HashJob &j : g_hw.todo)
+                if (j.slot == slot)
+                    return false;
+            return true;
+        };
+        if (g_np.hashProfile)
+        {
+            ++g_np.hashWaitCalls;
+            if (!ready())
+                ++g_np.hashReaderWaits;
+        }
+        g_hw.doneCv.wait(lk, ready);
+        if (g_np.hashProfile)
+        {
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            g_np.hashWaitMs += ms;
+            g_np.hashWaitMaxMs = std::max(g_np.hashWaitMaxMs, ms);
+        }
     }
 
     // Finished hashes: to the transport (compared with the peer's) and the log.
@@ -1223,6 +1253,14 @@ namespace tekken4_rollback
         }
         for (HashJob &job : done)
         {
+            if (g_np.hashProfile)
+            {
+                const double age = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - job.submitted).count();
+                g_np.hashQueueMs += job.queueMs;
+                g_np.hashQueueMaxMs = std::max(g_np.hashQueueMaxMs, job.queueMs);
+                g_np.hashAgeMs += age;
+                g_np.hashAgeMaxMs = std::max(g_np.hashAgeMaxMs, age);
+            }
             g_np.hashMs += job.ms;
             ++g_np.hashes;
             t4net::pushHash(static_cast<uint32_t>(job.frame), job.h.total);
@@ -1538,6 +1576,15 @@ namespace tekken4_rollback
                      cs.captures ? static_cast<double>(cs.capturePages) / static_cast<double>(cs.captures) : 0.0,
                      cs.restores ? static_cast<double>(cs.restorePages) / static_cast<double>(cs.restores) : 0.0,
                      cs.verifyMismatchPages ? (" VERIFY MISMATCH PAGES " + std::to_string(cs.verifyMismatchPages)).c_str() : "");
+        if (g_np.hashProfile)
+            std::fprintf(g_log,
+                         "NETHASH_PROFILE f=%" PRIu64 " collected=%" PRIu64 " pending peak=%zu; queue avg %.3f max %.3f ms;"
+                         " submit-to-collect avg %.3f max %.3f ms; slot checks=%" PRIu64 " reader waits=%" PRIu64
+                         " slot call total %.3f max %.3f ms\n",
+                         g_frame, g_np.hashes, g_np.hashQueuePeak,
+                         g_np.hashes ? g_np.hashQueueMs / static_cast<double>(g_np.hashes) : 0.0, g_np.hashQueueMaxMs,
+                         g_np.hashes ? g_np.hashAgeMs / static_cast<double>(g_np.hashes) : 0.0, g_np.hashAgeMaxMs,
+                         g_np.hashWaitCalls, g_np.hashReaderWaits, g_np.hashWaitMs, g_np.hashWaitMaxMs);
     }
 
     void npHandshake()
@@ -1883,6 +1930,8 @@ namespace tekken4_rollback
             g_np.earlyMs = std::max(0.0, std::min(12.0, std::atof(v)));
         if (const char *v = std::getenv("TEKKEN4_NET_LAZY"))
             g_np.lazy = parseNumber(v) != 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_HASH_PROFILE"))
+            g_np.hashProfile = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCALPAD"))
             g_np.localPad = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_PAD"))

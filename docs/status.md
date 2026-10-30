@@ -3,6 +3,11 @@
 _Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps the US line)_
 
 ## Resume here
+- **Rollback source follow-up (2026-10-30, unbuilt):** two default-OFF switches in `runtime/`:
+  `TEKKEN4_NET_COALESCE=1` skips identical boundary INPUT sends within 15 ms while preserving sampled inputs
+  and retries; `TEKKEN4_NET_HASH_PROFILE=1` reports worker queue/collection age and snapshot reader waits.
+  Hash coverage, wire layout and protocol version unchanged. Static review only; no build/game/network run.
+  Switches, limits and required rollback self-test (0 mismatches) then pair checks: `docs/ROLLBACK_NEXT.md`.
 - **NETSUMMARY payload bytes (2026-10-30, source copy only):** expose the existing sent-byte count and add received bytes
   for the counted packets, including authentication tags, excluding IP/UDP headers. Sends count before simulated loss;
   receives follow packetsIn (HELLO/REJECT excluded). Wire format, protocol version, scheduling and state hashes unchanged.

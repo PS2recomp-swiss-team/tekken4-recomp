@@ -1,8 +1,9 @@
 # Rollback next: the gaps a player will feel
 
-Status 2026-10-30. Read-only comparison with the permitted T5DR Online source. Only this document was added.
-No build, game, network test or patch application was run. No T5DR code was copied. References below name the
-files in these two copies, not the other worktrees mentioned by old reports.
+Status 2026-10-30. The original read-only comparison added only this document. The follow-up source edits below
+add two opt-in runtime items. No build, game, network test or patch application was run. No T5DR code was copied
+or consulted for those edits. Comparison references below describe the earlier source, not revised line numbers
+or the other worktrees mentioned by old reports.
 
 The order is player impact: a steady, responsive and correct fight first, less waiting between fights next,
 then recording and watching. It is a proposed priority, not a measured ranking of player complaints.
@@ -443,11 +444,69 @@ Patch line numbers mean lines in the patch file, not line numbers in an unavaila
 
 ## Work that is safe in this copy, and the next proof
 
-Only this file is authorized to change now. "Safe here" above means documentation, source review, arithmetic,
-contracts and synthetic test specifications that need no game/runtime build. It does not authorize changes to
-other files. A later explicitly scoped task could add independent log-analysis or format-validation tooling,
-using synthetic input and writing no game data. A source-only runtime edit is reviewable here but cannot be
-declared working, deterministic, faster or audibly better without a real build and game evidence.
+The original comparison authorized only this document. The follow-up task explicitly authorizes small runtime
+edits behind separate default-OFF switches, documented below. "Safe here" in the comparison describes its
+original review scope, not validation of those edits. A source-only runtime edit is reviewable here but cannot
+be declared working, deterministic, faster or audibly better without a real build and game evidence.
+
+### Source follow-up: two small opt-in items (2026-10-30)
+
+Both switches default OFF. Keep them unset (or `0`) for the previous runtime behaviour. New code is confined
+to `runtime/`; no patches, game addresses, simulated state, hash coverage or wire fields were changed.
+`kNetVersion` stays 1 because the existing packet layout and meaning are unchanged. No T5DR code was copied.
+
+1. **Hash-worker visibility, items 1/9/10: `TEKKEN4_NET_HASH_PROFILE=1`.** In
+   `runtime/tekken4_rollback_overrides.cpp`, add bounded aggregate diagnostics beside the existing periodic/final
+   summaries in `rb_frames.log`: `NETHASH_PROFILE` reports collected jobs, pending peak (queued + active), queue
+   wait avg/max, submit-to-collect age avg/max, slot checks, reader waits and total/max slot-call time. Slot-call
+   timing starts before mutex acquisition; reader waits count slots still owned by a queued/active reader after
+   acquiring the mutex. These calls were excluded from capture timing. Queue/age averages cover collected jobs;
+   pending peak excludes completed jobs. Submit-to-collect is local availability, not peer desync-detection delay.
+   Host clock values feed these diagnostics only. Existing reader ownership and wait predicate are retained.
+   This measures a possible hitch source; it does not itself reduce copying or hash work.
+
+   **Compile confidence:** high from source review of existing types, includes, format arguments and worker
+   ownership; uncompiled. No per-job logs or growing sample storage were added. Worker timestamps/results use
+   the existing job/mutex handoff; aggregate counters belong to the EE thread. Profiling can add overhead.
+
+   **Test outside this copy:** first run the sound-on rollback self-test with `TEKKEN4_RB_MODE=test`,
+   `TEKKEN4_RB_IOPSTATE=1` and `TEKKEN4_RB_TEST="start=600,every=30,depth=8,mispredict=1"`; require **0 mismatches**,
+   including restore checks. The offline self-test does not exercise this netplay-only hash worker.
+   Then run a sound-on pair, one game per PC, OFF/ON with identical build/seed/scripts/settings. Require zero
+   hash mismatches and agreement with the offline reference. Cover depths 1/2/4/8 and repeated ring wraps; use
+   `TEKKEN4_NET_HASH_EVERY=1` and desync dumps in a separate stress pass to exercise worker backlog. Verify that
+   profile lines are absent OFF, queue/age/wait values are finite and nonnegative ON, reader waits remain safe
+   under backlog, and covered RDRAM/IOP/cycle forced differences are still detected. Report profiling overhead
+   and slot waits separately from capture averages; a short run with zero reader waits does not prove no risk.
+
+2. **Redundant boundary sends, item 8: `TEKKEN4_NET_COALESCE=1`.** In `runtime/tekken4_net.cpp`, suppress only
+   an identical `sendNow()` INPUT attempt less than 15 ms after the previous INPUT attempt. Compare the complete
+   serialized packet, its length, destination and peer nonce. Immediate `setLocal()` sends, the tick retry and
+   `waitRemote()` retry remain unconditional. Changed inputs, acknowledgements, hashes, lead or delay send at
+   once. An identical `sendNow()` after 15 ms also sends, even if all inputs are acknowledged; skipped calls
+   do not reset retry deadlines. Only the exact value `1` enables this switch. Authentication, packet redundancy
+   and hash count stay unchanged. At orderly shutdown, `NETCOALESCE skipped=N` in `net.log` counts suppressed
+   calls; existing packet/byte totals still count actual send attempts before simulator loss, not delivery.
+
+   **Compile confidence:** high from source review, uncompiled. The cache is fixed-size and protected by the
+   existing transport mutex. Its clock only controls transport sends, never simulated state. Fewer redundant
+   attempts are an expected saving, not measured bandwidth or frame-time improvement. A suppressed duplicate
+   removes one chance to recover a lost packet early, so loss and stalls need particular attention.
+
+   **Test outside this copy:** first run the same rollback self-test at **0 mismatches** (this transport switch
+   is inactive in offline test mode). Then run a pair OFF/OFF, ON/ON and ON/OFF, with fixed seed/input delay and
+   sound on. Require zero peer/reference hash mismatches, unchanged final inputs/outcomes, and no new stalls.
+   Capture keyed/unkeyed INPUTs: changed ack/hash/lead/delay and every new local frame must send immediately;
+   unchanged boundary duplicates within 15 ms may disappear, while tick/wait retries and later `sendNow()`
+   recovery still send. Include a lost final ack/hash, burst loss, jitter/reorder, ring wraps and peer address
+   changes. Compare attempted packets/bytes, simulator drops, resends, depth and fight p99; ON changes the
+   simulator's send sequence, so an equal simulator seed does not mean the same dropped packets. Repeat on
+   direct LAN/WAN and forced relay before claiming a player benefit.
+
+Stopped here: deeper render/IOP cuts, snapshot representation, hash narrowing, pacing/margins and audio queues
+need measurements and runtime proof. Pause/confirmed KO, rematch and direct fight need verified game-phase
+addresses; none were guessed. Wire changes, hash trimming and new negotiation are left out. Only static review
+and whitespace checks were possible here; a real combined build and the self-test then pair remain required.
 
 The maintainer's next acceptance pass should keep one declared combined build/settings identity and separate:
 
