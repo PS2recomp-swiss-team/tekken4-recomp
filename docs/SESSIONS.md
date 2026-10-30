@@ -34,7 +34,8 @@ documents the switch in `docs/GRAPHICS.md`, then the launcher session adds the c
 
 **T4: Netplay + Online**
 - Never tested on two PCs or a real WAN: next step, needs the user + a second PC (`tools\net_play.ps1`, `docs/ROLLBACK_PHASE3.md`
-  section 5). `docs\rollback\net_build.cmd` has fixed `D:\` paths.
+  section 5). `docs\rollback\net_build.cmd` uses the sibling `tekken4-fork-net` by default; override with
+  `TEKKEN4_SRC` / `TEKKEN4_BUILD_DIR` (section 4).
 - Lobby: game-level test through a local lobby (`tools\net_lobby_pair.ps1`, `docs/LOBBY.md`) is pending. `SERVER_HANDOFF_T4.md`
   exists; the Server session prepares the T4 lobby instance, which goes live only when T4 plays online. Game-side result file (needed for ranked), direct fight.
 - Later, as T5DR: replays, spectating, training rooms, leaderboard.

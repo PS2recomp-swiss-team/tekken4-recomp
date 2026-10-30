@@ -129,6 +129,7 @@ Plain TCP is fine for guests; accounts need TLS on a public server (T5DR's rule,
 - **Online tab** (Tk) for T4: the copied tk_* files with T4 art and texts, or a smaller own UI; the CLI is day one.
 - **Bandwidth**: ~92-140 packets/s per direction (more than T5DR's ~60/s), ~172-200 bytes of payload each
   (SERVER_HANDOFF_T4.md); within T5DR's relay limits (400 packets/s, 512 kbit/s per player). Bytes per packet are
-  computed from the wire format, not counted: `NETSUMMARY` has no byte counter yet.
+  computed from the wire format for those runs. `NETSUMMARY` now prints payload bytes out/in (not yet built or run):
+  tags included, IP/UDP headers excluded; out counts before simulated loss, in follows packetsIn (HELLO/REJECT excluded).
 - **Socket handover** (`T5_NET_SOCKET_FILE`): not in the T4 game (port handover only, as T5DR's default).
 - Not tested: two physical PCs, a real NAT, a real WAN, the regional relay nodes, TLS with a real certificate.

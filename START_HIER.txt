@@ -33,7 +33,9 @@ Steuerung
   F1 = Debug-Fenster. Fenster schliessen = beenden (Esc beendet nicht).
 
 Online-Test (Rollback, zwei PCs im LAN; docs\ROLLBACK_PHASE3.md, Abschnitt 5)
-  Beide brauchen exakt denselben Build; dafuer docs\rollback\net_build.cmd anpassen (Pfade).
+  Beide brauchen exakt denselben Build; dafuer docs\rollback\net_build.cmd verwenden.
+  Standard: Nachbarordner ..\tekken4-fork-net, Ausgabe out\net; andere Pfade per TEKKEN4_SRC und TEKKEN4_BUILD_DIR
+  setzen (docs\ROLLBACK_PHASE3.md, Abschnitt 4).
   Noch nicht auf zwei PCs getestet: Rueckmeldung dazu ist besonders wertvoll.
 
 Bekannt

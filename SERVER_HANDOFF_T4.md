@@ -82,9 +82,12 @@ live frames / run fps; two processes on one PC, network simulator with 3 % loss)
 | `n150b` | 148 | 115.8 / 115.7 | 35 / 34 | 38.9 |
 | `smoke1` | 48 | 137.6 / 139.8 | 27 / 29 | 53.8 |
 
-- Bytes per packet (computed from the wire format, `runtime/tekken4_net.cpp`; NETSUMMARY counts packets, not bytes):
+- Bytes per packet for these historical runs (computed from the wire format, `runtime/tekken4_net.cpp`):
   INPUT = 16 header + 12 + 6 x max(8, unacknowledged inputs) + 12 x 8 latest state hashes (+ 8 tag with a match key) =
   **172-200 bytes of payload** (180-208 keyed), +28 IP/UDP; PING 33 bytes (rare during play).
+- `NETSUMMARY` now prints cumulative `payload bytes out` / `in` for the counted packets (source change, not yet built or run).
+  These include authentication tags and exclude IP/UDP headers. Out counts sendTo attempts before simulated loss;
+  in follows packetsIn (HELLO/REJECT excluded). These are transport counters, not a measured on-wire bandwidth rate.
 - So at the full 60 fps expect **~150 packets/s and ~250 kbit/s per direction per player** on the wire (lower at the
   current 38-54 fps); a relayed match costs the relay about **2 x 150 packets/s in and out, ~0.5 Mbit/s each way**.
   T5DR's game sends ~60 packets/s / ~85 kbit/s; T4 sends more (an INPUT per frame plus resends every 15 ms while
@@ -158,6 +161,6 @@ Also: the port runs 38-54 fps on the VS stages on this PC (not yet a steady 60),
 - Game-side **result file** (winner, score, final hash, fps, reason) -> ranked and leaderboard.
 - Direct fight (lobby-chosen characters/stage, T4 ids in `data/fighters.json`), persistent game, rematch in session,
   no-pause online, online save (unlocks).
-- A byte counter in `NETSUMMARY` (bandwidth is computed from the format today) and fewer redundant hashes per packet.
+- Fewer redundant hashes per packet; validate the new `NETSUMMARY` byte counters in a real build/run.
 - T4 Online tab (Tk) and T4 texts/art; the copied i18n catalogs mention T5DR in places.
 - Regional relay nodes for T4 (the code is there; secrets/ids would be T4's own).
