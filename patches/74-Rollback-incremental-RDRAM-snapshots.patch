@@ -1,0 +1,371 @@
+From 3c0a364d6a7579c49d319c2e39d51b40ef3b5cc3 Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 03:37:03 +0100
+Subject: [PATCH 74/75] Rollback: incremental RDRAM snapshots through a Windows
+ write watch
+
+RDRAM is allocated with MEM_WRITE_WATCH (PS2X_RDRAM_WRITE_WATCH=0: heap as before). Every capture/restore
+collects the pages written since the last one (GetWriteWatch, reset) and stamps them with a sequence number;
+a snapshot remembers the sequence it was filled at, so filling it again copies only the pages written since
+(by the game or by a restore), and a restore copies back only those. Netplay pair at RTT 100: ~185 of 8192
+pages per capture, capture 1.6 -> 0.4 ms, restore 1.6 -> 0.5 ms. PS2X_RB_INCREMENTAL=0: full copies;
+PS2X_RB_WW_VERIFY=1 compares every copy with the whole memory (0 mismatching pages in a 6000-frame pair).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ps2_memory.h   |   2 +
+ ps2xRuntime/include/runtime/ps2_rollback.h |  12 ++
+ ps2xRuntime/src/lib/ps2_memory.cpp         |  63 +++++++-
+ ps2xRuntime/src/lib/ps2_rollback.cpp       | 162 ++++++++++++++++++++-
+ 4 files changed, 233 insertions(+), 6 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index 5d219f4..8240869 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -315,6 +315,8 @@ public:
+ 
+     // Memory access methods
+     uint8_t *getRDRAM() { return m_rdram; }
++    // RDRAM allocated with a Windows write watch (GetWriteWatch works on it; Tekken 4 port, rollback snapshots).
++    bool rdramWriteWatch() const;
+     uint8_t *getScratchpad() { return m_scratchpad; }
+     uint8_t *getIOPRAM() { return iop_ram; }
+     uint64_t dmaStartCount() const { return m_dmaStartCount.load(std::memory_order_relaxed); }
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback.h b/ps2xRuntime/include/runtime/ps2_rollback.h
+index 1f21066..43c9f6d 100644
+--- a/ps2xRuntime/include/runtime/ps2_rollback.h
++++ b/ps2xRuntime/include/runtime/ps2_rollback.h
+@@ -23,6 +23,8 @@ class PS2Runtime;
+ // Netplay (Tekken 4 phase 3): the IOP can be part of a snapshot (setIncludeIop), so a re-simulated frame runs the
+ // IOP like a live one and both peers' IOPs only ever hear the timeline that sticks. Game modules test this macro.
+ #define PS2X_ROLLBACK_IOP_STATE 1
++// Tekken 4 phase 3b: incremental RDRAM copies (rdramCopyStats).
++#define PS2X_ROLLBACK_RDRAM_INCREMENTAL 1
+ 
+ namespace ps2_rollback
+ {
+@@ -38,6 +40,7 @@ namespace ps2_rollback
+         std::vector<uint8_t> runtimeState; // guest heap + async callback stacks (PS2RollbackAccess)
+         std::vector<uint8_t> padState;
+         uint32_t sifSendCmdId = 1;
++        uint64_t rdramSeq = 0; // incremental RDRAM copies: the write-watch sequence this copy was filled at
+         ps2x::iop::IopSnapshot iop; // filled only while includeIop()
+         bool hasIop = false;
+         bool valid = false;
+@@ -51,6 +54,15 @@ namespace ps2_rollback
+     // Re-simulated frames with the IOP running: the SPU2 output of those frames is not played.
+     void setIopOutputMuted(bool muted) noexcept;
+ 
++    // Incremental RDRAM copies (RDRAM under a write watch, Tekken 4 netplay): pages copied per capture/restore;
++    // verifyMismatchPages counts pages that differed after a copy (PS2X_RB_WW_VERIFY=1; must stay 0).
++    struct RdramCopyStats
++    {
++        uint64_t captures = 0, capturePages = 0, restores = 0, restorePages = 0, verifyMismatchPages = 0;
++    };
++    RdramCopyStats rdramCopyStats() noexcept;
++    bool rdramIncremental() noexcept;
++
+     // Both at a boundary only (inside the EeScheduler boundary hook, executor thread).
+     void capture(PS2Runtime &runtime, Snapshot &out);
+     void restore(PS2Runtime &runtime, const Snapshot &in);
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 5be4562..a119897 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -11,6 +11,62 @@
+ #include <algorithm>
+ #include <string>
+ #include <vector>
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#endif
++
++namespace
++{
++    // Tekken 4 port (netplay): RDRAM with a Windows write watch, so a rollback snapshot copies only the pages written
++    // since that ring slot was last filled (ps2_rollback.cpp). PS2X_RDRAM_WRITE_WATCH=0: plain heap memory as before.
++    bool g_rdramWriteWatch = false;
++
++    uint8_t *allocRdram(size_t size)
++    {
++#ifdef _WIN32
++        const char *setting = std::getenv("PS2X_RDRAM_WRITE_WATCH");
++        if (!setting || *setting != '0')
++        {
++            void *p = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE);
++            if (p)
++            {
++                g_rdramWriteWatch = true;
++                return static_cast<uint8_t *>(p); // committed pages are zero
++            }
++        }
++#endif
++        g_rdramWriteWatch = false;
++        uint8_t *p = new uint8_t[size];
++        std::memset(p, 0, size);
++        return p;
++    }
++
++    void freeRdram(uint8_t *p)
++    {
++        if (!p)
++            return;
++#ifdef _WIN32
++        if (g_rdramWriteWatch)
++        {
++            VirtualFree(p, 0, MEM_RELEASE);
++            g_rdramWriteWatch = false;
++            return;
++        }
++#endif
++        delete[] p;
++    }
++}
++
++bool PS2Memory::rdramWriteWatch() const
++{
++    return g_rdramWriteWatch && m_rdram != nullptr;
++}
+ 
+ namespace
+ {
+@@ -329,7 +385,7 @@ PS2Memory::~PS2Memory()
+ {
+     if (m_rdram)
+     {
+-        delete[] m_rdram;
++        freeRdram(m_rdram);
+         m_rdram = nullptr;
+     }
+ 
+@@ -378,7 +434,7 @@ bool PS2Memory::initialize(size_t ramSize)
+ {
+     auto cleanup = [this]()
+     {
+-        delete[] m_rdram;
++        freeRdram(m_rdram);
+         delete[] m_scratchpad;
+         delete[] iop_ram;
+         delete[] m_gsVRAM;
+@@ -418,8 +474,7 @@ bool PS2Memory::initialize(size_t ramSize)
+     try
+     {
+         // Allocate main RAM
+-        m_rdram = new uint8_t[ramSize];
+-        std::memset(m_rdram, 0, ramSize);
++        m_rdram = allocRdram(ramSize);
+ 
+         // Allocate scratchpad
+         m_scratchpad = new uint8_t[PS2_SCRATCHPAD_SIZE];
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+index f0e97bc..2e804ba 100644
+--- a/ps2xRuntime/src/lib/ps2_rollback.cpp
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -7,7 +7,17 @@
+ #include "ps2x/iop/iop_subsystem.h"
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <cstring>
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#endif
+ 
+ // Private runtime members a snapshot needs (friend of PS2Runtime).
+ class PS2RollbackAccess
+@@ -99,6 +109,144 @@ namespace ps2_rollback
+             std::memcpy(dst.data(), src, size);
+         }
+ 
++        // Tekken 4 port (netplay): incremental RDRAM copies. With RDRAM under a Windows write watch
++        // (PS2Memory::rdramWriteWatch), every capture/restore first collects the pages written since the last one and
++        // stamps them with a new sequence number; a snapshot remembers the sequence it was filled at, so filling it
++        // again copies only the pages stamped later (written since -- by the game or by a restore), and a restore
++        // copies back only those. Pages not written since the snapshot are equal to it by construction.
++        // PS2X_RB_INCREMENTAL=0: full copies; PS2X_RB_WW_VERIFY=1: compare every copy with the whole memory.
++        constexpr size_t kWwPage = 4096u;
++        constexpr size_t kWwPages = PS2_RAM_SIZE / kWwPage;
++        struct WriteTracker
++        {
++            bool init = false, on = false, verify = false;
++            uint64_t seq = 1;
++            std::vector<uint64_t> stamp; // per page: the sequence of its last known write
++            std::vector<void *> addrs;
++            RdramCopyStats stats;
++        };
++        WriteTracker g_ww;
++
++        bool trackerOn(PS2Memory &memory)
++        {
++            if (!g_ww.init)
++            {
++                g_ww.init = true;
++                const char *inc = std::getenv("PS2X_RB_INCREMENTAL");
++                const char *ver = std::getenv("PS2X_RB_WW_VERIFY");
++                g_ww.on = memory.rdramWriteWatch() && !(inc && *inc == '0');
++                g_ww.verify = ver && *ver == '1';
++                g_ww.stamp.assign(kWwPages, 1u);
++                g_ww.addrs.resize(kWwPages);
++#ifdef _WIN32
++                if (g_ww.on)
++                    ResetWriteWatch(memory.getRDRAM(), PS2_RAM_SIZE);
++#endif
++            }
++            return g_ww.on;
++        }
++
++        // Pages written since the last call get a new stamp; returns that stamp (the current sequence).
++        uint64_t collectWrites(PS2Memory &memory)
++        {
++            ++g_ww.seq;
++#ifdef _WIN32
++            uint8_t *base = memory.getRDRAM();
++            ULONG_PTR count = static_cast<ULONG_PTR>(g_ww.addrs.size());
++            DWORD granularity = 0;
++            if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, base, PS2_RAM_SIZE, g_ww.addrs.data(), &count, &granularity) != 0)
++            {
++                std::fill(g_ww.stamp.begin(), g_ww.stamp.end(), g_ww.seq); // (never seen) everything counts as written
++                return g_ww.seq;
++            }
++            for (ULONG_PTR i = 0; i < count; ++i)
++            {
++                const size_t page = static_cast<size_t>(static_cast<uint8_t *>(g_ww.addrs[i]) - base) / kWwPage;
++                if (page < kWwPages)
++                    g_ww.stamp[page] = g_ww.seq;
++            }
++#endif
++            return g_ww.seq;
++        }
++
++        void verifyRdram(const uint8_t *mem, const std::vector<uint8_t> &copy)
++        {
++            for (size_t page = 0; page < kWwPages; ++page)
++                if (std::memcmp(mem + page * kWwPage, copy.data() + page * kWwPage, kWwPage) != 0)
++                    ++g_ww.stats.verifyMismatchPages;
++        }
++
++        void captureRdram(PS2Memory &memory, Snapshot &out)
++        {
++            const uint8_t *mem = memory.getRDRAM();
++            if (!trackerOn(memory) || out.rdram.size() != PS2_RAM_SIZE || out.rdramSeq == 0u)
++            {
++                if (g_ww.on)
++                    collectWrites(memory);
++                copyIn(out.rdram, mem, PS2_RAM_SIZE);
++                out.rdramSeq = g_ww.on ? g_ww.seq : 0u;
++                ++g_ww.stats.captures;
++                g_ww.stats.capturePages += kWwPages;
++                return;
++            }
++            const uint64_t now = collectWrites(memory);
++            uint8_t *dst = out.rdram.data();
++            size_t copied = 0;
++            for (size_t page = 0; page < kWwPages; ++page)
++            {
++                if (g_ww.stamp[page] <= out.rdramSeq)
++                    continue;
++                size_t end = page + 1u; // a run of pages in one memcpy
++                while (end < kWwPages && g_ww.stamp[end] > out.rdramSeq)
++                    ++end;
++                std::memcpy(dst + page * kWwPage, mem + page * kWwPage, (end - page) * kWwPage);
++                copied += end - page;
++                page = end - 1u;
++            }
++            out.rdramSeq = now;
++            ++g_ww.stats.captures;
++            g_ww.stats.capturePages += copied;
++            if (g_ww.verify)
++                verifyRdram(mem, out.rdram);
++        }
++
++        void restoreRdram(PS2Memory &memory, const Snapshot &in)
++        {
++            uint8_t *mem = memory.getRDRAM();
++            if (!trackerOn(memory) || in.rdramSeq == 0u)
++            {
++                std::memcpy(mem, in.rdram.data(), PS2_RAM_SIZE);
++                if (g_ww.on)
++                {
++                    const uint64_t now = collectWrites(memory);
++                    std::fill(g_ww.stamp.begin(), g_ww.stamp.end(), now);
++                }
++                ++g_ww.stats.restores;
++                g_ww.stats.restorePages += kWwPages;
++                return;
++            }
++            const uint64_t now = collectWrites(memory);
++            size_t copied = 0;
++            for (size_t page = 0; page < kWwPages; ++page)
++            {
++                if (g_ww.stamp[page] <= in.rdramSeq)
++                    continue;
++                size_t end = page + 1u;
++                while (end < kWwPages && g_ww.stamp[end] > in.rdramSeq)
++                    ++end;
++                std::memcpy(mem + page * kWwPage, in.rdram.data() + page * kWwPage, (end - page) * kWwPage);
++                // the restore wrote these pages: they may differ from every snapshot filled before now
++                for (size_t q = page; q < end; ++q)
++                    g_ww.stamp[q] = now;
++                copied += end - page;
++                page = end - 1u;
++            }
++            ++g_ww.stats.restores;
++            g_ww.stats.restorePages += copied;
++            if (g_ww.verify)
++                verifyRdram(mem, in.rdram);
++        }
++
+         constexpr uint64_t kPrime1 = 0x9E3779B185EBCA87ull;
+         constexpr uint64_t kPrime2 = 0xC2B2AE3D27D4EB4Full;
+ 
+@@ -144,7 +292,7 @@ namespace ps2_rollback
+     void capture(PS2Runtime &runtime, Snapshot &out)
+     {
+         PS2Memory &memory = runtime.memory();
+-        copyIn(out.rdram, memory.getRDRAM(), PS2_RAM_SIZE);
++        captureRdram(memory, out);
+         copyIn(out.scratchpad, memory.getScratchpad(), PS2_SCRATCHPAD_SIZE);
+         copyIn(out.vu0Code, memory.getVU0Code(), PS2_VU0_CODE_SIZE);
+         copyIn(out.vu0Data, memory.getVU0Data(), PS2_VU0_DATA_SIZE);
+@@ -179,7 +327,7 @@ namespace ps2_rollback
+             return;
+         }
+         PS2Memory &memory = runtime.memory();
+-        std::memcpy(memory.getRDRAM(), in.rdram.data(), PS2_RAM_SIZE);
++        restoreRdram(memory, in);
+         std::memcpy(memory.getScratchpad(), in.scratchpad.data(), PS2_SCRATCHPAD_SIZE);
+         if (std::memcmp(memory.getVU0Code(), in.vu0Code.data(), PS2_VU0_CODE_SIZE) != 0)
+         {
+@@ -205,6 +353,16 @@ namespace ps2_rollback
+             PS2RollbackAccess::loadIop(runtime, in.iop);
+     }
+ 
++    RdramCopyStats rdramCopyStats() noexcept
++    {
++        return g_ww.stats;
++    }
++
++    bool rdramIncremental() noexcept
++    {
++        return g_ww.on;
++    }
++
+     StateHash hashState(PS2Runtime &runtime, const std::vector<MaskRange> &masks, std::vector<uint64_t> *pageHashes)
+     {
+         constexpr uint32_t kPage = 4096u;
+-- 
+2.55.0.windows.3
+
