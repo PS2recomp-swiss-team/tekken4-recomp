@@ -38,6 +38,9 @@ GENERATED_NAME = re.compile(r"(?i)(?:func_[0-9a-f]{6,8}|_0x[0-9a-f]{6,8})\.(?:cp
 GAME_SYMBOL = re.compile(rb"(?:func_[0-9a-fA-F]{6,8}|[A-Za-z_]\w*_0x[0-9a-fA-F]{6,8})")
 # Same exact-content pin as package_release.py for the handwritten PAL reference.
 HANDWRITTEN_SHA256 = {"c7cec562d2550f3e73f8a11f39b8b5bd9e3da28846bb7f6575424ccead034c91"}
+# Reviewed immutable patch: its guest CD path examples resemble a UNC path.
+# Only the personal-path category uses this pin; any byte change loses it.
+GUEST_PATH_SHA256 = {"9b0151764e50f9eeb7d227d6048ef65567124b89185df24a3ce24e9ff08e0864"}
 # Public documentation and dependency downloads are not lobby addresses.
 PUBLIC_HOSTS = {
     "github.com", "www.github.com", "api.github.com", "raw.githubusercontent.com",
@@ -46,22 +49,24 @@ PUBLIC_HOSTS = {
     "pcsx2.net", "www.pcsx2.net", "python.org", "www.python.org",
     "docs.python.org", "llvm.org", "releases.llvm.org", "cmake.org",
     "aka.ms", "download.visualstudio.microsoft.com", "go.microsoft.com",
-    "learn.microsoft.com", "visualstudio.microsoft.com", "www.microsoft.com",
+    "learn.microsoft.com", "visualstudio.microsoft.com", "www.microsoft.com", "developer.microsoft.com",
     "virustotal.com", "www.virustotal.com", "docs.virustotal.com",
     "spdx.org", "opensource.org",
+    "git-scm.com", "www.git-scm.com",
+    "tailscale.com", "www.tailscale.com",
 }
 URL = re.compile(r"\b(?:https?|wss?|tcp|udp)://[^\s<>\"'`]+", re.I)
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-f]{0,4}:){2,}[0-9a-f:.%]+", re.I)
 PERSONAL = re.compile(
-    r"(?i)(?:\b[a-z]:[\\/]|\\\\[a-z0-9_.-]+[\\/]|"
+    r"(?i)(?:\b[a-z]:[\\/]|(?<![a-z0-9_.\\/])\\\\[a-z0-9_.-]+[\\/]|"
     r"/(?:home|Users)/[a-z0-9_.-]+|~[\\/])"
 )
 SECRET = re.compile(
     r"-----BEGIN (?:[A-Z0-9 ]*PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----|"
     r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
     r"AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b|"
-    r"(?i:\b(?:[a-z][a-z0-9_]*[_-])?(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|"
+    r"(?i:" r"\b(?:[a-z][a-z0-9_]*[_-])?(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|"
     r"private[_-]?key|signing[_-]?key|client[_-]?secret|secret|token)\b)[\"']?\s*[:=]\s*"
     r"(?:[rRuUbBfF]{0,2}[\"'](?![<{$])[^\"'\r\n]{8,}[\"']|[a-zA-Z0-9_/-]{20,})|"
     r"(?m:^\s*[0-9a-fA-F]{64}\s*$)"
@@ -111,6 +116,10 @@ def scan_file(name, data):
     path = safe_name(name)
     reasons = []
     parts = tuple(part.lower() for part in path.parts)
+    if ".mcp.json" == parts[-1] or "lobby" in parts[:-1]:
+        reasons.append("private source path")
+    if path.suffix.lower() in IMAGE_SUFFIXES or is_image(data):
+        reasons.append("image filename or content")
     if path.name.lower() in GENERATED_NAMES or GENERATED_NAME.search(path.name):
         reasons.append("generated game source filename")
     if len(set(GAME_SYMBOL.findall(data))) >= 64 and hashlib.sha256(data).hexdigest() not in HANDWRITTEN_SHA256:
@@ -134,12 +143,15 @@ def scan_file(name, data):
         reasons.append("binary content; manual review required")
     if SECRET.search(text):
         reasons.append("credential or private key content")
-    if PERSONAL.search(text):
+    if PERSONAL.search(text) and hashlib.sha256(data).hexdigest() not in GUEST_PATH_SHA256:
         reasons.append("personal or machine-specific path")
     for match in list(IPV4.finditer(text)) + list(IPV6.finditer(text)):
         try:
-            ipaddress.ip_address(match.group().split("%", 1)[0])
+            address = ipaddress.ip_address(match.group().split("%", 1)[0])
         except ValueError:
+            continue
+        # Bind-any and loopback constants are not a player's or server's address.
+        if address.is_loopback or address.is_unspecified:
             continue
         reasons.append("literal network address")
         break

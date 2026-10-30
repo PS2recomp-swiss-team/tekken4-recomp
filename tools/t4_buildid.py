@@ -14,7 +14,7 @@ Rollback netplay only works when both PCs run identical game code. Like T5DR Onl
 
 build id = first 16 hex digits of SHA-1("t4dr-build:<elf_sha1>:<code_id>:<net>").
 
-    python -I tools/t4_buildid.py --src D:\\tekken4-fork-net --out D:\\tekken4-fork-net\\out\\net\\ps2xRuntime
+    python -I tools/t4_buildid.py --src .\\deps\\ps2recomp --out .\\deps\\ps2recomp\\out\\runtime\\ps2xRuntime
 
 writes <out>/t4net_build.txt ("<id> <elf_sha1> <code_id> <net>") and t4net_build.json; tools/net_pair.ps1 passes the
 id as TEKKEN4_NET_BUILD, and a peer whose HELLO carries another id is refused (build_mismatch).

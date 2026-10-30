@@ -333,7 +333,7 @@ if (-not $Iso) {
 }
 $IsoInfo = $null
 if (($Steps -contains 'verify') -or ($Steps -contains 'extract')) {
-    if (-not $Iso) { Fail 'verify' "no ISO given and no *.iso in $Root. Usage: powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso `"C:\path\Tekken 4 (USA).iso`"" }
+    if (-not $Iso) { Fail 'verify' "no ISO given and no *.iso in $Root. Usage: powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso `".\Tekken 4 (USA).iso`"" }
     if (-not (Test-Path -LiteralPath $Iso -PathType Leaf)) { Fail 'verify' "ISO not found: $Iso" }
     $IsoInfo = Get-Item -LiteralPath $Iso
     $IsoFp = '{0}|{1}|{2}' -f $IsoInfo.FullName.ToLower(), $IsoInfo.Length, $IsoInfo.LastWriteTimeUtc.Ticks

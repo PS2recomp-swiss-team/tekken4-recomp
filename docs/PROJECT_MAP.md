@@ -44,6 +44,8 @@ Claude reviews, tests, carries the change over and commits.
 | `runtime\*.cpp` | Game | overrides staged into the runtime: `tekken4_overrides.cpp` (sound, movie, video mode), `_unlock_`, `_perf2_`, `_rollback_`, `tekken4_net.*`, `_frameshot_`, `_testseed_`, `_profiler_`. `runtime\pal\` = PAL-only camera log, not built |
 | `patches\NN-*.patch` | Game | changes to PS2Recomp, applied in **name order** |
 | `tools\run_capture.ps1`, `perf_*`, `gfx_*`, `pad_lag.ps1`, `net_pair.ps1`, `net_play.ps1`, `us_site.py`, `ghidra_*` | Dev | test, measure, reverse-engineer |
+| `tools\make_test_zip.ps1`, `test_zip.py`, `collect_test_logs.ps1` | Sunday test | scanned source-only test zip; selected netplay diagnostics and PC facts to return |
+| `tools\net_play.ps1`, `net_preflight.ps1` | Sunday test | peer identity comparison, UDP preflight and instrumented manual play; still needs two-PC validation |
 | `tools\grok_*`, `docs\ai\`, `pcsx2_*`, `tools\ai\` | Legacy | the colleague's Grok/PCSX2 workflow on his PC, not set up here |
 
 `launcher\t4core.py` is an interface: changing its functions breaks OpenRecomp-FGC's `adapters/t4.py`, so announce changes
@@ -62,6 +64,7 @@ adds the control.
 | `docs/ROLLBACK_PLAN.md`, `ROLLBACK_PHASE01.md`, `PHASE2.md`, `PHASE3.md`, `PHASE3B.md` | rollback + netplay |
 | `docs/LOBBY.md`, `SERVER_HANDOFF_T4.md` | lobby integration, existing handoff to the Server session; it prepares the T4 lobby instance, which goes live only when T4 plays online |
 | `docs/RELEASE_PLAN_T4.md`, `E2E_BUILD.md`, `START_HIER.txt` | release options, player build test, tester guide |
+| `TEST_ONLINE_DE.txt` | short German two-PC internet test guide, router/VPN choices, errors and return logs |
 
 ## Runtime switches (env)
 `TEKKEN4_INTERNAL_RES`, `TEKKEN4_AA`, `TEKKEN4_ANISO`, `TEKKEN4_HUD`, `TEKKEN4_WINDOW_FILTER`, `TEKKEN4_FULLSCREEN` (1 | exclusive), `TEKKEN4_PROGRESSIVE`,

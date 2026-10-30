@@ -1,8 +1,15 @@
 # Status
 
-_Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps the US line)_
+_Last updated: 2026-10-31 (Sunday internet-test preparation, source copy only)_
 
 ## Resume here
+- **Sunday internet test preparation (2026-10-31, unbuilt):** `TEST_ONLINE_DE.txt` covers each player's local ISO build,
+  router forwarding or VPN, a 15-minute menu/Versus/rematch check and returning evidence. `tools/make_test_zip.ps1`
+  packages scanned source; `tools/net_play.ps1` adds peer build/compiler/ISO comparison, UDP preflight and default-on
+  transport diagnostics for manual tests. `tools/collect_test_logs.ps1` selects netplay/NETSUMMARY text and PC/build facts.
+  No build, game or network run here. Python guard tests were extended but could not run: no Python interpreter is
+  available in this copy's environment. A real build, rollback self-test with 0 mismatches and the actual two-PC internet
+  run must establish compatibility, reachability, pacing and the usefulness of the returned logs.
 - **Asymmetric rollback investigation (2026-10-30, unbuilt):** `TEKKEN4_NET_DIAG=1` adds transport and live-boundary
   timing/lead/rebase/simulator samples; `tools/net_pair.ps1 -TimingDiag` also records process CPU/priority/affinity/focus.
   All diagnostics default off. Separate default-OFF `TEKKEN4_NET_SIM_SAFE_WAIT=1` repairs an unlocked simulator
