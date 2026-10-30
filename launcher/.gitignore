@@ -1,0 +1,5 @@
+# per-player state of the launcher: never commit
+settings.json
+settings.json.bad
+save/
+__pycache__/

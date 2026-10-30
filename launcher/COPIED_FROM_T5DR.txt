@@ -1,0 +1,7 @@
+Files in this folder that were copied from the private T5DR Online launcher: NONE.
+
+t4core.py and t4_launcher.pyw were written new for Tekken 4 (2026-10-30). What was taken from T5DR is
+the idea and the layout only (tabs Build / Play / Settings / Controls / Online, a step list with a
+live log, settings in a JSON file next to the launcher, PrintWindow screenshots), not code.
+No T5DR text, table or function was pasted. If the owner later copies T5DR modules here (updater.py,
+controls_edit.py, problem_report*.py ...), list each one in this file first.
