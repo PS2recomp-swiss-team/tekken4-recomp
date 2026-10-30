@@ -1,11 +1,13 @@
 param([string]$Label = "base", [string[]]$Stages = @(), [double]$Fight = 32, [string[]]$Env = @(),
-      [string]$Build = "perf", [string]$Src = "D:\tekken4-fork-perf")
+      [string]$Build = $env:TEKKEN4_BUILD_DIR, [string]$Src = $env:TEKKEN4_SRC)
 # Stage sweep (docs\PERF.md): tools\perf_fight.ps1 for every stage (or -Stages a,b), runs in logs\perf\<Label>_<stage>,
 # then the table of tools\perf_table.py into logs\perf\<Label>_table.md.
 #   powershell -ExecutionPolicy Bypass -File tools\perf_sweep.ps1 -Label base1
 # Never pipe this script's output through Select-Object -First: the stopped pipe blocks run_capture and the game
 # window is never closed.
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-perf" }
+if (-not $Build) { $Build = "perf" }
 $all = @("airport", "building", "mall_a", "mall_b", "shinjuku", "beach", "laboratory", "parking", "underground", "arena")
 $list = @($Stages | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $list) { $list = $all }

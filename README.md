@@ -7,7 +7,7 @@ linked against PS2Recomp's runtime, which stands in for the PS2 hardware.
 Target: **NTSC-U (USA), v1.00, SLUS-20328** on branch `us-slus20328` (PAL SCES-50878 v2.00 on `master`). Addresses only match that build.
 
 > This repo holds **no game data**: no ELF, no disc files, no BIOS, no generated C++ from the game.
-> You need your own copy of the game and a BIOS dumped from your own console.
+> You need your own Tekken 4 USA ISO. No BIOS is needed.
 
 ## Status
 
@@ -51,7 +51,13 @@ The day-to-day log, findings and next steps are in [docs/status.md](docs/status.
 
 ## Building (Windows)
 
-You need your own Tekken 4 USA ISO (SLUS-20328), Visual Studio 2022 Build Tools (C++), CMake, Ninja, Git and Python 3. No BIOS, no Ghidra.
+Player zip (path B, pending clean-PC validation): extract everything into a new writable folder and open
+`Tekken4.cmd`. Its private Python, LLVM, CMake, Ninja and vendored sources need no separate installation.
+BUILD GAME asks you to accept Microsoft's terms before fetching the C++/SDK build libraries directly from Microsoft.
+Nothing from the game or a BIOS ships. The scripts are implemented; no portable zip or portable game build was tested here.
+Release preparation and the remaining gates: [docs/RELEASE_PATH_B.md](docs/RELEASE_PATH_B.md).
+
+Developer checkout (without `toolchain/toolchain.json`): you need your own Tekken 4 USA ISO (SLUS-20328), Visual Studio 2022 Build Tools (C++), CMake, Ninja, Git and Python 3. No BIOS, no Ghidra.
 Unpack into a new, empty folder (the build uses the folder next to it for PS2Recomp), then:
 
 ```

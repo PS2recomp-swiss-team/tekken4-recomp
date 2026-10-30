@@ -1,19 +1,20 @@
 @echo off
 rem Gamepad/input-latency work (docs\INPUT.md): stages generated code + the COMMITTED runtime overrides
-rem (HEAD of D:\tekken4-us, so other agents' uncommitted edits stay out, like docs\rollback\rb_build.cmd)
-rem into the input worktree D:\tekken4-fork-input (branch t4-input) and builds out\input there.
-rem Waits while C:\T5DROnline\build\int115\HEAVY.lock exists (poll 60 s, max 30 min).
+rem (HEAD of this checkout, so other agents' uncommitted edits stay out, like docs\rollback\rb_build.cmd)
+rem into the sibling tekken4-fork-input worktree (branch t4-input) and builds out\input there.
+rem Waits while an explicit T4_HEAVY_LOCK exists (poll 60 s, max 30 min).
 setlocal
 set /a WAITED=0
 :waitlock
-if not exist "C:\T5DROnline\build\int115\HEAVY.lock" goto go
+if not defined T4_HEAVY_LOCK goto go
+if not exist "%T4_HEAVY_LOCK%" goto go
 if %WAITED% GEQ 1800 (echo HEAVY.lock still there after 30 min, not building & exit /b 1)
 echo HEAVY.lock present, waiting 60 s
 timeout /t 60 /nobreak >nul
 set /a WAITED+=60
 goto waitlock
 :go
-if not defined TEKKEN4_SRC set "TEKKEN4_SRC=D:\tekken4-fork-input"
+if not defined TEKKEN4_SRC set "TEKKEN4_SRC=%~dp0..\..\tekken4-fork-input"
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=input"
 set "GEN=%~dp0..\generated"
 set "RT=%TEKKEN4_SRC%\ps2xRuntime"

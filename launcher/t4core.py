@@ -4,6 +4,7 @@ No GUI in here (t4_launcher.pyw is the window), so everything can be tested from
 Python 3.8+ standard library only. Written new for this project (see COPIED_FROM_T5DR.txt).
 """
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -138,6 +139,8 @@ def read_json(path):
 
 def ps2recomp_tree():
     """Same rule as tools\\build_game.ps1: TEKKEN4_SRC, else a vendored deps\\ps2recomp (release), else ..\\tekken4-fork-ps2recomp."""
+    if bundled_toolchain():
+        return os.path.join(ROOT, "deps", "ps2recomp")
     if os.environ.get("TEKKEN4_SRC"):
         return os.path.abspath(os.environ["TEKKEN4_SRC"])
     vendored = os.path.join(ROOT, "deps", "ps2recomp")
@@ -255,6 +258,9 @@ def check_prereqs():
             p = os.path.normpath(os.path.join(tc, rel))
             add(id_, name, os.path.isfile(p), p if os.path.isfile(p) else "missing: " + p,
                 "Extract the whole release zip again (not from inside the zip viewer).")
+        add("sysroot", "Microsoft headers and libraries", sysroot_ready(),
+            "Ready" if sysroot_ready() else "Downloaded from Microsoft on the first build, after licence acceptance.",
+            "Press BUILD GAME to review Microsoft's licence and download the build libraries.")
         return items
 
     py = None
@@ -300,19 +306,44 @@ def check_prereqs():
 
 # ------------------------------------------------------------------ build script
 def build_script():
-    """The portable script when this folder has its own toolchain, else the normal one."""
-    portable = os.path.join(ROOT, "tools", "build_game_portable.ps1")
-    if bundled_toolchain() and os.path.isfile(portable):
-        return portable
+    """The common entry point selects the bundled toolchain using its marker."""
     return os.path.join(ROOT, "tools", "build_game.ps1")
 
 
-def build_command(iso, dry_run=False):
+def sysroot_ready():
+    tc = os.path.join(ROOT, "toolchain")
+    return all(os.path.isfile(os.path.join(tc, p)) for p in (
+        "sysroot.json", "msvc/include/vector", "msvc/lib/x64/libcmt.lib",
+        "winsdk/include/um/Windows.h", "winsdk/include/ucrt/stdio.h",
+        "winsdk/lib/um/x64/kernel32.lib", "winsdk/lib/ucrt/x64/libucrt.lib"))
+
+
+def microsoft_license_terms():
+    lock = read_json(os.path.join(ROOT, "tools", "msvc_sysroot.lock.json")) or {}
+    if lock.get("license_reviewed") is not True:
+        raise ValueError("This release is missing owner-reviewed Microsoft licence texts. Contact the release owner.")
+    texts = []
+    for name in ("microsoft-build-tools", "microsoft-windows-sdk"):
+        record = lock.get("license_terms", {}).get(name, {})
+        relative = "LICENSES/" + name + ".txt"
+        if record.get("path") != relative:
+            raise ValueError("Missing Microsoft licence record: " + name)
+        with open(os.path.join(ROOT, relative), "rb") as stream:
+            data = stream.read()
+        if hashlib.sha256(data).hexdigest() != record.get("sha256"):
+            raise ValueError("Microsoft licence text has changed: " + name)
+        texts.append(name + "\nSource: " + record.get("url", "") + "\n\n" + data.decode("utf-8-sig"))
+    return "\n\n".join(texts)
+
+
+def build_command(iso, dry_run=False, accept_microsoft_license=False):
     cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", build_script()]
     if iso:
         cmd += ["-Iso", iso]
     if dry_run:
         cmd.append("-WhatIf")
+    if accept_microsoft_license and not dry_run:
+        cmd.append("-AcceptMicrosoftLicense")
     return cmd
 
 

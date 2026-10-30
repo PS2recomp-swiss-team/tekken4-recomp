@@ -1,26 +1,31 @@
-TEKKEN 4 (US) - nativer PC-Port: Mini-Release zum Testen (2026-10-30)
-=====================================================================
+TEKKEN 4 (US) - Spieler-Zip / Quellbaum (2026-10-30)
+==================================================
 
-Dieses Paket enthaelt KEINE Spieldaten und kein BIOS. Du baust das Spiel selbst aus deiner eigenen ISO.
+Keine Spieldaten, kein BIOS. Eigene USA-ISO SLUS-20328 erforderlich (PAL wird abgelehnt).
+Nicht mit Bandai Namco verbunden. Windows 10/11 x64, beschreibbarer Ordner, etwa 6 GB plus ISO.
 
-Du brauchst
-  - Tekken 4 USA als ISO: SLUS-20328 (die PAL-Version SCES-50878 wird abgelehnt).
-  - Windows 10/11, Python 3, Git, CMake, Ninja, Visual Studio 2022 Build Tools (C++), Internet (PS2Recomp + Abhaengigkeiten).
-  - Etwa 6 GB Platz. Der Build dauert 10-20 Minuten (bei uns 8,6 Minuten).
+Spieler-Zip (Pfad B)
+  Alles in einen neuen Ordner entpacken. Tekken4.cmd doppelklicken.
+  "Build game": ISO waehlen, BUILD GAME. Vor dem ersten Build Microsoft-Bedingungen lesen und annehmen.
+  Erst dann werden C++/SDK-Header und Bibliotheken direkt von Microsoft geladen (Internet erforderlich).
+  Python, LLVM, CMake, Ninja und Quell-Abhaengigkeiten liegen privat im Zip: nichts separat installieren.
+  Danach "Play offline", PLAY. Die ISO wird auch beim Spielen gebraucht.
+  Der Quellbaum liegt im Zip unter deps\ps2recomp; alte TEKKEN4_SRC-Pfade werden hier nicht benutzt.
 
-WICHTIG: In einen NEUEN, LEEREN Ordner entpacken, z. B. D:\T4Test\tekken4-recomp
-  Das Build-Skript nutzt den Ordner daneben (..\tekken4-fork-ps2recomp). Liegt dort schon dein alter PAL-Fork
-  (z. B. H:\tekken4-fork-ps2recomp), wuerde er benutzt und der Build falsch. Also NICHT neben deinen alten Baum entpacken.
-
-Bauen und spielen (Launcher)
+Entwickler-Quellbaum (ohne toolchain\toolchain.json)
+  Weiterhin Python 3, Git, CMake, Ninja und VS 2022 Build Tools (C++) installieren.
   python launcher\t4_launcher.pyw
-  Tab "Build game": ISO auswaehlen, BUILD GAME. Danach Tab "Play offline", PLAY. Einstellungen im Tab "Settings".
+  Standard: Nachbarordner ..\tekken4-fork-ps2recomp; TEKKEN4_SRC kann ihn ersetzen.
+  Einen neuen Ordner verwenden, damit kein alter PAL-Fork benutzt wird.
 
-Oder per Kommandozeile
-  powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso "C:\Pfad\Tekken 4 (USA).iso"
+Kommandozeile (Bedingungen vor -AcceptMicrosoftLicense lesen, siehe docs\MSVC_SYSROOT.md)
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso "C:\Pfad\Tekken 4 (USA).iso" -AcceptMicrosoftLicense
   set TEKKEN4_ISO=C:\Pfad\Tekken 4 (USA).iso
   tools\run_game.cmd
 
+Stand: Pfad-B-Skripte implementiert, hier KEIN Download, Build, Paket oder Spielstart getestet.
+Der fruehere Test mit installierten Entwicklertools ist kein Nachweis fuer das Spieler-Zip.
+Freigabe, Download-/Lizenzliste und saubere-PC-Tests: docs\RELEASE_PATH_B.md, docs\RELEASE_DOWNLOADS.md.
 Einstellungen (Umgebungsvariablen, docs\GRAPHICS.md)
   TEKKEN4_INTERNAL_RES = lowest | native | 1080p | 1440p | 4k | auto
   TEKKEN4_FULLSCREEN   = 1 (randlos) | exclusive | 0      (im Spiel: F11 oder Alt+Enter)

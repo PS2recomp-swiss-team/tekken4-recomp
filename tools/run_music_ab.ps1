@@ -1,5 +1,5 @@
 # Music (BGM) evidence runs, docs/MUSIC_FIX.md. Builds nothing: runs the exe of TEKKEN4_SRC / TEKKEN4_BUILD_DIR
-# (defaults: D:\tekken4-fork-music, music) through the standard key path (movie skip, MEDIUM, Story Battle, Kazuya,
+# (defaults: sibling tekken4-fork-music, music) through the standard key path (movie skip, MEDIUM, Story Battle, Kazuya,
 # skip prologue, fight from ~32 s) once per variant, each writing logs\<prefix>_<variant>\mix.wav:
 #   fix_full    the fix, full mix (TEKKEN4_PERF_LOG=70: frames per second)
 #   base_full   TEKKEN4_BGM=0 (no EE->IOP payload, no SPU2 interrupt = before the fix), full mix
@@ -9,7 +9,7 @@
 # Then: python -I tools\wav_sections.py logs\<prefix>_<variant>\mix.wav <sections>
 param([string]$Prefix = "music_ab", [string[]]$Only = @(), [string]$Shots = "12,20,28,40,50,60")
 $root = Split-Path -Parent $PSScriptRoot
-if (-not $env:TEKKEN4_SRC) { $env:TEKKEN4_SRC = "D:\tekken4-fork-music" }
+if (-not $env:TEKKEN4_SRC) { $env:TEKKEN4_SRC = Join-Path (Split-Path -Parent $root) "tekken4-fork-music" }
 if (-not $env:TEKKEN4_BUILD_DIR) { $env:TEKKEN4_BUILD_DIR = "music" }
 $variants = [ordered]@{
     fix_full    = @{ TEKKEN4_BGM = "1"; TEKKEN4_SOUND_SOLO = ""; TEKKEN4_PERF_LOG = "70" }

@@ -36,7 +36,8 @@ param(
     [switch]$Force,
     [switch]$WhatIf,
     [string[]]$Steps,
-    [string]$LogDir
+    [string]$LogDir,
+    [switch]$AcceptMicrosoftLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +49,11 @@ $PinnedCommit    = 'eb8688b'
 $ForkBranch      = 't4-us'
 $DefaultForkUrl  = 'https://github.com/ran-j/PS2Recomp'
 $Root     = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path.TrimEnd('\')
+# Keep the prototype switch: a bundle marker selects the portable pipeline; a checkout keeps the VS path.
+if (Test-Path -LiteralPath (Join-Path $Root 'toolchain\toolchain.json')) {
+    & (Join-Path $PSScriptRoot 'build_game_portable.ps1') @PSBoundParameters
+    exit $LASTEXITCODE
+}
 $AllSteps = @('prereq', 'verify', 'extract', 'fork', 'tools', 'recomp', 'stage', 'runtime')
 if (-not $Steps -or $Steps.Count -eq 0) { $Steps = $AllSteps }
 $Steps = @($Steps -join ',' -split ',' | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
