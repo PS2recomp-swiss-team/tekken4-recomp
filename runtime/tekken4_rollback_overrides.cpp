@@ -82,6 +82,7 @@
 // keeps RDRAM under a write watch (PS2X_RDRAM_WRITE_WATCH, PS2X_RB_INCREMENTAL, PS2X_RB_WW_VERIFY=1 checks it).
 // TEKKEN4_NET_HASH_PROFILE=1  host-only hash queue/collection age and snapshot reader-wait diagnostics (default off).
 // TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
+// TEKKEN4_NET_DIAG=1      one-second host timing/lead/deadline samples (default off).
 #include "game_overrides.h"
 #include "ps2_log.h"
 #include "ps2_runtime.h"
@@ -1140,6 +1141,12 @@ namespace tekken4_rollback
         bool lazy = true; // re-simulated boundaries no rollback can reach again are not captured (T5 sec. 33.4)
         bool hashProfile = false;
         bool costProfile = false;
+        bool diag = false;
+        // Host diagnostics only. Totals are cumulative; maxima cover the last diagnostic interval.
+        std::chrono::steady_clock::time_point diagLast{};
+        double diagDebtMaxMs = 0, diagGapMaxMs = 0, diagRollbackMaxMs = 0,
+               diagSyncActualMs = 0, diagSyncOverMaxMs = 0, diagWaitMaxMs = 0, diagAdv = 0;
+        uint64_t diagWaitBefore = 0, diagWaitAfter = 0, diagWaitNeed = 0;
         NetCostHistogram frameCost[4][5]; // boot / live / cut resim / drawn resim tail; EE busy / GS / VIF / VU / IOP
         NetCostHistogram captureCost[2], restoreCost, rollbackCost;
         int padDevice = 0;
@@ -1492,6 +1499,8 @@ namespace tekken4_rollback
         g_np.resim = false;
         const double ms = msSince(g_np.rbT0);
         g_np.rbCost.push_back(ms);
+        if (g_np.diag)
+            g_np.diagRollbackMaxMs = std::max(g_np.diagRollbackMaxMs, ms);
         if (g_np.costProfile)
             g_np.rollbackCost.add(ms);
         // the restored scheduler carries the host times of the snapshot's day: put the live schedule back
@@ -1527,15 +1536,24 @@ namespace tekken4_rollback
         for (int i = cut; i < NetplayState::kLeadWin - cut; ++i)
             sum += d[i];
         const double adv = sum / (2.0 * (NetplayState::kLeadWin - 2 * cut)); // frames this side is ahead
+        if (g_np.diag)
+            g_np.diagAdv = adv;
         if (adv < 1.0 || f - g_np.lastCorrection < 10u)
             return;
         const int frames = adv >= 2.5 ? std::min(4, static_cast<int>(adv + 0.5)) : 1;
         // give the frames up as whole vblank periods: this frame's live part starts that much later and the
         // schedule moves with it (the picture on screen stays exactly that many periods longer)
         const auto give = kVblank * frames;
+        const auto sleepStart = g_np.diag ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         npSleepUntil(std::max(std::chrono::steady_clock::now(), g_np.liveT) + give);
         npShift(give);
         const double ms = std::chrono::duration<double, std::milli>(give).count();
+        if (g_np.diag)
+        {
+            const double actual = msSince(sleepStart);
+            g_np.diagSyncActualMs += actual;
+            g_np.diagSyncOverMaxMs = std::max(g_np.diagSyncOverMaxMs, actual - ms);
+        }
         const int rtt = t4net::rttMs();
         g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u;
         g_np.leadN = 0;
@@ -1553,12 +1571,39 @@ namespace tekken4_rollback
         if (next.time_since_epoch().count() == 0)
             return;
         const auto late = std::chrono::steady_clock::now() - next;
+        if (g_np.diag)
+            g_np.diagDebtMaxMs = std::max(g_np.diagDebtMaxMs, std::chrono::duration<double, std::milli>(late).count());
         if (late > std::chrono::milliseconds(50))
         {
             npShift(late);
             ++g_np.rebases;
             g_np.rebaseMs += std::chrono::duration<double, std::milli>(late).count();
         }
+    }
+
+    void npDiag()
+    {
+        if (!g_np.diag)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - g_np.diagLast < std::chrono::seconds(1))
+            return;
+        g_np.diagLast = now;
+        const uint64_t rc = t4net::remoteContig();
+        const int64_t mine = static_cast<int64_t>(g_frame) - static_cast<int64_t>(rc) + 1 + g_np.delay;
+        const double steadyMs = std::chrono::duration<double, std::milli>(now.time_since_epoch()).count();
+        std::fprintf(g_log, "NETDIAG steady_ms=%.3f f=%" PRIu64 " slot=%d rc=%" PRIu64
+                            " mine=%" PRId64 " peer=%d adv=%.2f samples=%d hold=%" PRIu64
+                            " gap_max_ms=%.3f debt_max_ms=%.3f rebase=%" PRIu64 " rebase_ms=%.3f"
+                            " sync=%" PRIu64 " sync_req_ms=%.3f sync_actual_ms=%.3f sync_over_max_ms=%.3f"
+                            " stalls=%" PRIu64 " stall_ms=%.3f wait_max_ms=%.3f wait_rc=%" PRIu64 "->%" PRIu64
+                            " wait_need=%" PRIu64 " rb=%" PRIu64 " rb_max_ms=%.3f\n",
+                     steadyMs, g_frame, g_np.slot, rc, mine, t4net::peerLead(), g_np.diagAdv, g_np.leadN, g_np.tsHold,
+                     g_np.diagGapMaxMs, g_np.diagDebtMaxMs, g_np.rebases, g_np.rebaseMs,
+                     g_np.corrections, g_np.correctionMs, g_np.diagSyncActualMs, g_np.diagSyncOverMaxMs,
+                     g_np.stalls, g_np.stallMs, g_np.diagWaitMaxMs, g_np.diagWaitBefore, g_np.diagWaitAfter,
+                     g_np.diagWaitNeed, g_np.rollbacks, g_np.diagRollbackMaxMs);
+        g_np.diagGapMaxMs = g_np.diagDebtMaxMs = g_np.diagSyncOverMaxMs = g_np.diagWaitMaxMs = g_np.diagRollbackMaxMs = 0;
     }
 
     bool writeBmp(const std::string &path, const std::vector<uint8_t> &rgba, uint32_t width, uint32_t height)
@@ -1705,6 +1750,8 @@ namespace tekken4_rollback
         g_np.hashNext = g_frame;
         g_np.started = true;
         g_np.runT0 = g_np.winT0 = std::chrono::steady_clock::now();
+        if (g_np.diag)
+            g_np.diagLast = g_np.runT0;
         // the boot waited: pace from now; with early rollback the schedule runs earlyMs ahead of the vblank times
         // the frames' live parts keep (liveT)
         npShift(std::chrono::steady_clock::now() - t0 -
@@ -1739,6 +1786,8 @@ namespace tekken4_rollback
         {
             const double ms = std::chrono::duration<double, std::milli>(now - g_np.lastLive).count();
             g_np.frameTimes.push_back(ms);
+            if (g_np.diag)
+                g_np.diagGapMaxMs = std::max(g_np.diagGapMaxMs, ms);
             if (g_frame >= g_np.rbStart)
             {
                 ++g_np.timedFrames;
@@ -1869,8 +1918,16 @@ namespace tekken4_rollback
         if (rc < need && !t4net::peerLost())
         {
             const auto t0 = std::chrono::steady_clock::now();
+            const uint64_t rcBefore = rc;
             rc = t4net::waitRemote(static_cast<uint32_t>(need - 1u), UINT32_MAX);
             const double ms = msSince(t0);
+            if (g_np.diag)
+            {
+                g_np.diagWaitBefore = rcBefore;
+                g_np.diagWaitAfter = rc;
+                g_np.diagWaitNeed = need;
+                g_np.diagWaitMaxMs = std::max(g_np.diagWaitMaxMs, ms);
+            }
             if (lockstep)
             {
                 ++g_np.lockWaits;
@@ -1919,6 +1976,7 @@ namespace tekken4_rollback
 
         npDecideInputs(f);
         npPacingGuard();
+        npDiag();
         if (g_np.liveFrames % 600u == 0u && g_np.liveDone == f && f == g_np.lastLiveFrame && g_np.lastSummary != f)
         {
             g_np.lastSummary = f;
@@ -2020,6 +2078,8 @@ namespace tekken4_rollback
             g_np.hashProfile = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_COST_PROFILE"))
             g_np.costProfile = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_DIAG"))
+            g_np.diag = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCALPAD"))
             g_np.localPad = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_PAD"))

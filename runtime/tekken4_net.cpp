@@ -228,6 +228,14 @@ namespace t4net
             uint64_t peerPingRxUs = 0;
             Stats st;
             uint32_t strangers = 0;
+            // TEKKEN4_NET_DIAG=1: wall-clock transport diagnostics, no wire/simulation changes.
+            bool diag = false, simSafeWait = false;
+            uint64_t diagLastUs = 0, diagTickUs = 0, diagTickGapUs = 0, diagRxWaitUs = 0;
+            uint64_t diagInputUs = 0, diagInputGapUs = 0, diagProgressUs = 0;
+            uint64_t diagLocalUs = 0, diagLocalGapUs = 0;
+            uint32_t diagLeadEnd = 0, diagLeadEndMax = 0;
+            uint64_t diagLeadBack = 0, diagLeadEndUs = 0;
+            std::atomic<uint64_t> diagSimLateUs{0}, diagSimLateCount{0}, diagSimDepth{0};
             FILE *log = nullptr;
             std::mutex logMu;
             // simulator
@@ -329,6 +337,8 @@ namespace t4net
             while (it != s.simQueue.begin() && std::prev(it)->dueUs > packet.dueUs)
                 --it;
             s.simQueue.insert(it, std::move(packet));
+            if (s.diag && s.simQueue.size() > s.diagSimDepth.load(std::memory_order_relaxed))
+                s.diagSimDepth.store(s.simQueue.size(), std::memory_order_relaxed);
             s.simCv.notify_one();
         }
 
@@ -534,7 +544,10 @@ namespace t4net
             if (h.magic != kMagic)
                 return;
             const int payloadBytes = n; // keep the authentication tag in the byte count
+            const uint64_t lockUs = s.diag ? qpcUs() : 0;
             std::lock_guard<std::mutex> lk(s.mu);
+            if (s.diag)
+                s.diagRxWaitUs = std::max(s.diagRxWaitUs, qpcUs() - lockUs);
             if (h.ver != s.netVersion)
             {
                 // A foreign HELLO must prove it belongs to this match before it can cancel it.
@@ -728,6 +741,19 @@ namespace t4net
                 return;
             if (ih.count)
                 s.peerSentInputs = true;
+            if (s.diag)
+            {
+                const uint64_t now = qpcUs();
+                if (s.diagInputUs)
+                    s.diagInputGapUs = std::max(s.diagInputGapUs, now - s.diagInputUs);
+                s.diagInputUs = now;
+                s.diagLeadEnd = ih.first + ih.count; // sender frontier; may be batch-limited if >64 inputs unacked
+                if (s.diagLeadEnd < s.diagLeadEndMax)
+                    ++s.diagLeadBack;
+                if (s.diagLeadEnd > s.diagLeadEndMax)
+                    s.diagLeadEndUs = now;
+                s.diagLeadEndMax = std::max(s.diagLeadEndMax, s.diagLeadEnd);
+            }
             if (ih.ack > s.peerAck)
                 s.peerAck = ih.ack;
             s.peerLeadV = ih.lead;
@@ -746,8 +772,11 @@ namespace t4net
                 std::memcpy(s.remote.in[i].axes, w.axes, 4);
                 s.remote.inTag[i] = f + 1;
             }
+            const uint32_t beforeContig = s.remoteContig;
             while (s.remote.inTag[s.remoteContig % kRing] == s.remoteContig + 1)
                 s.remoteContig++;
+            if (s.diag && s.remoteContig != beforeContig)
+                s.diagProgressUs = qpcUs();
             for (uint32_t k = 0; k < ih.nhash; k++, at += sizeof(WireHash))
             {
                 WireHash w;
@@ -764,8 +793,10 @@ namespace t4net
 
         void rxThread()
         {
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
             State &s = S();
+            const BOOL priorityOk = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+            if (s.diag)
+                note("NETDIAG thread=rx priority=%d set_ok=%d", GetThreadPriority(GetCurrentThread()), priorityOk);
             uint8_t buf[2048];
             for (;;)
             {
@@ -791,8 +822,10 @@ namespace t4net
 
         void simThread()
         {
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
             State &s = S();
+            const BOOL priorityOk = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+            if (s.diag)
+                note("NETDIAG thread=sim priority=%d set_ok=%d", GetThreadPriority(GetCurrentThread()), priorityOk);
             std::unique_lock<std::mutex> lk(s.simMu);
             for (;;)
             {
@@ -810,8 +843,11 @@ namespace t4net
                         s.simCv.wait_for(lk, std::chrono::microseconds(wait - 1000));
                     else
                     {
+                        // A sorted middle insertion by sendTo invalidates deque references. The opt-in fix
+                        // holds only a value while unlocked, then rechecks the queue under simMu.
+                        const uint64_t dueUs = front.dueUs;
                         lk.unlock();
-                        while (qpcUs() < front.dueUs) // (front stays: only this thread pops)
+                        while (qpcUs() < (s.simSafeWait ? dueUs : front.dueUs))
                             std::this_thread::yield();
                         lk.lock();
                     }
@@ -820,6 +856,14 @@ namespace t4net
                 SimPacket packet = std::move(front);
                 s.simQueue.pop_front();
                 lk.unlock();
+                if (s.diag)
+                {
+                    const uint64_t late = qpcUs() - packet.dueUs;
+                    if (late > s.diagSimLateUs.load(std::memory_order_relaxed))
+                        s.diagSimLateUs.store(late, std::memory_order_relaxed);
+                    if (late >= 2000)
+                        s.diagSimLateCount.fetch_add(1, std::memory_order_relaxed);
+                }
                 sendWire(packet.bytes.data(), static_cast<int>(packet.bytes.size()), packet.to);
                 lk.lock();
             }
@@ -827,14 +871,42 @@ namespace t4net
 
         void tickThread()
         {
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
             State &s = S();
+            const BOOL priorityOk = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+            if (s.diag)
+                note("NETDIAG thread=tick priority=%d set_ok=%d process_class=%lu", GetThreadPriority(GetCurrentThread()),
+                     priorityOk, static_cast<unsigned long>(GetPriorityClass(GetCurrentProcess())));
             uint64_t lastWaitNote = 0;
             for (;;)
             {
                 Sleep(5);
                 std::lock_guard<std::mutex> lk(s.mu);
                 const uint64_t now = nowMs();
+                if (s.diag)
+                {
+                    const uint64_t us = qpcUs();
+                    if (s.diagTickUs)
+                        s.diagTickGapUs = std::max(s.diagTickGapUs, us - s.diagTickUs);
+                    s.diagTickUs = us;
+                    if (us - s.diagLastUs >= 1000000)
+                    {
+                        s.diagLastUs = us;
+                        note("NETDIAG local=%u remote=%u ack=%u lead=%d peer_lead=%d lead_end=%u lead_end_max=%u lead_back=%llu lead_end_age_ms=%.1f input_age_ms=%.1f progress_age_ms=%.1f "
+                             "local_age_ms=%.1f local_gap_ms=%.1f input_gap_ms=%.1f rx_lock_ms=%.1f tick_gap_ms=%.1f sim_late_ms=%.1f sim_late_n=%llu sim_depth=%llu",
+                             s.localMax, s.remoteContig, s.peerAck, s.localLead, s.peerLeadV,
+                             s.diagLeadEnd, s.diagLeadEndMax, static_cast<unsigned long long>(s.diagLeadBack),
+                             s.diagLeadEndUs ? (us - s.diagLeadEndUs) / 1000.0 : -1.0,
+                             s.diagInputUs ? (us - s.diagInputUs) / 1000.0 : -1.0,
+                             s.diagProgressUs ? (us - s.diagProgressUs) / 1000.0 : -1.0,
+                             s.diagLocalUs ? (us - s.diagLocalUs) / 1000.0 : -1.0,
+                             s.diagLocalGapUs / 1000.0, s.diagInputGapUs / 1000.0, s.diagRxWaitUs / 1000.0,
+                             s.diagTickGapUs / 1000.0, s.diagSimLateUs.exchange(0, std::memory_order_relaxed) / 1000.0,
+                             static_cast<unsigned long long>(s.diagSimLateCount.exchange(0, std::memory_order_relaxed)),
+                             static_cast<unsigned long long>(s.diagSimDepth.exchange(0, std::memory_order_relaxed)));
+                        s.diagTickGapUs = s.diagRxWaitUs = s.diagLocalGapUs = s.diagInputGapUs = 0;
+                        s.diagLeadBack = 0;
+                    }
+                }
                 if (!s.failReason.empty() || s.lost)
                     continue;
                 if (!s.connected)
@@ -928,6 +1000,10 @@ namespace t4net
             s.cfg.delaySetting = s.cfg.delaySetting < 0 ? -1 : std::min(s.cfg.delaySetting, kMaxDelay);
         const char *coalesce = std::getenv("TEKKEN4_NET_COALESCE");
         s.coalesce = coalesce && std::strcmp(coalesce, "1") == 0;
+        const char *diag = std::getenv("TEKKEN4_NET_DIAG");
+        s.diag = diag && std::strcmp(diag, "1") == 0;
+        const char *simSafeWait = std::getenv("TEKKEN4_NET_SIM_SAFE_WAIT");
+        s.simSafeWait = simSafeWait && std::strcmp(simSafeWait, "1") == 0;
         s.lastInputBytes = 0;
         s.coalesced = 0;
         s.coalesceReported = false;
@@ -943,8 +1019,13 @@ namespace t4net
             throttling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
             throttling.StateMask = 0; // off for both
             const BOOL ok = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &throttling, sizeof throttling);
-            timeBeginPeriod(1);
+            const DWORD powerError = ok ? ERROR_SUCCESS : GetLastError();
+            const MMRESULT timerResult = timeBeginPeriod(1);
             note("power throttling (EcoQoS) %s for this process; timer resolution 1 ms", ok ? "off" : "could not be turned off");
+            if (s.diag)
+                note("NETDIAG thread=start tid=%lu priority=%d power_ok=%d power_error=%lu timer_result=%u",
+                     static_cast<unsigned long>(GetCurrentThreadId()), GetThreadPriority(GetCurrentThread()), ok, static_cast<unsigned long>(powerError),
+                     static_cast<unsigned>(timerResult));
             // The same for the GPU (phase 3b): the game without the foreground window had its GPU work scheduled
             // behind, its GS worker then waited 65-200 ms every ~6 frames for the vertex ring's fences (the GPU
             // tens of ms behind) -- a picture held 4-12 refreshes. The process GPU scheduling priority class
@@ -1044,6 +1125,11 @@ namespace t4net
         if (s.sim)
             note("network simulator on this side's sends: one-way %.1f ms +- %.1f ms, %.1f %% loss", config.simLatencyMs,
                  config.simJitterMs, config.simLossPercent);
+        if (s.diag)
+            note("NETDIAG enabled (one-second interval maxima, ages at sample); sim_seed=%u role_stream=%d sim_safe_wait=%d",
+                 config.simSeed, config.role == Role::Host ? 1 : 2, s.simSafeWait);
+        if (s.simSafeWait)
+            note("TEKKEN4_NET_SIM_SAFE_WAIT=1: simulator wait uses a copied deadline while its queue is unlocked");
         std::thread(rxThread).detach();
         std::thread(tickThread).detach();
         if (s.sim)
@@ -1210,6 +1296,16 @@ namespace t4net
     {
         State &s = S();
         std::lock_guard<std::mutex> lk(s.mu);
+        if (s.diag)
+        {
+            const uint64_t us = qpcUs();
+            if (s.diagLocalUs)
+                s.diagLocalGapUs = std::max(s.diagLocalGapUs, us - s.diagLocalUs);
+            else
+                note("NETDIAG thread=setLocal tid=%lu priority=%d", static_cast<unsigned long>(GetCurrentThreadId()),
+                     GetThreadPriority(GetCurrentThread()));
+            s.diagLocalUs = us;
+        }
         for (uint32_t g = s.localMax; g <= frame; ++g) // a gap (never expected) holds this input
         {
             s.local.in[g % kRing] = input;

@@ -3,6 +3,12 @@
 _Last updated: 2026-10-30 ~17:00 (Pablo's review tree taken over where it helps the US line)_
 
 ## Resume here
+- **Asymmetric rollback investigation (2026-10-30, unbuilt):** `TEKKEN4_NET_DIAG=1` adds transport and live-boundary
+  timing/lead/rebase/simulator samples; `tools/net_pair.ps1 -TimingDiag` also records process CPU/priority/affinity/focus.
+  All diagnostics default off. Separate default-OFF `TEKKEN4_NET_SIM_SAFE_WAIT=1` repairs an unlocked simulator
+  deque-reference read. No time-sync or pacing policy change. Ranked causes, exact maintainer run and two-PC limits:
+  `docs/ROLLBACK_ASYMMETRY.md`. Static review only; no build, game or network run. A real build, rollback self-test
+  with 0 mismatches, and instrumented pair/two-PC runs remain required.
 - **Rollback source follow-up (2026-10-30, unbuilt):** two default-OFF switches in `runtime/`:
   `TEKKEN4_NET_COALESCE=1` skips identical boundary INPUT sends within 15 ms while preserving sampled inputs
   and retries; `TEKKEN4_NET_HASH_PROFILE=1` reports worker queue/collection age and snapshot reader waits.
