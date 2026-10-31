@@ -62,13 +62,14 @@ adds the control.
 | `docs/PERF.md` | stage table, smoothness |
 | `docs/MUSIC_FIX.md` | BGM, voices, intro movie audio |
 | `docs/ROLLBACK_PLAN.md`, `ROLLBACK_PHASE01.md`, `PHASE2.md`, `PHASE3.md`, `PHASE3B.md` | rollback + netplay |
+| `docs/DIRECTFIGHT_T4.md` | opt-in automatic Versus boot input, save/menu limits, state discovery and later direct-fight plan |
 | `docs/LOBBY.md`, `SERVER_HANDOFF_T4.md` | lobby integration, existing handoff to the Server session; it prepares the T4 lobby instance, which goes live only when T4 plays online |
 | `docs/RELEASE_PLAN_T4.md`, `E2E_BUILD.md`, `START_HIER.txt` | release options, player build test, tester guide |
 | `TEST_ONLINE_DE.txt` | short German two-PC internet test guide, router/VPN choices, errors and return logs |
 
 ## Runtime switches (env)
 `TEKKEN4_INTERNAL_RES`, `TEKKEN4_AA`, `TEKKEN4_ANISO`, `TEKKEN4_HUD`, `TEKKEN4_WINDOW_FILTER`, `TEKKEN4_FULLSCREEN` (1 | exclusive), `TEKKEN4_PROGRESSIVE`,
-`TEKKEN4_UNLOCK_ALL`, `TEKKEN4_SOUND`, `TEKKEN4_ISO`, `TEKKEN4_MOVIE_GAIN`, `TEKKEN4_AUDIO_BUFFER_MS`, `TEKKEN4_RUNAHEAD`, `TEKKEN4_RB_MODE`, `TEKKEN4_NET*`,
+`TEKKEN4_UNLOCK_ALL`, `TEKKEN4_SOUND`, `TEKKEN4_ISO`, `TEKKEN4_MOVIE_GAIN`, `TEKKEN4_AUDIO_BUFFER_MS`, `TEKKEN4_RUNAHEAD`, `TEKKEN4_RB_MODE`, `TEKKEN4_NET*` (including default-off `TEKKEN4_NET_AUTO_VS` and its bounded `TEKKEN4_NET_AUTO_VS_END` deadline; see `docs/DIRECTFIGHT_T4.md`),
 `PS2X_DEBUG_PANEL`, `PS2X_PERF_STATS`, `PS2X_GS_HW_SCALE` (raw override, wins over the resolution step). Details in the docs above.
 
 Rollback switch results and the exact Sunday two-PC settings are in `docs/ROLLBACK_ASYMMETRY.md`;

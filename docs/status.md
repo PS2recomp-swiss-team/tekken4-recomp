@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-31 (Sunday internet-test preparation, source copy only)_
+_Last updated: 2026-10-31 (automatic online Versus boot input, source copy only)_
 
 ## Resume here
 - **Asymmetry measurements and Sunday settings (2026-10-31, source copy only):** supplied `sun0005` reports

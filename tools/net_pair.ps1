@@ -7,10 +7,14 @@
 # -Env: "K=V;K=V" for both; -HostEnv / -JoinEnv for one side. -End: logical frame both stop at (TEKKEN4_NET_END);
 # the script closes both once both logs say NETEND (or -Seconds passed). -Shots: logical frames for net_shot_f*.bmp.
 # -TimingDiag: TEKKEN4_NET_DIAG=1 on both sides, plus timing_process.log (2 s CPU/priority/affinity/focus samples).
+# -AutoVs: TEKKEN4_NET_AUTO_VS=1 on both sides; report the bounded boot-input log alongside the hash summary.
+# Supply the usual -Env scripts for character confirms/fight input after the automatic boot window.
+# Repeat with fresh and existing run-directory saves; zero mismatches alone does not prove the visible screen.
 # Output: logs\net\<Name>\{host,join}\ (rb_frames.log, net.log, stdout/stderr, shots) and a summary on stdout.
 param([string]$Name = "", [int]$Rtt = 0, [double]$Jitter = 0, [double]$Loss = 0, [int]$End = 9000, [int]$Seconds = 1800,
       [string]$Env = "", [string]$HostEnv = "", [string]$JoinEnv = "", [string]$Shots = "", [int]$Port = 7400,
-      [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net", [switch]$NoLock, [switch]$TimingDiag)
+      [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net", [switch]$NoLock, [switch]$TimingDiag,
+      [switch]$AutoVs)
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-net" }
 if (-not $BuildDir) { $BuildDir = "net" }
@@ -77,6 +81,7 @@ try {
         Set-EnvList $Env
         Set-EnvList $s.extra
         if ($TimingDiag) { $env:TEKKEN4_NET_DIAG = "1" }
+        if ($AutoVs) { $env:TEKKEN4_NET_AUTO_VS = "1" }
         $env:TEKKEN4_NET = $s.net
         $env:TEKKEN4_NET_END = "$End"
         if ($sim) { $env:TEKKEN4_NET_SIM = "$sim,seed=$($s.seed)" }
@@ -138,4 +143,9 @@ foreach ($x in $procs) {
     "$($x.side): $($sum.Line)"
     $d = @(Select-String -Path $log -Pattern '^NETDESYNC').Count
     "$($x.side): NETDESYNC lines $d"
+    if ($AutoVs) {
+        $auto = @(Select-String -Path $log -Pattern '^NETAUTO_VS\b')
+        if ($auto.Count -eq 0) { "$($x.side): no NETAUTO_VS evidence; auto-VS not verified" }
+        else { $auto | ForEach-Object { "$($x.side): $($_.Line)" } }
+    }
 }

@@ -41,6 +41,8 @@ namespace t4net
     // Delay-policy combinations must also agree before input is sampled; packet layouts are unchanged.
     constexpr uint8_t kNetVersionDelayMatch = 3;
     constexpr uint8_t kNetVersionStrictDelayMatch = 4;
+    // Auto-VS changes the boot input contract; enabled peers use the corresponding policy version + 4.
+    constexpr uint8_t kNetVersionAutoVsOffset = 4;
 
     // One player's pad for one frame: buttons active-HIGH in libpad bit order (bit 3 Start, 4 Up, ... 14 Cross,
     // 15 Square), axes rx ry lx ly (0x80 centre).
@@ -72,6 +74,7 @@ namespace t4net
         int delaySetting = -1;         // -1 = auto (by round trip), else frames
         uint64_t buildId = 0;          // a peer with another build id is refused at HELLO
         uint32_t seed = 0;             // host: the session seed (0 = the session id)
+        uint64_t autoVsFingerprint = 0; // 0 = off; nonzero normalized boot script/window contract, checked at HELLO
         std::string key;               // optional match secret: SipHash-2-4 tag on every packet
         int timeoutS = 20;             // peer silent this long = lost
         int connectTimeoutS = 120;     // no handshake within this = failed
