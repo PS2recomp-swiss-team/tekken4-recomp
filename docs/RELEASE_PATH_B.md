@@ -79,7 +79,8 @@ contexts can still name old machines; those are records, not player inputs. The 
 ## Clean-PC acceptance checklist (owner runs later)
 
 1. Resolve the VU1 generator's licence/provenance: its current header says the copied upstream main branch had no
-   licence. Review every dependency's notices and the exact FFmpeg LGPL build/source offer, including bundled libraries.
+   licence. Use the local evidence and owner questions in [THIRD_PARTY.md](THIRD_PARTY.md).
+   Review every dependency's notices and the exact FFmpeg LGPL build/source offer, including bundled libraries.
 2. Prepare reviewed input locks and real payloads. Verify official archive hashes, extracted tool names, licence texts,
    private Python/Tcl/Tk isolation, source-only trees and all ordered patches. Produce a zip and review both scan results
    and `SHA256SUMS`. Feed renamed disc files, ELF, BIOS, generated C++, compiled game code, nested archives and Microsoft

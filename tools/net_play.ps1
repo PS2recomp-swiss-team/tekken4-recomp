@@ -128,12 +128,13 @@ try {
     $identity | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $RunDir 'build_identity.json') -Encoding UTF8
     $env:TEKKEN4_NET_BUILD = $identity.build_id
     Write-Host "Build id: $($identity.build_id)"
-    Write-Host "Compiler / MSVC version: $($identity.compiler)"
+    Write-Host "C++ compiler version: $($identity.compiler)"
     Write-Host "ISO SHA-256: $($identity.iso_sha256)"
 } catch {
     if (-not $SkipPreflight) {
-        Write-Host 'Build identity missing/stale? After the local runtime build, regenerate it with:'
-        Write-Host "  python -I tools\t4_buildid.py --src `"$Src`" --out `"$exeDir`""
+        Write-Host "Build identity check failed: $($_.Exception.Message)"
+        Write-Host 'If the identity is missing or stale, rebuild the runtime first, then regenerate it with:'
+        Write-Host "  python -I `"$(Join-Path $PSScriptRoot 't4_buildid.py')`" --src `"$Src`" --out `"$exeDir`""
         throw
     }
     Write-Warning "Identity could not be checked: $($_.Exception.Message)"

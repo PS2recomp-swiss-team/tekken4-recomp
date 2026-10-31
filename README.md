@@ -25,20 +25,22 @@ Online still boots a new game for each match; persistent sessions and automatic
 VS entry are not release promises. `TEKKEN4_NET_AUTO_VS` stays off without its
 own passed pair test.
 
-Recorded developer-build results for SLUS-20328, 2026-10-29:
+Recorded developer-build results for SLUS-20328, 2026-10-29/30. These are
+historical reports; their logs and game data are absent from this review copy:
 
 | Milestone | State |
 |---|---|
 | Function map (headless Ghidra, 4454 + 359 functions), 40 jump tables, recompiles with 0 errors | done |
 | Boot, Namco logo, intro movie, difficulty, mode select, character select, Story prologue | done |
-| A fight (Story Battle, Kazuya vs Paul), native VU1, OpenGL renderer, full speed (60 fps) | done |
+| A fight (Story Battle, Kazuya vs Paul), native VU1, OpenGL renderer | reported working; the E2E run reached a fight but did not measure frame-accurate speed |
 | Sound incl. background music (real Namco driver on the emulated IOP) | done (confirmed by ear); intro movie music still rough |
-| Other modes, long sessions | done (QA: all modes, 7-min run); all fighters unlocked by default |
-| PC picture: progressive, resolution steps to 4K, FXAA, fullscreen; 60 fps on all stages; XInput pads | done |
-| One-step build from the player's own ISO (no BIOS): `tools/build_game.ps1` | done (run end to end; still needs VS Build Tools) |
+| Other modes, stability | mode checks and a 7-minute run reported; long sessions remain unproved; all fighters unlocked by default |
+| PC picture: progressive, resolution steps to 4K, FXAA, fullscreen; XInput pads | developer checks reported; the [stage sweep](docs/PERF.md) records 60 fps on its test machine, not a minimum-PC guarantee |
+| Build from the player's own ISO (no BIOS): `tools/build_game.ps1` | [developer E2E steps](docs/E2E_BUILD.md) reached a fight using installed VS Build Tools; a single invocation of all steps was not checked in that run |
 | Rollback netplay (GGPO-style, UDP, build id, hash checks) | recorded local-pair tests had 0 mismatches; two-PC direct-IP/VPN acceptance still pending; lobby outside beta scope |
 
-The PAL build (`master`) reached all of the above earlier; its log is in [docs/status.md](docs/status.md).
+Earlier PAL development results are recorded in [docs/status.md](docs/status.md).
+They do not validate the US beta candidate.
 
 What it took to reach the main loop (PAL, carried over):
 - **Functions Ghidra never found** (C++ static constructors and vtable methods, only reachable through
@@ -46,7 +48,7 @@ What it took to reach the main loop (PAL, carried over):
 - **The sound driver** (Namco's IOP module, SIF RPC 0x12345) is answered by a silent stand-in in
   `runtime/tekken4_overrides.cpp` until the real module runs on PS2Recomp's emulated IOP.
 - **MFIFO**: the game streams its GS packets through a scratchpad -> ring buffer -> VIF1 DMA ring.
-  `patches/ps2xRuntime-dmac-mfifo.patch` adds that to the runtime (plus D_ENABLER readback).
+  `patches/01-ps2xRuntime-dmac-mfifo.patch` adds that to the runtime (plus D_ENABLER readback).
 
 The day-to-day log, findings and next steps are in [docs/status.md](docs/status.md).
 
@@ -91,7 +93,9 @@ python launcher\t4_launcher.pyw
 ```
 
 or `powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso "C:\path\Tekken 4 (USA).iso"`, then set `TEKKEN4_ISO` and run `tools\run_game.cmd`.
-About 7-20 minutes and 6 GB. Details: `START_HIER.txt`, `docs/E2E_BUILD.md`. Project overview: `docs/PROJECT_MAP.md`.
+The recorded developer build used about 5.4 GB plus the ISO and took about 8.6 minutes
+on its test machine; allow more space and time for a different PC or build configuration.
+Details: `START_HIER.txt`, `docs/E2E_BUILD.md`. Project overview: `docs/PROJECT_MAP.md`.
 
 ## Thanks
 
@@ -105,4 +109,6 @@ About 7-20 minutes and 6 GB. Details: `START_HIER.txt`, `docs/E2E_BUILD.md`. Pro
 ## License
 
 GPL-3.0, like PS2Recomp (the patches and overrides are derived from its code). See [LICENSE](LICENSE).
+Copied components and unresolved provenance are listed in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md).
+The project's licence statement does not resolve the VU1 generator's missing licence evidence.
 Tekken is a trademark of Bandai Namco Entertainment; this project is not affiliated with or endorsed by them.

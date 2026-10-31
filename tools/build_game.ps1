@@ -22,7 +22,7 @@
 .PARAMETER Force
   Ignore the up-to-date checks and redo every step (the PS2Recomp tree is never re-cloned).
 .PARAMETER WhatIf
-  Dry run: do the read-only checks (prerequisites, ISO verification), print which steps would run, change nothing.
+  Dry run: check prerequisites and the ISO, and print which steps would run. Writes the build log only.
 .PARAMETER Steps
   Run only these steps (names above), e.g. -Steps fork. Default: all.
 .PARAMETER LogDir
@@ -101,6 +101,8 @@ function Invoke-Logged {
     $ErrorActionPreference = 'Continue'
     Push-Location -LiteralPath $WorkDir
     try {
+        # A command that cannot start must not inherit an earlier successful exit code.
+        $LASTEXITCODE = 1
         & $File @ArgList 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $s = $_.Exception.Message } else { $s = [string]$_ }
             $s = $s.TrimEnd()
@@ -526,19 +528,19 @@ foreach ($t in $Timings) { Say "  $t" }
 Say ('  total    {0:N1}s' -f $PipelineClock.Elapsed.TotalSeconds)
 Say ''
 if ($WhatIf) {
-    Say 'Dry run only: nothing was changed (steps marked "would run" are what a real run does).'
+    Say 'Dry run only: the build log was written; steps marked "would run" were not run.'
 } elseif ($Steps -contains 'runtime') {
-    Say 'Ready. Start the game with:'
+    Say 'Ready. In Command Prompt, start the game with:'
     Say ''
     $inRoot = $IsoInfo -and ($IsoInfo.DirectoryName.TrimEnd('\') -ieq $Root)
     $rootIso = @(Get-ChildItem -LiteralPath $Root -Filter '*.iso' -File -ErrorAction SilentlyContinue).Count -gt 0
     if ($IsoInfo -and -not $inRoot -and -not $rootIso) {
-        Say "    set TEKKEN4_ISO=$($IsoInfo.FullName)"
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    set `"TEKKEN4_ISO=$($IsoInfo.FullName)`""
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
         Say ''
         Say '(the runtime reads the game data and sound from the ISO: TEKKEN4_ISO points it at yours, or copy the ISO into the repo root)'
     } else {
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
     }
     Say ''
     Say 'Close the game window to stop it; the console output goes to logs\run.log.'

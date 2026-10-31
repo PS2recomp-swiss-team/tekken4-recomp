@@ -26,7 +26,7 @@
 .PARAMETER Force
   Ignore the up-to-date checks and redo every step (the PS2Recomp tree is never re-cloned).
 .PARAMETER WhatIf
-  Dry run: do the read-only checks (prerequisites, ISO verification), print which steps would run, change nothing.
+  Dry run: check prerequisites and the ISO, and print which steps would run. Writes the build log only.
 .PARAMETER Steps
   Run only these steps (names above), e.g. -Steps fork. Default: all.
 .PARAMETER LogDir
@@ -105,6 +105,8 @@ function Invoke-Logged {
     $ErrorActionPreference = 'Continue'
     Push-Location -LiteralPath $WorkDir
     try {
+        # A command that cannot start must not inherit an earlier successful exit code.
+        $LASTEXITCODE = 1
         & $File @ArgList 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $s = $_.Exception.Message } else { $s = [string]$_ }
             $s = $s.TrimEnd()
@@ -219,6 +221,9 @@ Step 'prereq' 'Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja' {
     # PORTABLE: the release zip's own toolchain. Nothing is looked up through vswhere / the registry / PATH.
     if ($Portable) {
         if ($AcceptMicrosoftLicense -and -not $WhatIf) {
+            if (-not (Test-Path -LiteralPath (Join-Path $Root 'python\python.exe') -PathType Leaf)) {
+                throw 'Bundled Python is missing: python\python.exe. Extract the whole release zip again before fetching the Microsoft sysroot.'
+            }
             $code = Invoke-Logged -File (Join-Path $Root 'python\python.exe') -ArgList @('-I', (Join-Path $PSScriptRoot 'fetch_msvc_sysroot.py'), '--accept-license', '--root', $Root) -Label 'Microsoft headers and libraries'
             if ($code -ne 0) { throw "Microsoft sysroot fetch failed (exit $code). See the log; no build was started." }
         }
@@ -501,7 +506,7 @@ Step 'tools' 'PS2Recomp host tools (ps2_recomp.exe)' {
     if (-not (Test-Path -LiteralPath (Join-Path $Tree 'CMakeLists.txt'))) { throw "$Tree is not a PS2Recomp tree" }
     $env:TEKKEN4_SRC = $Tree
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'build_ps2recomp_tools_portable.cmd') -Label 'Building PS2Recomp tools'
-    if ($code -ne 0) { throw "tools\build_ps2recomp_tools.cmd failed (exit $code)" }
+    if ($code -ne 0) { throw "tools\build_ps2recomp_tools_portable.cmd failed (exit $code)" }
     if (-not (Test-Path -LiteralPath $RecompExe)) { throw "build finished but $RecompExe is missing" }
     Set-StateValues 'tools' @{ head = $head; adopted = $false }
     $Changed['tools'] = $true
@@ -528,8 +533,8 @@ Step 'recomp' 'ps2_recomp.exe config\ghidra_export.toml -> generated\' {
 # ================================================================ stage
 Step 'stage' 'tools\stage_generated.cmd' {
     $gen = (Files (Join-Path $Root 'generated') '*.cpp') + (Files (Join-Path $Root 'generated') '*.h')
-    $fp = Sha1Text ((Get-StatFingerprint $gen) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead))
-    if (-not $Force -and -not $Changed.ContainsKey('recomp') -and -not $Changed.ContainsKey('fork') -and (Get-StateValue 'stage' 'fingerprint') -eq $fp -and (Test-Path -LiteralPath (Join-Path $Tree 'ps2xRuntime\src\runner\register_functions.cpp'))) { return 'up to date' }
+    $fp = Sha1Text ((Get-StatFingerprint $gen) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.h' -Recurse)) + '|' + (Get-TreeHead))
+    if (-not $Force -and -not $Changed.ContainsKey('recomp') -and -not $Changed.ContainsKey('fork') -and (Get-StateValue 'stage' 'fingerprint') -eq $fp -and (Test-Path -LiteralPath (Join-Path $Tree 'ps2xRuntime\src\runner\register_functions.cpp')) -and (Test-Path -LiteralPath (Join-Path $Tree 'ps2xRuntime\src\runner\tekken4_net.cpp'))) { return 'up to date' }
     if ($WhatIf) { Plan 'run tools\stage_generated.cmd'; $Changed['stage'] = $true; return 'would run' }
     $env:TEKKEN4_SRC = $Tree
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'stage_generated.cmd') -Label 'Staging generated code'
@@ -539,12 +544,24 @@ Step 'stage' 'tools\stage_generated.cmd' {
     'staged'
 }
 
+# The online launcher needs the build id beside the executable, including after an up-to-date build.
+function Write-NetBuildId {
+    $py = $Script:Tools['py']
+    if (-not $py) { $c = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1; $py = @{ Exe = $c.Source; Pre = @() }; if ($c.Name -ieq 'py.exe') { $py.Pre = @('-3') } }
+    $a = @($py.Pre) + @('-I', (Join-Path $PSScriptRoot 't4_buildid.py'), '--src', $Tree, '--out', (Split-Path -Parent $RunnerExe))
+    $code = Invoke-Logged -File $py.Exe -ArgList $a -Label 'Netplay build id (t4_buildid.py)'
+    if ($code -ne 0) { Say '    NOTE: the netplay build id could not be written: online matches will refuse this build.' }
+}
+
 # ================================================================ runtime
-Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
-    $vu1 = Files (Join-Path $Root 'game\vu1\micro') '*.bin'
+Step 'runtime' "tools\build_runtime_portable.cmd -> $RunnerExe" {
+    $vu1 = @(Files (Join-Path $Root 'game\vu1\micro') '*.bin')
     $fp = Sha1Text ((Get-StateValue 'stage' 'fingerprint') + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'patches') '*.patch')) + '|' +
                     (Get-StatFingerprint $vu1) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead) + '|' + $BuildDirName)
-    if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) { return 'up to date' }
+    if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) {
+        if (-not $WhatIf) { Write-NetBuildId }
+        return 'up to date'
+    }
     if ($WhatIf) { Plan 'run tools\build_runtime_portable.cmd (cmake + ninja, 10-40 minutes the first time)'; $Changed['runtime'] = $true; return 'would run' }
     if ($vu1.Count -eq 0) {
         # The VU1 micro memory image (native VU1 = full speed) is assembled from the player's own ELF.
@@ -560,8 +577,9 @@ Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
     $env:TEKKEN4_BUILD_DIR = $BuildDirName
     Say '    this is the long step (several hundred C++ files); progress is in the log'
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'build_runtime_portable.cmd') -Label 'Building the game runtime (ninja)'
-    if ($code -ne 0) { throw "tools\build_runtime.cmd failed (exit $code)" }
+    if ($code -ne 0) { throw "tools\build_runtime_portable.cmd failed (exit $code)" }
     if (-not (Test-Path -LiteralPath $RunnerExe)) { throw "build finished but $RunnerExe is missing" }
+    Write-NetBuildId
     Set-StateValues 'runtime' @{ fingerprint = $fp; exe = $RunnerExe }
     $Changed['runtime'] = $true
     'built'
@@ -575,19 +593,19 @@ foreach ($t in $Timings) { Say "  $t" }
 Say ('  total    {0:N1}s' -f $PipelineClock.Elapsed.TotalSeconds)
 Say ''
 if ($WhatIf) {
-    Say 'Dry run only: nothing was changed (steps marked "would run" are what a real run does).'
+    Say 'Dry run only: the build log was written; steps marked "would run" were not run.'
 } elseif ($Steps -contains 'runtime') {
-    Say 'Ready. Start the game with:'
+    Say 'Ready. In Command Prompt, start the game with:'
     Say ''
     $inRoot = $IsoInfo -and ($IsoInfo.DirectoryName.TrimEnd('\') -ieq $Root)
     $rootIso = @(Get-ChildItem -LiteralPath $Root -Filter '*.iso' -File -ErrorAction SilentlyContinue).Count -gt 0
     if ($IsoInfo -and -not $inRoot -and -not $rootIso) {
-        Say "    set TEKKEN4_ISO=$($IsoInfo.FullName)"
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    set `"TEKKEN4_ISO=$($IsoInfo.FullName)`""
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
         Say ''
         Say '(the runtime reads the game data and sound from the ISO: TEKKEN4_ISO points it at yours, or copy the ISO into the repo root)'
     } else {
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
     }
     Say ''
     Say 'Close the game window to stop it; the console output goes to logs\run.log.'

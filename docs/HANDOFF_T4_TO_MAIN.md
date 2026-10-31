@@ -1,5 +1,9 @@
 # Handoff from the Tekken 4 session to the Main session (2026-10-30)
 
+Historical maintainer handoff. In this clean copy, follow `AGENTS.md`; the outside paths and commands below
+are not instructions to act on them. Test results are reported from the original checkout, not reproduced here.
+`docs/status.md` later records public visibility of `swiss`; do not treat it as a private destination.
+
 **This comes from the Tekken 4 (T4) session**, the one that built the T4 US port, its netplay and the T4 launcher. It covers **T4 only**.
 T5DR Online is a separate project with its own sessions and coordinator (`C:\T5DROnline`); nothing here describes its state.
 
@@ -19,7 +23,7 @@ user can paste it into a new session. `docs/SESSIONS.md` already has the split a
 - Work in `D:\tekken4-us` (git worktree, branch `us-slus20328`). `D:\tekken4-recomp` = `master`, the colleague's PAL line: leave it.
 - PS2Recomp: `D:\tekken4-fork-ps2recomp`, branch `t4-us` = upstream `eb8688b` + the 78 patches in `patches\`. Verified: applying
   them to a clean clone gives exactly this tree.
-- Remotes: `swiss` = PS2recomp-swiss-team/tekken4-recomp (**private**, new work goes here); `origin` = Lautreck/tekken4-recomp (**PUBLIC**).
+- Remotes: `swiss` = PS2recomp-swiss-team/tekken4-recomp (previously described as private; see visibility warning above); `origin` = Lautreck/tekken4-recomp (**PUBLIC**).
 - Pushes to `swiss` were blocked by the auto-mode classifier: the user pushes by hand. 3+ local commits are not pushed yet.
 
 ## State
@@ -31,7 +35,7 @@ user can paste it into a new session. `docs/SESSIONS.md` already has the split a
 | Controller (XInput) | works | `docs/INPUT.md`; user with a real pad: good, very slight lag |
 | In-game music and sound | works | user by ear: good |
 | All fighters unlocked by default | works | char select in Story, Arcade, VS; Eddy/Miharu/Violet not selected one by one |
-| Build from own ISO | `tools\build_game.ps1` ran in one go from a fresh zip: 6.6 min, reached a fight | `docs/E2E_BUILD.md`; only on this PC, which has all tools |
+| Build from own ISO | grouped `-Steps` runs from a fresh clone reached a fight, about 8.6 min | `docs/E2E_BUILD.md`; installed tools on one developer PC; single invocation and clean-PC setup not verified |
 | Rollback netplay | 0 desyncs at 0/50/100/150 ms with 3 % loss | `docs/ROLLBACK_PHASE3.md`, `PHASE3B.md`; **two instances on one PC only**, about 55 fps there because both share one GPU |
 | Launcher | first version: Play, Build, Settings, Controls, Online placeholder | BUILD GAME tab only dry-run |
 | Lobby | T4 copy of the T5DR lobby, 12/12 local tests with a stub game | `docs/LOBBY.md`; real game through the lobby not run; code local only in `lobby\` |

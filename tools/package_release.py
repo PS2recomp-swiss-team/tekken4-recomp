@@ -141,6 +141,8 @@ def scan(path):
         with zipfile.ZipFile(path) as z:
             scan_zip(z, references)
     else:
+        if not path.is_dir():
+            raise ValueError("scan input must be an existing directory or zip: " + str(path))
         seen = set()
         for file in files(path):
             name = file.relative_to(path).as_posix()
@@ -204,6 +206,8 @@ def package(a):
         raise ValueError("stage and zip must both be new paths; nothing is deleted or overwritten")
     if stage == ROOT or ROOT.is_relative_to(stage) or archive.is_relative_to(stage):
         raise ValueError("unsafe staging/output location")
+    if not (ROOT / "docs" / "THIRD_PARTY.md").is_file():
+        raise ValueError("missing provenance inventory: docs/THIRD_PARTY.md")
     # Validate every input before writing the staging directory.
     dirs = {name: checked_input(lock[name], directory=True) for name in ("python", "ps2recomp", "llvm", "cmake", "ninja")}
     sources = {name: checked_input(lock["fetch"][name], directory=True) for name in FETCH}

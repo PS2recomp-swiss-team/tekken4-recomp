@@ -37,9 +37,7 @@ function New-T4NetIdentity {
         throw 'invalid_identity: compiler version missing in t4net_build.json. Rebuild the runtime.'
     }
     $compiler = $compilerId[0].Substring(7) + ' ' + $compilerVersion[0].Substring(12)
-    if ($compilerId[0] -cne 'CXX_ID=MSVC') {
-        Write-Host "Compiler: $compiler. The MSVC headers/library version is not recorded in this build stamp."
-    }
+    Write-Host "Compiler: $compiler. Windows SDK and MSVC headers/library versions are not recorded in this build stamp."
     Write-Host 'Hashing your ISO (SHA-256); this can take a few minutes.'
     $identity = [pscustomobject][ordered]@{
         schema = 1; build_id = [string]$stamp.id; compiler = $compiler
@@ -86,7 +84,7 @@ function Resolve-T4NetPeer {
         $addresses = @($lookup.Result | Where-Object { $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork })
         if ($addresses.Count -gt 0) { return $addresses[0].ToString() }
     } catch { }
-    throw 'invalid_peer: host name has no reachable DNS lookup for IPv4. Check the name, or use the host public/VPN IPv4 address.'
+    throw 'invalid_peer: host name did not resolve to IPv4 within 5 seconds. Check the name and DNS connection, or use the host public/VPN IPv4 address.'
 }
 
 function Invoke-T4NetPreflight {
@@ -173,7 +171,7 @@ function Invoke-T4NetPreflight {
                     $remote = $from; $peerNonce = [string]$packet.nonce
                     $report.peer = $receivedIdentity
                     Write-Host "Peer build: $($receivedIdentity.build_id)"
-                    Write-Host "Peer compiler/MSVC: $($receivedIdentity.compiler)"
+                    Write-Host "Peer C++ compiler: $($receivedIdentity.compiler)"
                     Write-Host "Peer ISO SHA-256: $($receivedIdentity.iso_sha256)"
                     $different = @(Compare-T4NetIdentity $localIdentity $receivedIdentity)
                     $report.mismatch_fields = $different
@@ -192,7 +190,7 @@ function Invoke-T4NetPreflight {
             if ($null -ne $finishAt -and $now -ge $finishAt) {
                 if ($different.Count -gt 0) { throw 'build_mismatch: the values above differ. Fix them on both PCs and retry.' }
                 $report.status = 'ok'; $report.reason = 'matched'
-                Write-Host 'MATCH: build id, compiler/MSVC, ISO hash and protocol settings agree.'
+                Write-Host 'MATCH: build id, C++ compiler, ISO hash and protocol settings agree.'
                 Write-Host 'UDP OK: both PCs exchanged and acknowledged packets on the host game port.'
                 Write-Host 'Allow ps2EntryRunner.exe separately in Windows Firewall. This PowerShell probe cannot check its application rule.'
                 return
@@ -202,6 +200,13 @@ function Invoke-T4NetPreflight {
         throw "udp_timeout: no complete two-way check within $TimeoutSeconds seconds. Both PCs must run this command. Check the host IPv4/UDP port, router forwarding or VPN, and the PowerShell firewall rule; then retry both."
     } finally {
         if ($null -ne $udp) { $udp.Close(); $udp.Dispose() }
-        $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+        try {
+            $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $OutputPath -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            $message = "Could not write the preflight report to ${OutputPath}: $($_.Exception.Message)"
+            if ($report.status -eq 'ok') { throw $message }
+            # Keep the network/identity failure as the terminating error.
+            Write-Warning $message -WarningAction Continue
+        }
     }
 }

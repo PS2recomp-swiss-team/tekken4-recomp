@@ -141,8 +141,8 @@ Vor naechstem Versuch sammeln:
 Jeder sendet das ausgegebene Log-Zip privat an den Maintainer. Dazu: A/B,
 Router/VPN (direct/relay), Datum/Uhrzeit/Zeitzone, bis wohin gespielt,
 Figuren/Stage/Sieger, Verzoegerung/Ton/Ruckler, genaue Fehlermeldung und ob
-beide dasselbe sahen. Auch Fehlschlaege melden. Sammler entfernt Netzadressen
-und persoenliche Pfade; ZIP-Inhalt vor Versand pruefen. Keine ISO, Spieldaten,
+beide dasselbe sahen. Auch Fehlschlaege melden. Sammler versucht Netzadressen
+und persoenliche Pfade zu entfernen; ZIP-Inhalt vor Versand pruefen. Keine ISO, Spieldaten,
 Saves, Screenshots oder Dumps senden.
 
 FEHLER -> WAS TUN

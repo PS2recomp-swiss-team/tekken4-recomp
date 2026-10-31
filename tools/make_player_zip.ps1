@@ -44,6 +44,9 @@ if ($ScanOnly) {
     if ($Inputs -or $Version -or $Stage -or $Zip) {
         throw '-ScanOnly cannot be combined with packaging arguments.'
     }
+    if (-not (Test-Path -LiteralPath $ScanOnly)) {
+        throw "Scan target does not exist: $ScanOnly. Supply an existing staged folder or zip."
+    }
 } else {
     if (-not $Inputs -or -not $Version) {
         throw @'
@@ -59,8 +62,16 @@ Use the same compiler version on both online PCs. See TEST_ONLINE_DE.txt.
     if ($Version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
         throw 'Version must contain only letters, numbers, dots, underscores and hyphens.'
     }
+    if (-not (Test-Path -LiteralPath $Inputs -PathType Leaf)) {
+        throw "Reviewed input-lock JSON not found: $Inputs. See docs/RELEASE_DOWNLOADS.md."
+    }
     if (-not $Stage) { $Stage = Join-Path $Root ("release-output\T4-" + $Version) }
     if (-not $Zip) { $Zip = Join-Path $Root ("release-output\T4-" + $Version + '.zip') }
+}
+
+$PackageScript = Join-Path $PSScriptRoot 'package_release.py'
+if (-not (Test-Path -LiteralPath $PackageScript -PathType Leaf)) {
+    throw 'Missing tools/package_release.py. Use a complete source checkout; no package or scan was attempted.'
 }
 
 $Python = $null
@@ -80,7 +91,7 @@ foreach ($Name in @('py', 'python', 'python3')) {
 }
 if (-not $Python) { throw 'Path-B packaging requires Python 3.12+ on the maintainer PC; see docs/RELEASE_DOWNLOADS.md.' }
 
-$Arguments = @($Prefix) + @('-I', '-B', (Join-Path $PSScriptRoot 'package_release.py'))
+$Arguments = @($Prefix) + @('-I', '-B', $PackageScript)
 if ($ScanOnly) {
     $Arguments += @('--scan-only', $ScanOnly)
 } else {

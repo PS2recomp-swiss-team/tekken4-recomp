@@ -18,7 +18,7 @@ import publish_source
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ("config", "runtime", "patches")
-ROOT_FILES = ("LICENSE", "TEST_ONLINE_DE.txt")
+ROOT_FILES = ("LICENSE", "TEST_ONLINE_DE.txt", "docs/THIRD_PARTY.md")
 TOOLS = (
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
     "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd",

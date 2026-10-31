@@ -92,13 +92,13 @@ Microsoft files, no CMake/Ninja/Git, the 10-40 min runtime build drops to the 48
 of C on 16 cores). Effort: days, and it touches the runtime (other agents' area); cross-DLL cost of
 `dispatchGuestBranch` must be measured (it is already an indirect call).
 
-**B. Bundled clang-cl + fetched Microsoft sysroot (quick, prototype below).** Zip ships LLVM, CMake, Ninja, Python,
+**B. Bundled clang-cl + fetched Microsoft sysroot (prototype below).** Zip ships LLVM, CMake, Ninja, Python,
 the vendored PS2Recomp + FetchContent sources; the launcher downloads the MSVC STL/CRT and Windows SDK headers and
 libs (`toolchain\msvc`, `toolchain\winsdk`, a `tools\fetch_msvc_sysroot.py` in the style of `xwin`, from Microsoft's
-public manifest, player accepts Microsoft's licence in the launcher). Those files must **not** be in our zip (Microsoft's
-terms do not list them as redistributable). Costs the player roughly 0.4-0.8 GB of disk and a 150-300 MB download
-(estimate, not measured) and the full runtime build (10-40 min). Works with today's code, no runtime changes; first run
-needs internet (it already does for the libraries).
+public manifest, player accepts Microsoft's licence in the launcher). The package policy excludes those files from
+our zip; the owner must review the exact selected Microsoft terms. Costs the player roughly 0.4-0.8 GB of disk and a
+150-300 MB download (estimate, not measured) and the full runtime build (10-40 min). Intended to use the existing
+runtime without changes; a complete clean-PC build has not proved it. First run needs internet for the sysroot.
 
 **C. llvm-mingw (clang + libc++ + mingw-w64, all freely redistributable).** No Microsoft files, but the runtime and its
 dependencies (raylib, ffmpeg/SDL import libs, OpenGL) must build and run with the MinGW ABI. Unknown risk; not tried.
@@ -135,8 +135,10 @@ logs, no Ghidra project. Content checks: ELF magic with the SLUS SHA-1, `func_`/
 byte-identical to a file under `game\disc`, any exe over 20 MB outside `toolchain\llvm`.
 
 ## 5. Licensing notes
-* Project is GPL-3.0 (derived from PS2Recomp): shipping the vendored patched PS2Recomp source and our repo files in the
-  zip satisfies the source offer. Keep the licence texts in `LICENSES\`.
+* Project is GPL-3.0 (derived from PS2Recomp). The planned zip includes the vendored patched PS2Recomp source and our
+  repo files. That inventory alone does not establish a complete source offer: the owner must check the exact
+  distributed components, corresponding source and notices. See [THIRD_PARTY.md](THIRD_PARTY.md).
+  Keep the licence texts in `LICENSES\`.
 * LLVM: Apache-2.0 with LLVM exception (redistributable, as T5DR does). CMake BSD-3, Ninja Apache-2.0, Python PSF,
   raylib/rlImGui zlib, imgui/sse2neon MIT, SDL2 zlib, OpenEXR BSD-3, FFmpeg **LGPL** (shared DLLs only, ship licence +
   link to the exact build the CMake uses).

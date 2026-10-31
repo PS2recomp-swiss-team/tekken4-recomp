@@ -2,20 +2,23 @@
 
 Start here, then `docs/SESSIONS.md` (who works on what). Current state and log: `docs/status.md` (newest entry on top).
 
+In this clean source copy, `AGENTS.md` controls work. The machine paths below describe the maintainer's
+checkout, not folders to access or prerequisites for players. Historical test logs and game data are absent.
+
 ## Goal
 A native PC port of Tekken 4 (US, SLUS-20328) that anyone can play: download, point it at your own ISO, build, play,
 then online with rollback as good as T5DR Online. No BIOS, no game data shipped. The owner chose
 **OpenRecomp-FGC as the one launcher for T5DR, T4 and future games**: a separate project, PySide6 + QML, controller first.
 
 One T4 session covers game, netplay + online and release packaging. Launcher work is outside T4. One coordinating Main
-session outside this project alone merges into `t4-us` and `patches\` and cuts releases. The owner pushes to the private
-remote by hand. An outside coding agent may work on a clean source copy without game data, but never commits or pushes;
+session outside this project alone merges into `t4-us` and `patches\` and cuts releases. The owner pushes to the chosen
+remote by hand after checking its visibility. An outside coding agent may work on a clean source copy without game data, but never commits or pushes;
 Claude reviews, tests, carries the change over and commits.
 
 ## Repositories
 | Repo | Visibility | Use |
 |---|---|---|
-| `PS2recomp-swiss-team/tekken4-recomp` (remote `swiss`) | **private** | where new work goes, branch `us-slus20328` |
+| `PS2recomp-swiss-team/tekken4-recomp` (remote `swiss`) | do not assume private; `docs/status.md` records public visibility on 2026-10-30 | historical working remote, branch `us-slus20328`; owner must verify visibility before publication |
 | `Lautreck/tekken4-recomp` (remote `origin`) | **PUBLIC** | the colleague's PAL line (`master`). Do not push new work; **never T5DR-derived code** |
 | `ran-j/PS2Recomp` | public upstream | pinned at `eb8688b`; our changes are `patches/*.patch`, not pushed anywhere |
 | [TheWishin/OpenRecomp-FGC](https://github.com/TheWishin/OpenRecomp-FGC) | not recorded here | separate project; the one launcher; loads `launcher\t4core.py` from a T4 install at run time |
@@ -37,7 +40,7 @@ Claude reviews, tests, carries the change over and commits.
 | Path | Area | What |
 |---|---|---|
 | `launcher\` | T4 interface + existing launcher | `t4_launcher.pyw` (Tk UI) stays until each part has moved to OpenRecomp-FGC; `t4core.py` (settings, env, build, run) is the interface loaded at run time. Written new, no T5DR code |
-| `lobby\` (git-excluded, local only) | Online | copy of the private T5DR lobby adapted to T4 (`t4lobby`, `t4game.py`). May go to the Swiss repo on its own branch; never to `origin` |
+| `lobby\` (absent from this copy) | Online | historical private T5DR lobby adaptation (`t4lobby`, `t4game.py`); do not add it here or assume any remote is private |
 | `tools\build_game.ps1`, `iso_extract.py`, `vu1_micro_from_elf.py` | Build | ISO -> runnable game in one step |
 | `tools\*_portable*`, `toolchain_env.cmd`, `t4_toolchain_clangcl.cmake` | Release | prototype: build without Visual Studio |
 | `config\` | Game | US function map, jump tables, recompiler TOML (no game code) |

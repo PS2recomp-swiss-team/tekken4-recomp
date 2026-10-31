@@ -1,5 +1,9 @@
 # Online play through a lobby (rollback phase 4)
 
+Historical integration notes for private code absent from this source copy. This is not a player setup guide
+for the public beta: no lobby, matchmaking or ranked service is supplied here. See `BETA_RELEASE_NOTES.md` for
+current scope and `AGENTS.md` for clean-copy limits. The local results below were not reproduced in this audit.
+
 Status 2026-10-29. Tekken 4 reuses the lobby of the user's T5DR Online project (C:\T5DROnline, `lobby/t5lobby`,
 `docs/ONLINE.md`, `NETPLAY.md`, `HOSTING.md`, `RANKED.md` there, "T5 ..." below): server, client library, NAT traversal,
 relay and the match flow are T5DR's code, copied into `lobby/` and adapted where the game differs. The game side is

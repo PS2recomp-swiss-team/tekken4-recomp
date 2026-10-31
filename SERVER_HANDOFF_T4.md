@@ -1,5 +1,10 @@
 # Server handoff: Tekken 4 online (for the T5DR coordinator)
 
+Historical 2026-10-29 handoff. The private `lobby/` code, logs and external checkout paths below are absent
+from this clean source copy. Follow `AGENTS.md`; these paths and deployment examples do not authorize access
+or deployment. This is a proposed lobby route, not a tested public beta service. Current release scope is in
+`docs/BETA_RELEASE_NOTES.md`; local test claims below were not reproduced during this source audit.
+
 From the Tekken 4 port (repo Lautreck/tekken4-recomp, branch `us-slus20328`, folder `D:\tekken4-us`), 2026-10-29.
 Details: `docs/LOBBY.md` (lobby integration), `docs/ROLLBACK_PHASE3.md` (netplay), `lobby/` (the code).
 **`lobby/` is a copy of the private T5DR lobby code and is NOT in the git repo** (the T4 repo is public): it exists only

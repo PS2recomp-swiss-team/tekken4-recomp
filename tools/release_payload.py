@@ -20,6 +20,8 @@ def digest(path):
 
 def files(root):
     root = Path(root)
+    if not root.is_dir():
+        raise ValueError("release input must be an existing directory: " + str(root))
     for path in sorted(root.rglob("*")):
         if path.is_symlink() or (getattr(path.lstat(), "st_file_attributes", 0) & 0x400):
             raise ValueError("links/reparse points are not release inputs: " + str(path))

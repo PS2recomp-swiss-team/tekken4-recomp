@@ -36,10 +36,10 @@ Entwickler-Quellbaum / Quell-Test-Zip (ohne toolchain\toolchain.json)
   Standard: Nachbarordner ..\tekken4-fork-ps2recomp; TEKKEN4_SRC kann ihn ersetzen.
   Einen neuen Ordner verwenden, damit kein alter PAL-Fork benutzt wird.
 
-Kommandozeile (Bedingungen vor -AcceptMicrosoftLicense lesen, siehe docs\MSVC_SYSROOT.md)
+PowerShell (Bedingungen vor -AcceptMicrosoftLicense lesen, siehe docs\MSVC_SYSROOT.md)
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso "C:\Pfad\Tekken 4 (USA).iso" -AcceptMicrosoftLicense
-  set TEKKEN4_ISO=C:\Pfad\Tekken 4 (USA).iso
-  tools\run_game.cmd
+  $env:TEKKEN4_ISO = 'C:\Pfad\Tekken 4 (USA).iso'
+  .\tools\run_game.cmd
 
 Stand: Pfad-B-Skripte implementiert, hier KEIN Download, Build, Paket oder Spielstart getestet.
 Der fruehere Test mit installierten Entwicklertools ist kein Nachweis fuer das Spieler-Zip.

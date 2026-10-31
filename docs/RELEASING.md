@@ -33,7 +33,8 @@ a failed or missing check; do not replace a published asset or reuse a version.
    gates in [RELEASE_PATH_B.md](RELEASE_PATH_B.md),
    [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md) and
    [MSVC_SYSROOT.md](MSVC_SYSROOT.md). Resolve the VU1 generator's licence and
-   dependency/source-offer notices first. Prepare a candidate with reviewed input
+   dependency/source-offer notices first; [THIRD_PARTY.md](THIRD_PARTY.md) records
+   the local provenance evidence and questions for the owner. Prepare a candidate with reviewed input
    locks, then scan the staged folder and zip:
 
    ```text
@@ -46,6 +47,16 @@ a failed or missing check; do not replace a published asset or reuse a version.
    requires real reviewed payloads and may start the supplied Python/Tk for its
    isolation check. It does not build the game. Check the generated `SHA256SUMS`
    and zip `.sha256` sidecar. No release signature is implemented here.
+
+   Review publication content separately. `package_release.py` copies the entire
+   `docs/` tree, including historical and internal notes. Its artifact scan does
+   not detect personal paths, credentials or network addresses. Before packaging,
+   the owner must prepare a reviewed publication revision: choose the player
+   documentation and remove private details while retaining provenance and author
+   credits. Inspect the staged documents too. The source exporter's separate
+   `publish_source.py` privacy scan can refuse such content; passing the path-B
+   artifact scan does not satisfy that review. Fix the reviewed source and repeat
+   the scans; do not weaken either scanner to make an output pass.
 
    Path B is the player route. If its reviewed inputs are unavailable, stop the
    player release. `tools/make_test_zip.ps1` is an explicit source-test fallback
