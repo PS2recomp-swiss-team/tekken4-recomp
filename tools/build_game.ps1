@@ -102,7 +102,8 @@ function Invoke-Logged {
     Push-Location -LiteralPath $WorkDir
     try {
         # A command that cannot start must not inherit an earlier successful exit code.
-        $LASTEXITCODE = 1
+        # Native commands update the global variable; a local sentinel would shadow it.
+        $global:LASTEXITCODE = 1
         & $File @ArgList 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $s = $_.Exception.Message } else { $s = [string]$_ }
             $s = $s.TrimEnd()
@@ -114,7 +115,7 @@ function Invoke-Logged {
                 if ($Label) { Write-Progress -Activity $Label -Status ($s.Substring(0, [Math]::Min(110, $s.Length))) }
             }
         }
-        $code = $LASTEXITCODE
+        $code = $global:LASTEXITCODE
     } finally {
         Pop-Location
         $ErrorActionPreference = $old
