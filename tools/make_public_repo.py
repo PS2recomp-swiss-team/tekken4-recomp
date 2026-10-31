@@ -9,11 +9,14 @@ from pathlib import Path
 import stat
 import sys
 
+import publish_source
+
 
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = "https://github.com/TheWishin/Tekken4Recomp"
 SOURCE = "https://github.com/TheWishin/Tekken4Recomp-Source"
 LAUNCHER = "https://github.com/TheWishin/OpenRecomp-FGC"
+MAX_INPUT_SIZE = 32 * 1024 * 1024
 
 
 def player_readme():
@@ -32,8 +35,10 @@ BIOS or recompiled game code is shipped.** Keep your ISO available while playing
 
 ## Install, build and play
 
-T4 ships through the new [OpenRecomp-FGC launcher]({LAUNCHER}), shared with
-T5DR. Use the owner's [release notes]({PUBLIC}/releases) for the matching
+The Sunday beta is intended for the new [OpenRecomp-FGC launcher]({LAUNCHER}).
+It covers offline play and online by direct IP or VPN, with **no lobby,
+matchmaking or ranked play**. Release is conditional on the owner's two-PC
+test and package checks. Use the owner's [release notes]({PUBLIC}/releases) for the matching
 launcher and T4 package. Download and extract the complete package into a new,
 writable folder on **Windows 10/11 x64**; allow roughly **6 GB plus your ISO**.
 Follow the shared launcher's instructions to select the T4 installation.
@@ -46,11 +51,13 @@ Follow the shared launcher's instructions to select the T4 installation.
 3. Wait for the build to finish, then use offline play. Keep the ISO in place.
    Change picture and sound settings in the launcher as needed.
 
-The T4 backend and portable packaging scripts are implemented. This source
-copy does **not** establish that shared-launcher integration, a complete
-portable package, or a build on a clean PC has passed testing. The owner must
-complete those checks before advertising a release as ready. The legacy
-standalone T4 starter is `Tekken4.cmd`; it is not the shared launcher.
+The T4 backend and path B packaging scripts are implemented. Path B bundles
+the tools above; Microsoft build libraries are fetched on your PC after you
+accept their terms. This source copy does **not** establish that shared-launcher
+integration, a complete portable package, or a build on a clean PC has passed
+testing. The owner must complete those checks before advertising a release as
+ready. The standalone T4 starter is `Tekken4.cmd`; it is not the shared launcher.
+Its direct-IP Host/Join controls are implemented but have not been run here.
 
 For developers building from the [source mirror]({SOURCE}), the documented
 checkout route needs Python 3, Git, CMake, Ninja and Visual Studio 2022 Build
@@ -80,19 +87,41 @@ The keyboard remains available with a gamepad connected. Local VS Battle
 needs a second controller. F11 or Alt+Enter toggles fullscreen. Close the game
 window to quit; Esc does not quit. F1 opens the debug panel.
 
-## Current state
+## Online beta
+
+Both players need the exact same checked T4 build and their own supported ISO.
+Use the release's launcher host/join instructions. Direct IP needs a reachable
+host UDP port (default 7400); a VPN can provide that path when port forwarding
+is unavailable. A VPN relay may add delay. There is no public lobby or ranked
+service to connect to. Do not disable your firewall to connect.
+
+Expect a **fresh game boot for each online match**. Seamless new opponents,
+instant rematches and a persistent game process are not supported beta claims.
+Automatic VS menu navigation stays off until its required pair checks pass;
+follow the release's manual menu instructions.
+
+The supplied tests used two game instances on one PC. They reported no sampled
+hash mismatches in the covered runs, but some runs had severe one-sided stalls.
+That does not prove smooth play or audio on two physical PCs. The owner's
+two-PC, sound-on direct-IP/VPN test is still pending in this source copy.
+Only the release notes can say which real routes and launcher actions passed.
+
+## Current state and known issues
 
 The development notes record offline boot, menus and fights, sound, all modes,
 XInput controllers and graphics settings working in the developer build.
-Known issues include rough intro-movie music, occasional bright dots on the
-beach stage at high resolution, and pauses during startup and loading.
-Release-specific results belong in the release notes.
 
-Rollback netplay has been tested between **two local instances** with no
-desyncs reported in those tests. A two-PC test and the lobby server are still
-pending in the T4 documentation. Do not assume public matchmaking or tested
-internet play is available. The existing standalone launcher's online page
-is a placeholder. Check each release's notes for any later verified change.
+- Intro-movie music is still rough.
+- Some same-PC online runs stalled much more on one side. A fix is not proven.
+- Online currently requires a new boot per match; boot takes time.
+- Bright dots can appear on the beach stage at high resolution.
+- Startup and loading after character selection can pause.
+- The complete path B player package, clean-PC build, standalone Host/Join
+  controls and shared-launcher online integration still need owner validation.
+
+Report the release version/build ID, what you did, both sides' logs for online
+issues, and whether the route was direct or relayed. Keep ISO files, extracted
+game data, BIOS and personal network addresses out of public reports.
 
 ## Credits and licence
 
@@ -139,8 +168,17 @@ def make_public_repo(out, root=ROOT):
     _no_links(license_path)
     if not license_path.is_file():
         raise ValueError("source LICENSE must be a regular file")
+    if license_path.stat().st_size > MAX_INPUT_SIZE:
+        raise ValueError("source LICENSE is oversized; manual review required")
     license_bytes = license_path.read_bytes()
     readme = player_readme()
+    # Check every byte we will write before creating the staging directory.
+    # In particular, a renamed image or game binary must not pass as LICENSE.
+    entries = (("README.md", readme.encode("utf-8")), ("LICENSE", license_bytes))
+    findings = [name + ": " + reason for name, data in entries
+                for reason in publish_source.scan_file(name, data)]
+    if findings:
+        raise ValueError("player repository refused:\n" + "\n".join(findings))
     out.mkdir(parents=True, exist_ok=True)
     _no_links(out)
     with (out / "README.md").open("x", encoding="utf-8", newline="\n") as handle:

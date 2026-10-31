@@ -10,6 +10,7 @@ from unittest.mock import patch
 import uuid
 
 import publish_source
+import make_public_repo
 import test_zip
 
 
@@ -224,8 +225,6 @@ class ExportTests(unittest.TestCase):
             ("LICENSE", license_data), ("runtime/example.cpp", source_data),
             ("CREDITS.md", b"Original Author\n"), ("docs/img/note.txt", b"omit\n"),
             ("lobby/service.py", b"omit\n"), ("CLAUDE.md", b"omit\n"),
-            ("assets/picture.PNG", b"fake image\n"),
-            ("assets/renamed.txt", bytes((137,)) + b"PNG\r\n" + bytes((26, 10))),
         ]
         with retained_fixture("export-") as work:
             out = Path(work) / "mirror"
@@ -237,6 +236,25 @@ class ExportTests(unittest.TestCase):
             self.assertEqual(source_data, (out / "runtime/example.cpp").read_bytes())
             self.assertEqual({"LICENSE", "runtime/example.cpp", "CREDITS.md"},
                              {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()})
+
+    def test_assets_are_refused_even_under_excluded_paths_before_output(self):
+        png = bytes((137,)) + b"PNG\r\n" + bytes((26, 10))
+        samples = (
+            ("assets/picture.PNG", b"synthetic text\n"),
+            ("assets/renamed.txt", png),
+            ("docs/img/renamed.txt", png),
+            ("logs/disc.ISO", b"synthetic text\n"),
+            ("out/renamed.txt", bytes((127,)) + b"ELF" + bytes(64)),
+        )
+        with retained_fixture("assets-refused-") as work:
+            for name, data in samples:
+                with self.subTest(name=name):
+                    out = Path(work) / "mirror"
+                    files = [("LICENSE", b"Synthetic GPL-3.0\n"), (name, data)]
+                    with patch.object(publish_source, "_git", side_effect=self.fake_git(files)):
+                        with self.assertRaises(ValueError):
+                            publish_source.export_ref(ROOT, "reviewed", out)
+                    self.assertFalse(out.exists())
 
     def test_scan_failure_writes_nothing(self):
         files = [("LICENSE", b"Synthetic GPL-3.0\n"),
@@ -274,6 +292,44 @@ class ExportTests(unittest.TestCase):
                     publish_source.export_ref(ROOT, "reviewed", out)
                 git.assert_not_called()
             self.assertEqual(b"unchanged\n", existing.read_bytes())
+
+
+class PlayerRepositoryTests(unittest.TestCase):
+    def test_only_scanned_player_readme_and_license_are_written(self):
+        with retained_fixture("player-") as work:
+            root = Path(work)
+            notice = b"Synthetic author credit; GPL-3.0\n"
+            (root / "LICENSE").write_bytes(notice)
+            out = root / "player"
+            make_public_repo.make_public_repo(out, root)
+            self.assertEqual({"README.md", "LICENSE"}, {p.name for p in out.iterdir()})
+            self.assertEqual(notice, (out / "LICENSE").read_bytes())
+            self.assertEqual(make_public_repo.player_readme(), (out / "README.md").read_text(encoding="utf-8"))
+
+    def test_disguised_asset_license_is_refused_before_output(self):
+        # The unsafe bytes only exist in memory, never as fixture files.
+        samples = (bytes((137,)) + b"PNG\r\n" + bytes((26, 10)),
+                   bytes((127,)) + b"ELF" + bytes(64))
+        with retained_fixture("player-assets-refused-") as work:
+            root = Path(work)
+            (root / "LICENSE").write_text("Synthetic GPL-3.0\n", encoding="utf-8")
+            for data in samples:
+                with self.subTest(header=data[:4]):
+                    out = root / "player"
+                    with patch.object(Path, "read_bytes", return_value=data):
+                        with self.assertRaises(ValueError):
+                            make_public_repo.make_public_repo(out, root)
+                    self.assertFalse(out.exists())
+
+    def test_generated_readme_is_scanned_before_output(self):
+        with retained_fixture("player-readme-refused-") as work:
+            root = Path(work)
+            (root / "LICENSE").write_text("Synthetic GPL-3.0\n", encoding="utf-8")
+            out = root / "player"
+            with patch.object(make_public_repo, "player_readme", return_value="<sv" + "g></svg>"):
+                with self.assertRaises(ValueError):
+                    make_public_repo.make_public_repo(out, root)
+            self.assertFalse(out.exists())
 
 
 class TestZipTests(unittest.TestCase):

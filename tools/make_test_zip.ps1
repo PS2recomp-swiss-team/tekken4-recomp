@@ -5,6 +5,12 @@
   The explicit build/test catalog is scanned with tools/publish_source.py before
   anything is written. A finding refuses the zip; selected source is never edited.
   The zip contains source only, no installed tools or game files.
+
+  For the portable path-B player candidate, use tools/make_player_zip.ps1 with
+  reviewed local inputs. This source fallback requires Python 3.8+, Git,
+  CMake 3.20+, Ninja and VS 2022 Build Tools (Desktop development with C++,
+  MSVC v143 x64/x86 and Windows SDK). Online peers need the same compiler
+  version. See TEST_ONLINE_DE.txt. It is not the portable player release.
 .PARAMETER OutDir
   Output folder inside this tree. Default: dist\sunday. Existing zips stay intact.
 .PARAMETER CheckOnly

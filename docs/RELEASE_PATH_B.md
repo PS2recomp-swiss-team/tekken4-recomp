@@ -1,11 +1,25 @@
 # Path B: release preparation and proof still needed
 
-2026-10-30: scripts implemented, no download, build, package or game run performed in this working copy.
+2026-10-31: scripts implemented, no download, build, package or game run performed in this working copy.
 The old E2E result is a developer/MSVC build, not proof of this release path.
+
+Sunday beta scope is offline plus online by direct IP or VPN in the new launcher,
+from the player's own USA ISO. No lobby or ranked. The owner's two-PC result,
+the exact integrated launcher, and clean-PC packaging remain release gates.
+Use [BETA_GO_NO_GO.md](BETA_GO_NO_GO.md) after the test; player-facing limits are
+in [BETA_RELEASE_NOTES.md](BETA_RELEASE_NOTES.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ## Maintainer preparation
 
-Use `tools/package_release.py` with a reviewed local input lock, a new staging directory and a new zip path.
+Use `tools/make_player_zip.ps1` with a reviewed local input lock, a new staging directory and a new zip path:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/make_player_zip.ps1 -Inputs release-inputs/inputs.json -Version X.Y.Z-beta.1 -Stage release-output/T4 -Zip release-output/T4-X.Y.Z-beta.1.zip
+```
+
+This is a future maintainer command, not a command run in this copy. The wrapper
+uses `tools/package_release.py` for path B. It must stop when real reviewed inputs
+are missing; it must not substitute a source-only archive and call it portable.
 It does not clone, build or change the input trees. Exact lock fields, download sources, sizes and licences are in
 [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md); Microsoft preparation is in [MSVC_SYSROOT.md](MSVC_SYSROOT.md).
 Prepare clean PS2Recomp sources at the full pinned revision, apply every current two-digit patch in name order,
@@ -19,7 +33,13 @@ The packager tests the staged Python with a bare PATH during a future packaging 
 Microsoft headers and libraries must not be provided as package inputs: the player fetches them after acceptance.
 Keep the reviewed Microsoft payload lock in the release; it prevents the player from resolving a changing manifest.
 
-The zip uses `Tekken4.cmd` as its starter. A native signed `Tekken4.exe` is a later owner decision; no compiled starter
+The path-B backend zip includes `Tekken4.cmd` as its standalone starter. The beta
+must also prove the new launcher's T4 install/build/offline/direct-IP/VPN path;
+the standalone starter alone does not satisfy that gate.
+Its new standalone Host/Join controls use the existing direct-IP preflight and
+runtime path; these controls were not run here and do not supply the external
+shared-launcher integration.
+A native signed `Tekken4.exe` is a later owner decision; no compiled starter
 is created or shipped by this source change. No prebuilt recompiler is required: its sources and all its dependencies
 are included, and the player's compiler builds it. The game runtime is always built on the player's PC.
 
@@ -28,6 +48,16 @@ patches stay untouched. `tools/prepare_portable_tree.py` refuses a changed upstr
 Runtime and recompiler FetchContent sources come from `deps/fetch`; CMake runs disconnected. There should be no
 dependency download during a player's CMake build. The payload lock and archive scans are release gates, not a malware
 or copyright detector: the maintainer must review provenance and licence terms as well.
+
+## Explicit source fallback
+
+If the path-B payloads or clean-PC gates are unavailable, the maintainer can use
+`tools/make_test_zip.ps1` for a source test archive. This is for testers who install
+Python 3 with tkinter, Git, CMake, Ninja and Visual Studio 2022 Build Tools with
+C++, MSVC and the Windows SDK themselves. They build from their own supported ISO.
+The source test archive is a CLI kit without the launcher; use its `TEST_ONLINE_DE.txt`.
+It contains no bundled compiler/runtime tools or game data and is not the promised
+portable player zip. A successful source test cannot approve path B or shared-launcher integration.
 
 ## Build switch and paths
 
@@ -67,6 +97,11 @@ contexts can still name old machines; those are records, not player inputs. The 
    across two identical portable builds on different paths and differ when compiler inputs change.
 6. Play through boot, character selection and fights on all stages; measure frame timing against MSVC, listen to sound,
    test controllers/settings/saves, and compare graphics and native VU1 behaviour. Test the advertised CPU baseline.
+7. Test the exact new launcher with offline play and two physical PCs over the advertised direct-IP/VPN route,
+   with sound on and matching build IDs. Use cold boot for every online match, test both host/join roles,
+   and retain both logs. Compare COALESCE ON/OFF as described in [ROLLBACK_ASYMMETRY.md](ROLLBACK_ASYMMETRY.md).
+   No supplied report validates `TEKKEN4_NET_AUTO_VS`; leave it off unless its separate matching pair passes.
+   Do not claim one-sided stalls are fixed from zero hashes or a final 60 fps window alone.
 
 ## Questions for the owner
 

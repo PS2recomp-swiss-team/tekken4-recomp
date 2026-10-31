@@ -4,7 +4,7 @@
     python  launcher\\t4_launcher.pyw --screenshot PNG [--tab N]    (save a picture of the window, then exit)
     python  launcher\\t4_launcher.pyw --selftest                    (no window: settings, paths, env switches)
 
-Tabs: Play offline, Build game (from your own ISO, no BIOS), Settings, Controls, Online (not yet).
+Tabs: Play offline, Build game (from your own ISO, no BIOS), Settings, Controls, Online (direct IP).
 Python 3 standard library only (tkinter). Logic is in t4core.py.
 """
 import argparse
@@ -100,7 +100,7 @@ class App(tk.Tk):
         self.tab_ctl = ttk.Frame(self.nb, padding=16)
         self.tab_online = ttk.Frame(self.nb, padding=16)
         for f, t in ((self.tab_play, "  Play offline  "), (self.tab_build, "  Build game  "), (self.tab_set, "  Settings  "),
-                     (self.tab_ctl, "  Controls  "), (self.tab_online, "  Online (soon)  ")):
+                     (self.tab_ctl, "  Controls  "), (self.tab_online, "  Online (direct IP)  ")):
             self.nb.add(f, text=t)
         self._build_play()
         self._build_build()
@@ -206,6 +206,7 @@ class App(tk.Tk):
             self.lbl_last.config(text="The game has not been started from this launcher yet.", foreground=COL["muted"])
         if not (lr and not lr.get("ok")):
             self.txt_crash.pack_forget()
+        self.btn_online.config(state="normal" if ok else "disabled")
 
     @staticmethod
     def fmt_secs(x):
@@ -455,6 +456,9 @@ class App(tk.Tk):
     def on_build(self, dry):
         if self.build_busy:
             return
+        if self.game:
+            messagebox.showinfo(TITLE, "Close the game or stop the online session before building.")
+            return
         iso = self.var_iso.get().strip().strip('"')
         if not iso or not os.path.isfile(iso):
             self.lbl_iso.config(text="Choose your Tekken 4 (USA) ISO first.", foreground=COL["bad"])
@@ -702,18 +706,62 @@ class App(tk.Tk):
     # ============================================================ Online tab
     def _build_online(self):
         f = self.tab_online
-        ttk.Label(f, text="Online play", font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(f, text="Comes with the T4 lobby server.", font=("Segoe UI", 12)).pack(anchor="w", pady=(10, 4))
-        ttk.Label(f, text="Rollback netplay already works between two local copies of the game; the lobby (finding "
-                  "and joining matches) is being built. Nothing to set up here yet.", style="Muted.TLabel",
-                  wraplength=760, justify="left").pack(anchor="w")
-        for text in ("Server address", "Player name"):
-            r = ttk.Frame(f)
-            r.pack(anchor="w", pady=6)
-            ttk.Label(r, text=text, width=16).pack(side="left")
-            e = ttk.Entry(r, width=40, state="disabled")
-            e.pack(side="left")
-        ttk.Button(f, text="Find a match", state="disabled").pack(anchor="w", pady=8)
+        ttk.Label(f, text="Online by direct IP or VPN", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        ttk.Label(f, text="Beta candidate: the owner's two-PC check is still required. No lobby or ranked play.",
+                  foreground=COL["warn"], wraplength=800).pack(anchor="w", pady=(8, 14))
+        ttk.Label(f, text="Both players need the same build and their own supported ISO. The host needs reachable UDP "
+                  "(router forwarding or a shared VPN). Allow the UDP check and game through your firewall. "
+                  "Both press START ONLINE around the same time; checking the ISO can take a few minutes.",
+                  wraplength=800, justify="left").pack(anchor="w")
+        self.var_online_role = tk.StringVar(value="host")
+        row = ttk.Frame(f)
+        row.pack(anchor="w", pady=12)
+        ttk.Radiobutton(row, text="Host (player 1)", variable=self.var_online_role, value="host").pack(side="left")
+        ttk.Radiobutton(row, text="Join (player 2)", variable=self.var_online_role, value="join").pack(side="left", padx=20)
+        self.var_online_peer = tk.StringVar()
+        self.var_online_port = tk.StringVar(value="7400")
+        for text, var in (("Host IPv4 (Join only)", self.var_online_peer), ("UDP port (same on both PCs)", self.var_online_port)):
+            row = ttk.Frame(f)
+            row.pack(anchor="w", pady=5)
+            ttk.Label(row, text=text, width=31).pack(side="left")
+            ttk.Entry(row, textvariable=var, width=30).pack(side="left")
+        row = ttk.Frame(f)
+        row.pack(anchor="w", pady=12)
+        self.btn_online = ttk.Button(row, text="START ONLINE", command=self.on_online)
+        self.btn_online.pack(side="left")
+        ttk.Button(row, text="Stop session", command=self.on_stop).pack(side="left", padx=8)
+        ttk.Button(row, text="Open session log", command=lambda: self.open_path(core.LAST_RUN_LOG)).pack(side="left")
+        ttk.Label(f, text="Sound stays on for this test. Player 1 navigates the menus manually. Each new opponent "
+                  "needs a fresh start; automatic VS navigation is off. Close both games before reconnecting. "
+                  "Intro music and one-sided stalls remain known issues.", wraplength=800,
+                  style="Muted.TLabel", justify="left").pack(anchor="w", pady=(2, 12))
+        self.lbl_online_status = ttk.Label(f, text="", wraplength=800, justify="left")
+        self.lbl_online_status.pack(anchor="w")
+
+    def on_online(self):
+        if self.game or self.build_busy:
+            return
+        holder = core.run_lock_holder()
+        if holder:
+            messagebox.showwarning(TITLE, "Another game holds logs\\run.lock (%s). Close it first." % holder)
+            return
+        try:
+            run = core.OnlineRun(self.settings, self.var_online_role.get(), self.var_online_peer.get(),
+                                 self.var_online_port.get())
+            run.start()
+        except (OSError, ValueError) as e:
+            messagebox.showerror(TITLE, "Could not start online:\n%s" % e)
+            return
+        core.take_run_lock()
+        self.game = run
+        self.refresh_play()
+        self._refresh_online_log()
+        threading.Thread(target=lambda: self.post("game_done", run.wait()), daemon=True).start()
+
+    def _refresh_online_log(self):
+        self.lbl_online_status.config(text="\n".join(core.tail_lines(core.LAST_RUN_LOG, 8)))
+        if isinstance(self.game, core.OnlineRun):
+            self.after(1000, self._refresh_online_log)
 
     # ============================================================ closing
     def on_close(self):

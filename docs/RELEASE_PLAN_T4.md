@@ -1,5 +1,39 @@
 # T4 player release: plan for a zip that needs no Visual Studio
 
+## Sunday beta decision, 2026-10-31
+
+Path B is the chosen beta packaging route: bundled Python/LLVM/CMake/Ninja and
+reviewed source dependencies; Microsoft build headers/libraries are fetched on
+the player's PC after acceptance. Nothing from the game ships. Each player
+builds from their own USA v1.00 ISO, SLUS-20328.
+
+Scope: offline and online by direct IP or VPN inside the new launcher. No lobby,
+ranked, persistent opponent process or instant direct-fight entry. Boot a new
+game for every online match. Shared-launcher integration, clean-PC path-B builds
+and the owner's two-PC sound-on test still need proof.
+
+The maintainer entry point is `tools/make_player_zip.ps1 -Inputs <lock> -Version <version>
+-Stage <new-folder> -Zip <new-zip>`, using the existing path-B packager. Missing
+reviewed payloads stop packaging. The explicit `tools/make_test_zip.ps1` fallback
+is source only and needs installed Python 3 with tkinter, Git, CMake, Ninja,
+VS 2022 C++ Build Tools, MSVC and the Windows SDK. It is not a portable release.
+
+[ROLLBACK_ASYMMETRY.md](ROLLBACK_ASYMMETRY.md) recommends COALESCE ON for measured
+traffic savings and DIAG ON for the Sunday observation run. Other experiments
+stay OFF; no timing/prediction retuning is justified. AUTO_VS stays OFF without
+its own passed pair. No evidence here establishes that the one-PC stalls are fixed.
+
+Use [RELEASE_PATH_B.md](RELEASE_PATH_B.md) for current preparation,
+[BETA_GO_NO_GO.md](BETA_GO_NO_GO.md) for acceptance,
+[BETA_RELEASE_NOTES.md](BETA_RELEASE_NOTES.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
+for player limits, and [BETA_ANNOUNCEMENTS.md](BETA_ANNOUNCEMENTS.md) for posting drafts.
+No build, package or game was run in this copy.
+
+## Historical plan, 2026-10-30
+
+The inventory below records the earlier options and estimates. The Sunday
+decision above and RELEASE_PATH_B.md supersede its implementation TODOs.
+
 Status 2026-10-30: plan plus a working prototype of the switch (nothing downloaded, no zip built yet).
 Goal (owner): download one zip, start the launcher, BUILD GAME from your own ISO (no BIOS), play. Like T5DR Online.
 
@@ -69,7 +103,7 @@ needs internet (it already does for the libraries).
 **C. llvm-mingw (clang + libc++ + mingw-w64, all freely redistributable).** No Microsoft files, but the runtime and its
 dependencies (raylib, ffmpeg/SDL import libs, OpenGL) must build and run with the MinGW ABI. Unknown risk; not tried.
 
-Recommendation: ship **B** first (days, no engineering risk), design **A** as the 1.0 goal (it also removes the long
+Earlier recommendation: ship **B** first (requires a full clean-PC build and licence review), design **A** as the 1.0 goal (it also removes the long
 build for the player, the biggest usability problem), keep C as the fallback if Microsoft's terms for B are a problem.
 
 ## 4. Contents of the release zip `T4-<version>.zip` (estimates; T5DR numbers are measured)

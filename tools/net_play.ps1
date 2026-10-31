@@ -3,15 +3,21 @@
 #   join (P2): powershell -ExecutionPolicy Bypass -File tools\net_play.ps1 -Join <HOST-IP> -Port 7400
 # Preflight compares the two builds and checks UDP before launching the game.
 # Each default run has its own logs/net directory; cards stay local and are never collected.
+# Default profile: docs/ROLLBACK_ASYMMETRY.md Sunday settings, AUTO_VS off.
+# -UseInheritedProfile is for separate maintainer experiments, not beta acceptance.
 param([Alias("Host")][switch]$AsHost, [string]$Join = "", [ValidateRange(1,65535)][int]$Port = 7400,
       [int]$Pad = 0, [string]$Delay = "auto", [int]$Sound = 1, [string]$Sim = "", [string]$RunDir = "",
       [string]$Src = $env:TEKKEN4_SRC, [string]$BuildDir = $env:TEKKEN4_BUILD_DIR,
       [Alias("IsoPath")][string]$Iso = $env:TEKKEN4_ISO, [switch]$NoDiagnostics,
-      [switch]$SkipPreflight, [ValidateRange(5,600)][int]$PreflightTimeoutSeconds = 90)
+      [switch]$SkipPreflight, [ValidateRange(5,600)][int]$PreflightTimeoutSeconds = 90,
+      [switch]$UseInheritedProfile)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if ($AsHost -and $Join) { throw 'Give either -Host or -Join <host>, not both.' }
 $side = if ($AsHost) { 'host' } elseif ($Join) { 'join' } else { throw 'Give -Host or -Join <host>.' }
+if ($Sim -and -not $UseInheritedProfile) {
+    throw '-Sim is outside the Sunday beta profile. Use -UseInheritedProfile only for a separate maintainer experiment.'
+}
 
 # Keep the old fork-net/net setup when present; otherwise use build_game.ps1's output.
 # Explicit parameters and environment settings still take precedence.
@@ -69,6 +75,49 @@ if ($Iso) { $Iso = [IO.Path]::GetFullPath($Iso); $env:TEKKEN4_ISO = $Iso }
 if ($Join) { $Join = Resolve-T4NetPeer -Peer $Join }
 $stampJson = Join-Path $exeDir 't4net_build.json'
 $identity = $null
+# Keep runtime experimental fallbacks OFF. Only this human-test launch profile
+# enables coalescing for its measured traffic saving, plus timing diagnostics.
+# No supplied AUTO_VS pair passed: automatic menu navigation stays OFF here.
+if (-not $UseInheritedProfile) {
+    $profile = @{
+        TEKKEN4_NET_STRICT_HELLO = '0'; TEKKEN4_RB_AUDIO_TIMELINE = '0'
+        TEKKEN4_NET_DELAY_MATCH = '0'; TEKKEN4_NET_COST_PROFILE = '0'
+        TEKKEN4_NET_HASH_PROFILE = '0'; TEKKEN4_NET_SIM_SAFE_WAIT = '0'
+        TEKKEN4_NET_REFRESH_RC = '0'; TEKKEN4_NET_AUTO_VS = '0'
+        TEKKEN4_NET_TIMESYNC = '1'; TEKKEN4_NET_MAXPRED = '8'
+        TEKKEN4_NET_EARLY = '1'; TEKKEN4_NET_LAZY = '1'; TEKKEN4_NET_LOCALPAD = '1'
+    }
+    foreach ($name in $profile.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $profile[$name], 'Process')
+    }
+    # An explicit OFF is retained for the required coalescing reference pair.
+    if ($env:TEKKEN4_NET_COALESCE -ne '0') { $env:TEKKEN4_NET_COALESCE = '1' }
+    foreach ($name in @(
+        'TEKKEN4_NET_SIM', 'TEKKEN4_NET_SEED', 'TEKKEN4_NET_END', 'TEKKEN4_NET_SHOTS',
+        'TEKKEN4_NET_DESYNC_DUMP', 'TEKKEN4_NET_RBSTART', 'TEKKEN4_NET_EARLY_MS',
+        'TEKKEN4_NET_LOCKDELAY', 'TEKKEN4_NET_HASH_EVERY', 'TEKKEN4_NET_AUTO_VS_END', 'TEKKEN4_NET_RESULT',
+        'TEKKEN4_RAND_SEED')) {
+        [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+    }
+    # Rollback harness settings can replace human input or alter hash coverage.
+    foreach ($entry in @(Get-ChildItem Env:TEKKEN4_RB_*)) {
+        if ($entry.Name -ne 'TEKKEN4_RB_AUDIO_TIMELINE') {
+            [Environment]::SetEnvironmentVariable($entry.Name, $null, 'Process')
+        }
+    }
+} else { Write-Warning 'Inherited experimental profile: this is not the Sunday beta acceptance profile.' }
+
+# These diagnostics add host timing/logging only; overhead is not proved zero.
+# A pre-existing TEKKEN4_NET_DIAG=0 or -NoDiagnostics disables them for a comparison run.
+if ($NoDiagnostics) { $env:TEKKEN4_NET_DIAG = '0' }
+elseif (-not $UseInheritedProfile -and $env:TEKKEN4_NET_DIAG -ne '0') { $env:TEKKEN4_NET_DIAG = '1' }
+elseif (-not $env:TEKKEN4_NET_DIAG) { $env:TEKKEN4_NET_DIAG = '1' }
+$env:TEKKEN4_NET = if ($AsHost) { "host:$Port" } else { "join:${Join}:$Port" }
+$env:TEKKEN4_NET_DELAY = $Delay
+$env:TEKKEN4_NET_PAD = "$Pad"
+$env:TEKKEN4_SOUND = "$Sound"
+if ($Sim) { $env:TEKKEN4_NET_SIM = $Sim }
+if (-not $env:PS2X_GS_BACKEND) { $env:PS2X_GS_BACKEND = 'gl' }
 try {
     if (-not $Iso) { throw 'ISO missing. Pass -Iso <your US SLUS-20328 v1.00 ISO>, set TEKKEN4_ISO, or use the ISO saved by build_game.ps1.' }
     $identity = New-T4NetIdentity -BuildStampJson $stampJson -IsoPath $Iso
@@ -96,19 +145,11 @@ try {
     }
 }
 
-# These diagnostics add host timing/logging only; they never alter the wire or simulation state.
-# A pre-existing TEKKEN4_NET_DIAG=0 or -NoDiagnostics disables them for a comparison run.
-if ($NoDiagnostics) { $env:TEKKEN4_NET_DIAG = '0' }
-elseif (-not $env:TEKKEN4_NET_DIAG) { $env:TEKKEN4_NET_DIAG = '1' }
-$env:TEKKEN4_NET = if ($AsHost) { "host:$Port" } else { "join:${Join}:$Port" }
-$env:TEKKEN4_NET_DELAY = $Delay
-$env:TEKKEN4_NET_PAD = "$Pad"
-$env:TEKKEN4_SOUND = "$Sound"
-if ($Sim) { $env:TEKKEN4_NET_SIM = $Sim }
-if (-not $env:PS2X_GS_BACKEND) { $env:PS2X_GS_BACKEND = 'gl' }
 $runInfo = [ordered]@{
     started_utc = (Get-Date).ToUniversalTime().ToString('o'); side = $side; port = $Port
     pad = $Pad; delay = $Delay; sound = $Sound; diagnostics = ($env:TEKKEN4_NET_DIAG -eq '1'); exit_code = $null
+    profile = if ($UseInheritedProfile) { 'inherited-experiment' } else { 'sunday-beta' }
+    coalesce = $env:TEKKEN4_NET_COALESCE; auto_vs = $env:TEKKEN4_NET_AUTO_VS
 }
 $runInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $RunDir 'run_info.json') -Encoding UTF8
 Write-Host "${side}: build $env:TEKKEN4_NET_BUILD, diagnostics=$env:TEKKEN4_NET_DIAG, logs: $RunDir"

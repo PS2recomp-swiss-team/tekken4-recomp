@@ -1,8 +1,10 @@
 # Making a T4 release
 
-T4 follows T5DR's release order and ships inside the new launcher. This page is
-the owner's procedure, not evidence that the launcher integration is finished.
-As of 2026-10-30, this copy has packaging scripts but no release workflow,
+The Sunday beta scope is offline play plus online by direct IP or VPN, inside
+the new launcher, built from the player's own USA ISO. No lobby, matchmaking or
+ranked mode is part of this beta. This page is the owner's procedure, not
+evidence that launcher integration or the two-PC test has passed.
+As of 2026-10-31, this copy has packaging scripts but no release workflow,
 automatic updater or tested portable release. Do not substitute T5DR's commands,
 signing keys or server configuration for missing T4 integration.
 
@@ -20,10 +22,11 @@ the working tree: no build, game run, tag, Git write or publication.
 
 ## Required order
 
-Preflight passes -> owner tags -> draft -> owner checks VirusTotal -> publish as
-pre-release -> update check -> owner sets latest -> server deploy -> public
-repositories -> Discord. Use this order for hotfixes too. Stop on a failed or
-missing check; do not replace an already published asset or reuse a version.
+Preflight and two-PC gates pass -> owner tags -> draft -> owner checks
+VirusTotal -> final [beta go/no-go](BETA_GO_NO_GO.md) -> publish as pre-release -> update check -> public
+repositories -> announcement. The Sunday beta stays a pre-release; setting it
+latest is a later promotion decision. Use the same checks for hotfixes. Stop on
+a failed or missing check; do not replace a published asset or reuse a version.
 
 1. **Preflight, before the tag.** Choose a new version and write player release
    notes describing only what was checked. Follow the input, licence and clean-PC
@@ -34,15 +37,20 @@ missing check; do not replace an already published asset or reuse a version.
    locks, then scan the staged folder and zip:
 
    ```text
-   python -B tools/package_release.py --inputs release-inputs/inputs.json --version X.Y.Z --stage release-output/T4 --zip release-output/T4-X.Y.Z.zip
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools/make_player_zip.ps1 -Inputs release-inputs/inputs.json -Version X.Y.Z-beta.1 -Stage release-output/T4 -Zip release-output/T4-X.Y.Z-beta.1.zip
    python -B tools/package_release.py --scan-only release-output/T4
-   python -B tools/package_release.py --scan-only release-output/T4-X.Y.Z.zip
+   python -B tools/package_release.py --scan-only release-output/T4-X.Y.Z-beta.1.zip
    ```
 
    These are future owner commands; they were not run in this copy. The packager
    requires real reviewed payloads and may start the supplied Python/Tk for its
    isolation check. It does not build the game. Check the generated `SHA256SUMS`
    and zip `.sha256` sidecar. No release signature is implemented here.
+
+   Path B is the player route. If its reviewed inputs are unavailable, stop the
+   player release. `tools/make_test_zip.ps1` is an explicit source-test fallback
+   for testers who install Python 3, Git, CMake, Ninja and Visual Studio 2022 Build
+   Tools with C++; it is not a portable player package or proof of path B.
 
    Test the exact new-launcher bundle on a clean Windows PC: start with a selected
    SLUS-20328 ISO, reject and accept the Microsoft terms, build, play, restart and
@@ -52,6 +60,17 @@ missing check; do not replace an already published asset or reuse a version.
    path too. Prepare and scan the public content before tagging so publication
    problems are found now. Run all required owner CI checks if configured; no T4
    `release_preflight.py` or workflow is supplied by this change.
+
+   Complete the sound-on two-physical-PC direct-IP/VPN test on this exact build
+   and launch path, with separate displays and normal controllers. Retain both
+   logs, actual negotiated delay, route and effective switches. Follow
+   [ROLLBACK_ASYMMETRY.md](ROLLBACK_ASYMMETRY.md), including its coalescing-OFF
+   reference and role swap. Severe one-sided stalls remain a no-go until this
+   test establishes acceptable play on both PCs. Keep `TEKKEN4_NET_AUTO_VS=0`
+   unless its matching sound-on pair and save-path cases in
+   [DIRECTFIGHT_T4.md](DIRECTFIGHT_T4.md) passed on this build. No such pass was
+   supplied here. Boot a fresh game for each online match; do not promise warm
+   rematches, persistent opponents or trusted winner/score reporting.
 
 2. **Tag.** After preflight and required checks pass, the owner tags the reviewed
    private release revision as `vX.Y.Z` (or a unique preview suffix). Record the
@@ -85,19 +104,19 @@ missing check; do not replace an already published asset or reuse a version.
    release a pre-release; fix and issue a new version. Do not claim an automatic
    update interval, signature check or rollback without proof.
 
-7. **Owner sets latest.** After the update checks pass, the owner edits the
+7. **Later stable promotion only.** The Sunday beta remains a pre-release.
+   After separate stable acceptance and the update checks pass, the owner edits the
    release, clears **Set as a pre-release** and selects **Set as the latest
    release**. Preview/RC builds intended only for manual testing stay pre-releases.
    Check the release page and verify what the new launcher actually offers.
 
-8. **Server deploy.** The owner/coordinator deploys the reviewed T4 server change
-   or release metadata, then checks health and compatible build identity. Keep
-   this separate from T5DR's service, keys and data. No deploy command is supplied
-   here: `lobby/` is absent from this copy and must not enter the source mirror.
-   [LOBBY.md](LOBBY.md) and the server handoff describe local work and open items,
-   not a deployed public service. Two-PC online play and public lobby availability
-   remain unproven here. If shipping offline, record server deployment as not
-   applicable and say clearly that online is unavailable.
+8. **Services and metadata.** Direct-IP/VPN play does not require a T4 lobby
+   deployment. Record lobby/server deployment as not applicable for this beta;
+   online acceptance still requires the two-PC test above. If the new launcher
+   needs release metadata, the owner updates and verifies that separately. Keep
+   T4 separate from T5DR's service, keys and data. No deploy command is supplied
+   here. `lobby/` is absent and must not enter the source mirror. Lobby and ranked
+   work in other documents is outside the advertised beta scope.
 
 9. **Public repositories.** Prepare fresh local output directories:
 
@@ -107,9 +126,10 @@ missing check; do not replace an already published asset or reuse a version.
    ```
 
    The first makes the game repository's player files. The second exports the
-   specified revision without development history and excludes images, private
-   lobby code, local configuration, logs and generated code. It refuses unsafe
-   content; historical documentation can trigger the scan too. Fix findings in
+   specified revision without development history and excludes private lobby
+   code, local configuration, logs and generated code. Public output must contain
+   no game data or images. The tools refuse unsafe content; historical
+   documentation can trigger the scan too. Fix findings in
    a reviewed revision and repeat preflight rather than bypassing the scan.
    Review both outputs, retain LICENSE and author credits, and verify that the
    source corresponds to the distributed project code. The owner carries the
@@ -117,15 +137,12 @@ missing check; do not replace an already published asset or reuse a version.
    never commit or publish. Check the public README, download, checksums and
    GPL-3 source link before announcing.
 
-10. **Discord text.** Replace every bracketed field with checked facts, then the
-    owner posts it. This procedure sends no message:
-
-    > Tekken 4 Recomp [version] is available in the new launcher:
-    > https://github.com/TheWishin/Tekken4Recomp/releases/tag/[tag]
-    > You need your own Tekken 4 USA ISO (SLUS-20328). No BIOS or game data is
-    > included. [Brief changes and known issues.] Online: [state exactly what
-    > passed; otherwise unavailable in this release]. GPL-3 source:
-    > https://github.com/TheWishin/Tekken4Recomp-Source
+10. **Announcement.** Use [BETA_RELEASE_NOTES.md](BETA_RELEASE_NOTES.md),
+    [KNOWN_ISSUES.md](KNOWN_ISSUES.md) and the English Discord/tweet drafts in
+    [BETA_ANNOUNCEMENTS.md](BETA_ANNOUNCEMENTS.md). Replace placeholders with
+    checked facts only after the go/no-go passes. The owner posts the messages;
+    these instructions send nothing. If online fails, the scoped beta is a no-go;
+    an offline-only release needs its own explicitly revised notes and decision.
 
 Record the checks that passed and the ones still pending. A source-only review
 and fake-file scanner tests cannot prove packaging, clean-PC builds, gameplay,

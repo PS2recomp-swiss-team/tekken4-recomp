@@ -111,30 +111,38 @@ def is_image(data):
             or bool(re.search(br"<svg(?:\s|>)", data[:4096], re.I)))
 
 
-def scan_file(name, data):
-    """Return category names only: never print matched credentials or addresses."""
+def asset_reasons(name, data):
+    """Check asset names and signatures even when export would omit the path."""
     path = safe_name(name)
     reasons = []
     parts = tuple(part.lower() for part in path.parts)
-    if ".mcp.json" == parts[-1] or "lobby" in parts[:-1]:
-        reasons.append("private source path")
     if path.suffix.lower() in IMAGE_SUFFIXES or is_image(data):
         reasons.append("image filename or content")
-    if path.name.lower() in GENERATED_NAMES or GENERATED_NAME.search(path.name):
-        reasons.append("generated game source filename")
-    if len(set(GAME_SYMBOL.findall(data))) >= 64 and hashlib.sha256(data).hexdigest() not in HANDWRITTEN_SHA256:
-        reasons.append("dense lifted game function names")
     if (path.suffix.lower() in DATA_SUFFIXES
             or path.name.lower() in {"data.bin", "system.cnf", "rom0", "rom1", "rom2"}
             or any(part in {"game", "bios", "saves", "save", "memcards"} for part in parts[:-1])
             or re.match(r"(?i)^(?:slus|sles|sces|slps|scps)[_-]\d", path.name)):
         reasons.append("game data or binary/archive filename")
-    if (path.suffix.lower() in KEY_SUFFIXES or "keys" in parts[:-1]
-            or path.name.lower() in {".env", "id_rsa", "id_ed25519", "credentials"}):
-        reasons.append("key or credential filename")
     if (data.startswith((b"\x7fELF", b"MZ", b"PK\x03\x04", b"7z\xbc\xaf\x27\x1c", b"Rar!", b"\x1f\x8b"))
             or data[32769:32774] == b"CD001" or data[34817:34822] == b"CD001"):
         reasons.append("game/executable/archive signature")
+    return reasons
+
+
+def scan_file(name, data):
+    """Return category names only: never print matched credentials or addresses."""
+    path = safe_name(name)
+    reasons = asset_reasons(name, data)
+    parts = tuple(part.lower() for part in path.parts)
+    if ".mcp.json" == parts[-1] or "lobby" in parts[:-1]:
+        reasons.append("private source path")
+    if path.name.lower() in GENERATED_NAMES or GENERATED_NAME.search(path.name):
+        reasons.append("generated game source filename")
+    if len(set(GAME_SYMBOL.findall(data))) >= 64 and hashlib.sha256(data).hexdigest() not in HANDWRITTEN_SHA256:
+        reasons.append("dense lifted game function names")
+    if (path.suffix.lower() in KEY_SUFFIXES or "keys" in parts[:-1]
+            or path.name.lower() in {".env", "id_rsa", "id_ed25519", "credentials"}):
+        reasons.append("key or credential filename")
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -227,10 +235,27 @@ def export_ref(repo, ref, out):
         mode, kind, oid = meta.decode("ascii").split()
         name = raw_name.decode("utf-8")
         safe_name(name)
-        if excluded(name):
+        # Refuse contamination rather than silently hiding it in an omitted
+        # directory. Private source exclusions still apply after this check.
+        named_assets = asset_reasons(name, b"")
+        if named_assets:
+            findings.extend(name + ": " + reason for reason in named_assets)
             continue
         if mode not in {"100644", "100755"} or kind != "blob":
+            if excluded(name):
+                continue
             raise ValueError("links and submodules are not mirror inputs")
+        size = int(_git(repo, "cat-file", "-s", oid))
+        if size > 32 * 1024 * 1024:
+            findings.append(name + ": oversized input; manual review required")
+            continue
+        data = _git(repo, "cat-file", "blob", oid)
+        assets = asset_reasons(name, data)
+        if assets:
+            findings.extend(name + ": " + reason for reason in assets)
+            continue
+        if excluded(name):
+            continue
         components = PurePosixPath(name).parts
         for count in range(1, len(components) + 1):
             prefix = "/".join(components[:count])
@@ -238,13 +263,6 @@ def export_ref(repo, ref, out):
             if key in seen and seen[key] != prefix:
                 raise ValueError("case-colliding tree paths")
             seen[key] = prefix
-        size = int(_git(repo, "cat-file", "-s", oid))
-        if size > 32 * 1024 * 1024:
-            findings.append(name + ": oversized input; manual review required")
-            continue
-        data = _git(repo, "cat-file", "blob", oid)
-        if is_image(data):
-            continue
         findings.extend(name + ": " + reason for reason in scan_file(name, data))
         selected.append((name, data, mode))
     if "LICENSE" not in {name for name, _, _ in selected}:
