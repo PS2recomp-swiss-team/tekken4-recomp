@@ -1,10 +1,136 @@
 # Rollback asymmetry: one side falls behind
 
-Source audit, 2026-10-30. No build, game, pair, simulator or patch application was run in this copy.
+## Maintainer's 2026-10-31 results and Sunday decision
+
+Evidence: supplied `sun0005-1`, `-coalesce`, `-hello`, `-audio`, `-delay`, `-cost` and `-simsafe`
+reports, draft `223c462541`, build ID `2ee2e293baa887af`. These are the maintainer's real-build results,
+not runs in this copy. Each pair ran 6000 frames at simulated RTT 150 ms, jitter 5 ms and loss 3%, with
+two games sharing one PC and GPU. Compare each switch with its own immediately preceding OFF pair.
+The separate OFF pairs are not a stable common baseline. No build, game, pair, simulator, test executable
+or patch application was run here.
+
+**The one-sided problem remains, without evidence of a host/join policy defect or a determinism failure.**
+The coalesce OFF pair had host/join rollback counts 193/958, resim 247/5008, maximum depth 4/9 and
+prediction stalls 0/118 (0/2308 ms). In the delay OFF pair these were 174/956 rollbacks, 373/4435 resim,
+depth 9/9, stalls 1/102 (292/3438 ms), and time sync 2/94 (33/5467 ms). The later cost and simsafe OFF
+pairs again had join depth 9 and 6211/6746 ms of prediction waiting, versus zero host waits. Yet the
+base, diagnostic, hello OFF and audio OFF pairs had zero fight stalls on both sides. Thus the same build
+can become badly unequal or remain balanced. A low rollback count on one side is not success by itself.
+
+The side doing more rollback, predicting deeply and yielding via time sync is usually ahead of a slow
+input sender; it need not be the side that initiated the slowdown. For example cost OFF had host/join
+rebase time 25137/13427 ms while join did 4340 resim frames and 6211 ms of prediction waiting. That is
+consistent with lost local headroom and pacing time on the sender, followed by extra work on the peer.
+It does not establish which event came first. All pairs still had large live-boundary p99 gaps (about
+110-179 ms) and run averages 40.1-48.0 fps despite many final windows near 60 fps. Rebase time, prediction
+wait time and requested time-sync time are different measurements; they must not be added as a stall total.
+The summary's "displayed frame" samples are live-boundary gaps, not measured GPU presentation intervals.
+
+All 14 supplied pair configurations reached live/logical 6000, reported peer OK, 199 hash comparisons per
+endpoint, zero mismatches and zero NETDESYNC lines. The supplied OFF/ON self-tests also had zero bad restores
+and zero resim mismatches: base 170 restores/375 comparisons/85 wrong-input passes; coalesce, hello and cost
+202/447/101; audio and delay 140/309/70; simsafe 202/447/101. Every wrong-input pass diverged as intended.
+This supports the covered state checks. Offline self-tests do not exercise network-only negotiation,
+coalescing or simulator waits, and sparse hashes do not prove every frame or audible output correct.
+
+In the table, H/J means host/join; arrows are that case's OFF -> ON. Times are milliseconds.
+
+| Switch | Measured result | Decision |
+|---|---|---|
+| `TEKKEN4_NET_DIAG` | Run fps 44.7/44.7 -> 44.7/44.7; stalls 0/0 -> 0/0; rebase time 34045/34025 -> 34063/34088; gap p99 121.5/120.8 -> 121.9/120.2. Rollbacks 708/751 -> 643/630, but actual delay changed 2 -> 3. | No demonstrated speed or stall benefit. ON Sunday for timing evidence only; logging overhead is not proved zero. |
+| `TEKKEN4_NET_COALESCE` | Packets 20744/20651 -> 10662/10671; payload bytes 3601893/3592294 -> 1847652/1851728, about 48% less on both peers. Resends rose 2668/2417 -> 3499/3590 but total traffic still fell. Join stalls 118/2308 ms -> 0/0, sync 87/5467 ms -> 0/0; resim H/J 247/5008 -> 1417/870. Run fps 45.3/45.4 -> 46.1/46.2; gap p99 117.2/125.6 -> 109.9/111.1. Delay stayed 3. | Clear traffic saving justifies ON. The better stall result is one observation, not a demonstrated cure. Keep an OFF reference on two PCs. |
+| `TEKKEN4_NET_STRICT_HELLO` | Run fps 43.9 -> 41.9 both; join depth 4 -> 9, stalls 0 -> 1/13 ms, sync 1/17 ms -> 62/2133 ms; gap p99 H/J 131.3/132.6 -> 140.7/139.5. Delay stayed 3. | Observed worse pacing; OFF. Startup validation has separate purposes and is not a measured pacing fix. |
+| `TEKKEN4_RB_AUDIO_TIMELINE` | Run fps 43.3 -> 40.1 both; gap p99 128.0/133.3 -> 155.5/153.8; rebase time 38542/38494 -> 49489/49531. Stalls stayed zero both. Delay stayed 3. | Observed slower, no stall benefit; OFF. One AUDIO_TIMELINE activation line and clean hashes do not validate sound quality or repeated-frame sample suppression. |
+| `TEKKEN4_NET_DELAY_MATCH` | Both used delay 3. Join stalls 102/3438 ms -> 153/5188 ms, depth stayed 9, rollback p90 46.96 -> 51.44. Run fps 45.6/45.7 -> 47.3/47.3 and join gap p90 34.2 -> 26.4 improved; host gap p99 126.4 -> 141.4 worsened. | Mixed throughput, worse one-sided wait time (about 51%); OFF. Negotiation did not produce a different delay here. |
+| `TEKKEN4_NET_COST_PROFILE` | Run fps 47.9/48.0 -> 47.8/47.8; join stalls 140/6211 ms -> 166/7967 ms, depth stayed 9, resim 4340 -> 4338, rollback p90 49.94 -> 51.61. Delay changed 3 -> 2. | No benefit; OFF except a separate component-cost investigation. No NETCOST records were supplied, so these summaries cannot identify the costly component. |
+| `TEKKEN4_NET_SIM_SAFE_WAIT` | Run fps 47.9/47.9 -> 47.9/48.0; join stalls 152/6746 ms -> 131/6772 ms, depth stayed 9, sync 94/3767 ms -> 97/4900 ms. Host rollback p90 21.21 -> 12.59 improved but gap p99 168.3 -> 179.3 worsened. Delay changed 2 -> 3. | Fixes a source-level lifetime bug when enabled; no measured cure for the wait duration. OFF for Sunday with no simulator, where it has no effect. |
+
+These are sequential, single comparisons with no repeat variance or raw event timeline. Even with the same
+simulator seeds, changed send histories change random loss/jitter draws and arrival ordering. Auto delay
+also crossed 2/3 in three comparisons. The summaries support "observed worse", "no measured gain" and
+the direct traffic reduction; they cannot assign every difference to the switch. The detailed diagnostic
+records described below were not supplied, so the initiating hitch, simulator lateness, scheduling
+overshoot and stale estimator alternatives remain unresolved. Do not tune time-sync thresholds, remove
+the pacing guard, raise prediction limits or force a delay on this evidence.
+
+### Small source fix, default off
+
+`TEKKEN4_NET_REFRESH_RC=1` now refreshes contiguous remote input immediately before the prediction-window
+check and late rollback scan. Previously `rc` could still be the value from before `npTimeSync` slept.
+Inputs arriving during that sleep could make `waitRemote` return immediately while still incrementing
+the stall counter; the late scan could also use old confirmation progress. The guarded read uses the
+transport mutex and the existing monotonic frontier. It changes no time-sync thresholds, wire format,
+prediction cap, snapshot data or hash coverage. Unset/0 retains the old path.
+
+This is a stale-read/accounting correction, not an explanation for seconds of measured waiting. It has
+no supplied A/B or build result; leave it OFF Sunday. The existing default-off `SIM_SAFE_WAIT` correction
+already copies the deque deadline while locked. The audio timeline correction is also already present
+behind its own default-off switch. No patch files were changed. A maintainer build and an isolated
+REFRESH_RC OFF/ON pair must check a correction sleep with inputs arriving during it, zero mismatches,
+the wait counter/duration and prompt late rollback. It must also check ordinary waits still enforce the
+same prediction limit and OFF preserves the old behavior. Do not claim a stall fix from this source audit.
+
+### Exact Sunday settings: two physical PCs
+
+Use the same maintainer-reviewed build on both PCs, independent displays and sound on. Close competing
+games/builds and choose graphics settings with local rendering headroom. Use a real direct or VPN path,
+recording direct/relay status. No simulated latency/jitter/loss. Two PCs remove the shared GPU/CPU
+contention, and simulator OFF removes its queue/service-thread effects; unequal PCs, clocks, real paths
+and endpoint throttling can still produce asymmetry. This evidence says nothing yet about those cases.
+
+On BOTH PCs, in the PowerShell session used to start `tools/net_play.ps1`:
+
+```powershell
+$env:TEKKEN4_NET_COALESCE = '1'
+$env:TEKKEN4_NET_DIAG = '1'
+$env:TEKKEN4_NET_STRICT_HELLO = '0'
+$env:TEKKEN4_RB_AUDIO_TIMELINE = '0'
+$env:TEKKEN4_NET_DELAY_MATCH = '0'
+$env:TEKKEN4_NET_COST_PROFILE = '0'
+$env:TEKKEN4_NET_HASH_PROFILE = '0'
+$env:TEKKEN4_NET_SIM_SAFE_WAIT = '0'
+$env:TEKKEN4_NET_REFRESH_RC = '0'
+$env:TEKKEN4_NET_SIM = ''
+$env:TEKKEN4_NET_DELAY = 'auto'
+$env:TEKKEN4_NET_TIMESYNC = '1'
+$env:TEKKEN4_NET_MAXPRED = '8'
+$env:TEKKEN4_NET_EARLY = '1'
+$env:TEKKEN4_NET_LAZY = '1'
+$env:TEKKEN4_NET_LOCALPAD = '1'
+$env:TEKKEN4_SOUND = '1'
+```
+
+Use a fresh shell without scripted inputs/fuzz, fixed seed, end-frame, screenshot/dump or priority/affinity
+experiments. After these settings, use the host/join commands in `TEST_ONLINE_DE.txt` with
+`-Delay auto -Sound 1` and no `-Sim` or `-NoDiagnostics`. Empty SIM is explicit because omitting `-Sim` does not clear an
+inherited simulator setting. Keep early timing, lockstep delay and other unlisted controls at defaults.
+DIAG is an observation exception, supported by the base comparison's unchanged aggregate pace; it is not
+a speed switch. COALESCE is the only behavior experiment recommended ON by these measurements. Code
+defaults remain OFF for all experimental switches.
+
+After the main sound-on session, restart BOTH games with only COALESCE changed to '0', using the same
+route, graphics, stage/characters and similar duration; keep DIAG on for both runs. Keep each run's logs
+separate and record actual negotiated delay (do not force 3 just because most simulated pairs picked it).
+Compare both sides' depth distribution, rollback cost, prediction waits/duration, corrections, rebases,
+boundary gaps, payload traffic and hashes. Note stutter/audio timestamps and whether symptoms follow the
+PC after swapping host/join in another cold session. Retain net.log, rb_frames.log, stdout/stderr and
+the guide's collected PC/build facts. Cross-PC steady-clock epochs cannot be aligned directly; record
+UTC/time zones and game-frame context. A smooth final FPS window alone is insufficient.
+
+The supplied successful builds apply to draft `223c462541`, not this edited source. A real build and
+sound-on rollback self-test with zero mismatches remain necessary before using the new source. Two-PC
+menu/Versus/rematch, audio and direct/relay runs must establish compatibility and pacing. Nothing here
+proves that the one-sided stalls are fixed or that release acceptance is complete.
+
+## Earlier source audit (2026-10-30)
+
+The following ranked causes and diagnostic protocol are retained for investigation. The Sunday settings
+above supersede the old next-run recommendation.
 The reported 150 ms pair had about 3.5 times as many rollbacks on one side, depth 9, 80-96 prediction-window
 waits (about 3 s) and about 90 time syncs. Another run of the same executable was nearly symmetric
 (632/589 rollbacks, depth 5/3, no waits). These totals do not identify the initiating side or cause.
-Coalescing and hash cost are outside this investigation, per the owner's evidence.
+The original source audit did not evaluate coalescing or hash cost. The new measurements above cover
+coalescing and the cost-profile A/B; they do not isolate hash cost.
 
 ## Causes, ranked
 
@@ -77,7 +203,7 @@ Coalescing and hash cost are outside this investigation, per the owner's evidenc
   rollback headroom or two-PC time-sync fairness. The symmetric same-executable run likewise proves only
   that the severe imbalance is not inevitable.
 
-## Next run
+## Earlier same-PC diagnostic protocol
 
 Use the maintainer's data-bearing working copy and newly built executable containing these changes.
 Do not run this command in the source-only review copy. Keep the first diagnostic run's behavior unchanged:
@@ -155,7 +281,7 @@ The one-second interval maxima do not establish ordering within that second; use
 and ages together, and report an unresolved cause where they cannot separate it. Simulator lateness alone
 cannot distinguish OS descheduling from the unsafe deque access.
 
-The only behavior fix added is `TEKKEN4_NET_SIM_SAFE_WAIT=1`, default off. It copies the queue deadline while
+The behavior fix added in the earlier audit was `TEKKEN4_NET_SIM_SAFE_WAIT=1`, default off. It copies the queue deadline while
 locked instead of reading a deque element after unlocking. After the unchanged diagnostic run, repeat
 the same command with a new unique name and `-Env ($v + ';TEKKEN4_NET_SIM_SAFE_WAIT=1')`. Both peers must use
 the switch. This is a controlled simulator A/B, not a time-sync or rendering fix. The safe branch still

@@ -70,3 +70,12 @@ adds the control.
 `TEKKEN4_INTERNAL_RES`, `TEKKEN4_AA`, `TEKKEN4_ANISO`, `TEKKEN4_HUD`, `TEKKEN4_WINDOW_FILTER`, `TEKKEN4_FULLSCREEN` (1 | exclusive), `TEKKEN4_PROGRESSIVE`,
 `TEKKEN4_UNLOCK_ALL`, `TEKKEN4_SOUND`, `TEKKEN4_ISO`, `TEKKEN4_MOVIE_GAIN`, `TEKKEN4_AUDIO_BUFFER_MS`, `TEKKEN4_RUNAHEAD`, `TEKKEN4_RB_MODE`, `TEKKEN4_NET*`,
 `PS2X_DEBUG_PANEL`, `PS2X_PERF_STATS`, `PS2X_GS_HW_SCALE` (raw override, wins over the resolution step). Details in the docs above.
+
+Rollback switch results and the exact Sunday two-PC settings are in `docs/ROLLBACK_ASYMMETRY.md`;
+the player commands are also in `TEST_ONLINE_DE.txt`, which ships in the test zip.
+`TEKKEN4_NET_REFRESH_RC=1` is a new default-off fix: refresh contiguous remote-input progress after
+time sync before the prediction-window check and late-input scan. It was not built or run here and
+stays off for Sunday. Runtime changes ship through the existing recursive `runtime/` source catalog.
+Sunday uses `TEKKEN4_NET_COALESCE=1` for the measured roughly 48% packet/payload reduction and
+`TEKKEN4_NET_DIAG=1` for observation. Coalescing has not been shown to cure one-sided stalls on two PCs;
+follow the main run with a matched coalescing-off reference. Other experimental switches stay off.

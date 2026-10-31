@@ -3,6 +3,15 @@
 _Last updated: 2026-10-31 (Sunday internet-test preparation, source copy only)_
 
 ## Resume here
+- **Asymmetry measurements and Sunday settings (2026-10-31, source copy only):** supplied `sun0005` reports
+  all have zero compared-hash mismatches, but several OFF pairs still show one-sided depth-9 rollback and
+  seconds of input waiting. Coalescing cuts packets/payload about 48%; only it is recommended ON as a behavior
+  experiment for Sunday. DIAG stays ON for evidence, other experiments OFF, simulator disabled, delay auto,
+  sound on. Exact settings, per-switch numbers and one-PC limits: `docs/ROLLBACK_ASYMMETRY.md` and
+  `TEST_ONLINE_DE.txt`. New default-OFF `TEKKEN4_NET_REFRESH_RC=1` refreshes input progress after time-sync
+  sleep before the prediction wait/late scan; this avoids a known stale frontier and possible false stall
+  count, not seconds of measured waiting. No build, game or tests run here. The supplied builds predate this
+  edit; a real build, zero-mismatch rollback self-test, isolated refresh A/B and two-PC runs remain required.
 - **Sunday internet test preparation (2026-10-31, unbuilt):** `TEST_ONLINE_DE.txt` covers each player's local ISO build,
   router forwarding or VPN, a 15-minute menu/Versus/rematch check and returning evidence. `tools/make_test_zip.ps1`
   packages scanned source; `tools/net_play.ps1` adds peer build/compiler/ISO comparison, UDP preflight and default-on

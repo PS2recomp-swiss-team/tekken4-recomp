@@ -66,12 +66,39 @@ Nach Test die Testregel deaktivieren, temporaere Router-Freigabe schliessen.
 3. VERBINDEN
 Konsole aus Schritt 1 nutzen. Bei neuer Konsole die ersten drei Zeilen wieder
 setzen (Build nicht wiederholen). Andere Builds/Spiele schliessen, Pad anschliessen.
+Keine Konsole mit alten Paar-/Selbsttest-Einstellungen weiterbenutzen.
+BEIDE setzen vor den Startbefehlen dieselben Einstellungen:
+
+  $env:TEKKEN4_NET_COALESCE = '1'
+  $env:TEKKEN4_NET_DIAG = '1'
+  $env:TEKKEN4_NET_STRICT_HELLO = '0'
+  $env:TEKKEN4_RB_AUDIO_TIMELINE = '0'
+  $env:TEKKEN4_NET_DELAY_MATCH = '0'
+  $env:TEKKEN4_NET_COST_PROFILE = '0'
+  $env:TEKKEN4_NET_HASH_PROFILE = '0'
+  $env:TEKKEN4_NET_SIM_SAFE_WAIT = '0'
+  $env:TEKKEN4_NET_REFRESH_RC = '0'
+  $env:TEKKEN4_NET_SIM = ''
+  $env:TEKKEN4_NET_DELAY = 'auto'
+  $env:TEKKEN4_NET_TIMESYNC = '1'
+  $env:TEKKEN4_NET_MAXPRED = '8'
+  $env:TEKKEN4_NET_EARLY = '1'
+  $env:TEKKEN4_NET_LAZY = '1'
+  $env:TEKKEN4_SOUND = '1'
+  $env:TEKKEN4_NET_LOCALPAD = '1'
+
+COALESCE sparte im Ein-PC-Paar rund 48% Pakete und Nutzdaten. Das beweist
+keine Heilung einseitiger Haenger auf zwei PCs. DIAG dient der Beobachtung;
+die anderen Versuche rechtfertigen kein Einschalten fuer diesen Haupttest.
+REFRESH_RC ist eine neue, hier weder gebaute noch ausgefuehrte Korrektur und
+bleibt aus. Netzwerksimulation bleibt aus; echte Verbindung beobachten.
+
 A zuerst, B direkt danach; HOST-IP durch A's oeffentliche ODER VPN-IPv4 ersetzen:
 
 A:
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\net_play.ps1 -Host -Port 7400 -Iso $iso -Src $env:TEKKEN4_SRC -BuildDir runtime
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\net_play.ps1 -Host -Port 7400 -Iso $iso -Src $env:TEKKEN4_SRC -BuildDir runtime -Delay auto -Sound 1
 B:
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\net_play.ps1 -Join HOST-IP -Port 7400 -Iso $iso -Src $env:TEKKEN4_SRC -BuildDir runtime
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\net_play.ps1 -Join HOST-IP -Port 7400 -Iso $iso -Src $env:TEKKEN4_SRC -BuildDir runtime -Delay auto -Sound 1
 
 Vor Spielstart: automatischer Vergleich von Build-ID, Compiler/MSVC und
 ISO-SHA256, dann UDP-Hin-/Rueckweg. Hashing kann Minuten dauern. Ab "UDP check"
@@ -97,6 +124,14 @@ Stage, mehrere Runden, beide aktiv steuern.
 Sieger und Ergebnis? Ruckler, Ton-Aussetzer, Haenger mit Uhrzeit notieren.
 START pausiert beide; lange Pausen vermeiden. Danach beide Spielfenster
 schliessen (Esc beendet nicht), Konsolenende abwarten.
+
+Nach dem Hauptlauf erst beide Logs wie unten sammeln. Danach ein Vergleich
+mit denselben PCs, Rollen, Figuren/Stage und allen uebrigen Einstellungen:
+BEIDE setzen $env:TEKKEN4_NET_COALESCE = '0', starten beide Spiele wieder
+kalt mit denselben Befehlen und wiederholen den Ablauf. Auch diese Logs
+getrennt sammeln und als COALESCE=0 kennzeichnen. Laufreihenfolge, echte RTT,
+ausgehandelten Delay und unterschiedliche Ruckler mitmelden. Ein einzelnes
+Paar ist noch kein Nachweis einer Verbesserung auf jedem Internetpfad.
 
 5. BEIDE: LOGS UND RUECKMELDUNG
 Vor naechstem Versuch sammeln:

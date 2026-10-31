@@ -83,6 +83,7 @@
 // TEKKEN4_NET_HASH_PROFILE=1  host-only hash queue/collection age and snapshot reader-wait diagnostics (default off).
 // TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
 // TEKKEN4_NET_DIAG=1      one-second host timing/lead/deadline samples (default off).
+// TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_STATE_PROBE=1    read-only live-boundary discovery log (requires a rollback mode; docs/DIRECTFIGHT_T4.md).
 // TEKKEN4_NET_RESULT=<path>  diagnostic session result JSON, default off; winner/score remain unproved TODOs.
 #include "game_overrides.h"
@@ -1146,6 +1147,7 @@ namespace tekken4_rollback
         bool hashProfile = false;
         bool costProfile = false;
         bool diag = false;
+        bool refreshRc = false;
         // Host diagnostics only. Totals are cumulative; maxima cover the last diagnostic interval.
         std::chrono::steady_clock::time_point diagLast{};
         double diagDebtMaxMs = 0, diagGapMaxMs = 0, diagRollbackMaxMs = 0,
@@ -1789,6 +1791,8 @@ namespace tekken4_rollback
                             ", max prediction %" PRIu64 ", session seed %08x, handshake %.0f ms, early rollback %s (%.1f ms), lazy %d\n",
                      g_np.slot, g_np.delay, g_np.lockDelay, base, g_np.rbStart, g_np.maxPred, g_np.sessionSeed, msSince(t0),
                      g_np.early ? "on" : "off", g_np.earlyMs, g_np.lazy ? 1 : 0);
+        if (g_np.refreshRc)
+            std::fprintf(g_log, "NET remote input refresh before prediction wait/late scan enabled\n");
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -1948,6 +1952,9 @@ namespace tekken4_rollback
             rc = t4net::remoteContig();
         }
 
+        // Time sync may have slept while remote input advanced. Use that progress for the wait and late scan.
+        if (g_np.refreshRc)
+            rc = t4net::remoteContig();
         const uint64_t need = lockstep ? f + 1u : (f > g_np.maxPred ? f - g_np.maxPred : 0u);
         if (rc < need && !t4net::peerLost())
         {
@@ -2118,6 +2125,8 @@ namespace tekken4_rollback
             g_np.costProfile = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_DIAG"))
             g_np.diag = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_REFRESH_RC"))
+            g_np.refreshRc = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCALPAD"))
             g_np.localPad = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_PAD"))
