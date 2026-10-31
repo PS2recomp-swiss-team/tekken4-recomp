@@ -158,6 +158,9 @@ def scan_file(name, data):
             address = ipaddress.ip_address(match.group().split("%", 1)[0])
         except ValueError:
             continue
+        # C++ and PowerShell scope operators such as "ad::" parse as short IPv6: a real one has more groups.
+        if ":" in match.group() and match.group().count(":") < 4:
+            continue
         # Bind-any and loopback constants are not a player's or server's address.
         if address.is_loopback or address.is_unspecified:
             continue
