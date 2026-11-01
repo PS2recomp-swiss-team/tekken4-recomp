@@ -2,13 +2,15 @@
 
 Candidate only. The owner's two-PC result has not been supplied here. Fill in
 the version, checked build/source revision, download and test results before
-publishing. The target date is Sunday, 1 November 2026; a date is not a pass.
+publishing. The target date was Sunday, 1 November 2026; status on 2 November
+remains **NO-GO pending acceptance evidence**. A date is not a pass.
 
 This beta targets offline play and rollback online play by direct IP or VPN
 inside the new launcher. There is no lobby, matchmaking or ranked play. Each
 player needs their own Tekken 4 USA v1.00 ISO, **SLUS-20328**, including while
 playing. No game data, BIOS or recompiled game executable is included. The game
-is built on the player's PC. T4's project code is GPL-3.0.
+is built on the player's PC. T4's project code is GPL-3.0. T5DR 1.2.0 is outside
+this release; lobby, shared login and server deployment come later.
 
 ## What the existing evidence covers
 
@@ -22,6 +24,17 @@ zero reported NETDESYNC lines. Those runs shared one PC and GPU and used a
 simulated network. They do not prove two-PC direct-IP/VPN play, smooth pacing,
 every frame's state or audible sound quality. Some runs had severe unequal
 stalls; a smooth final FPS window is not enough to call those runs smooth.
+
+The latest supplied report finished on 2026-11-02 for build
+`943fc4631acf2c13`, with the experimental switches reported off. Its rollback
+self-test restored 202 of 202 snapshots, compared 447 resimulated frames with
+zero mismatches, and detected divergence in all 101 wrong-input passes. The
+same-PC pair reached 6000 live frames per side at simulated RTT 150 ms, jitter
+5 ms and loss 3%, with 199 hash comparisons per side, zero mismatches and zero
+NETDESYNC lines. Run-average FPS was 50.4 on both sides; frame-time p99 was
+136.9 ms on host and 104.8 ms on join. These figures do not establish smooth
+play or a 15-minute internet test. This is an owner-supplied report, not a run
+reproduced here; its logs and game data are absent from this copy.
 
 The current edited source still needs a real build, sound-on rollback
 self-test, clean-PC path-B build and the owner's two-PC acceptance run. Neither
@@ -66,7 +79,7 @@ See [known issues](KNOWN_ISSUES.md) for workarounds and reporting details.
 |---|---|
 | Version and exact bundle checksum | Pending |
 | Reviewed source revision and matching GPL-3 source | Pending |
-| New-launcher install/build/offline smoke check | Pending |
+| New-launcher install/build/offline/return check by pad | Pending |
 | Two physical PCs, sound on, direct-IP/VPN route(s) actually checked | Pending |
 | Both endpoints' hashes, waits, pacing and audio reviewed | Pending |
 | Fresh boot for another match and disconnect/recovery | Pending |

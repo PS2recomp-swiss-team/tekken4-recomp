@@ -1,6 +1,6 @@
 # Path B: release preparation and proof still needed
 
-2026-10-31: scripts implemented, no download, build, package or game run performed in this working copy.
+2026-11-02: scripts implemented, no download, build, package or game run performed in this working copy.
 The old E2E result is a developer/MSVC build, not proof of this release path.
 
 Sunday beta scope is offline plus online by direct IP or VPN in the new launcher,
@@ -8,6 +8,22 @@ from the player's own USA ISO. No lobby or ranked. The owner's two-PC result,
 the exact integrated launcher, and clean-PC packaging remain release gates.
 Use [BETA_GO_NO_GO.md](BETA_GO_NO_GO.md) after the test; player-facing limits are
 in [BETA_RELEASE_NOTES.md](BETA_RELEASE_NOTES.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
+## Entry-point checks in this copy, 2026-11-02
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools/make_player_zip.ps1`
+  exited 1: reviewed `-Inputs` and `-Version` are required. No portable zip,
+  source fallback or download was attempted.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools/make_player_zip.ps1 -ScanOnly dist/sunday/tekken4-sunday-test-20261031-205628-895451.zip`
+  exited 1: the maintainer needs Python 3.12+ to run packaging/scanning.
+  The archive was not scanned by this command.
+
+These are real wrapper refusals, not passing package or build tests. The private
+Python/Tk check, staged-folder/zip scans and clean build with installed Python,
+Git and Visual Studio hidden remain unrun. The owner must supply reviewed inputs
+and run the exact candidate on clean Windows. Until that passes, do not advertise
+a player zip that builds without those installed tools. If using the source test
+archive, state the installed-tool requirements in the fallback section below.
 
 ## Maintainer preparation
 

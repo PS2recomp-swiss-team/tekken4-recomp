@@ -6,6 +6,11 @@ links, and fills in the release notes with the actual two-PC results. A pending
 or failed test means no release announcement. Nothing here says the test passed
 or that the one-sided stalls are fixed.
 
+Status on 2026-11-02 remains NO-GO pending acceptance evidence. Before posting,
+state the tools needed by the exact download: a source test zip requires the
+developer tools in the README. Do not call path B tool-free until that exact
+zip has built with Python, Git and Visual Studio hidden.
+
 ## Discord
 
 Tekken 4 Recomp [version] beta is out in the new launcher!
@@ -13,6 +18,7 @@ Tekken 4 Recomp [version] beta is out in the new launcher!
 You can play offline or try rollback online by direct IP or VPN. No lobby or
 ranked in this beta. Both players need the same build and their own Tekken 4 USA
 v1.00 ISO (SLUS-20328). No game data or BIOS is included.
+T5DR 1.2.0 is outside this release.
 
 It's an early beta. Intro music is still rough, and earlier tests with two games
 on one PC had one-sided stalls. Start a fresh game session on both PCs for each

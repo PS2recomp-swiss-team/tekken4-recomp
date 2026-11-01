@@ -1,5 +1,12 @@
 # Public beta source audit, 2026-10-31
 
+This is the historical 2026-10-31 review. For the 2026-11-02 entry-point
+attempts, current open findings and owner-only gates, read
+[CODEX_PROGRESS.md](../CODEX_PROGRESS.md). Python checks remained blocked;
+the real `Tekken4.cmd` starter refused missing private Python before GUI
+startup. The beta is still NO-GO; the earlier source fixes below have not
+become launcher/build/game acceptance evidence.
+
 Static review of this clean working copy. No Git command, build, project script,
 test suite, package creation, download, network probe or game was run. The five
 reviewed PowerShell entry points passed syntax parsing only. Python was not

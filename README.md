@@ -11,11 +11,15 @@ Target: **NTSC-U (USA), v1.00, SLUS-20328** on branch `us-slus20328` (PAL SCES-5
 
 ## Status
 
-Sunday beta target (2026-11-01): offline play and online by direct IP or VPN,
-inside the new launcher, built from each player's own ISO. No lobby or ranked.
+The Sunday beta target was 2026-11-01. Status on 2026-11-02: **NO-GO pending
+acceptance evidence**. Scope remains offline play and online by direct IP or VPN,
+inside the new launcher, built from each player's own ISO. No lobby or ranked;
+T5DR 1.2.0 is outside this release.
 Release is conditional on the owner's two-PC test and the
 [go/no-go checklist](docs/BETA_GO_NO_GO.md). Shared-launcher integration and a
 clean-PC path-B build are not proved by this source copy.
+The new launcher's install/build/play/return flow, including pad navigation,
+still needs the owner's hands-on check.
 
 See the [beta notes](docs/BETA_RELEASE_NOTES.md),
 [known issues](docs/KNOWN_ISSUES.md) and
@@ -24,6 +28,12 @@ one-sided stalls occurred with two games on one PC and are not proved fixed.
 Online still boots a new game for each match; persistent sessions and automatic
 VS entry are not release promises. `TEKKEN4_NET_AUTO_VS` stays off without its
 own passed pair test.
+
+The supplied 2026-11-02 report for build `943fc4631acf2c13` reached 6000 frames
+with two games on one PC, 199 hash comparisons per side and zero mismatches.
+Both sides averaged 50.4 fps over the run and had long frame-time spikes. That
+report does not prove a playable 15-minute internet session, a clean-PC build
+or the current edited tree. It was not reproduced here.
 
 Recorded developer-build results for SLUS-20328, 2026-10-29/30. These are
 historical reports; their logs and game data are absent from this review copy:

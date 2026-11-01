@@ -6,14 +6,32 @@ replacement for a clean-PC build, licence review or full play test.
 
 Scope: offline plus direct-IP/VPN online inside the new launcher, from each
 player's own Tekken 4 USA v1.00 ISO (SLUS-20328). No lobby, ranked mode or
-matchmaking. Release as a beta pre-release. Nothing was built or run in this
+matchmaking. Release as a beta pre-release. No build or game was run in this
 source-only copy, and no two-PC pass was supplied.
+
+Latest supplied owner verification finished on 2026-11-02: draft `8f1aa94684`,
+build ID `943fc4631acf2c13`, experimental switches OFF. The self-test reported
+202 good restores, zero bad restores and zero mismatches in 447 resim frame
+comparisons; all 101 wrong-input checks diverged. The simulated 150 ms RTT,
+5 ms jitter, 3% loss pair on one PC reached logical 6000 on both peers, with
+199 hash comparisons and zero mismatches each, and no NETDESYNC lines.
+It still reported run FPS 50.4 on both peers, displayed-frame p99 136.9/104.8 ms
+(host/join), and 96 join stalls totalling 3697 ms. These supplied summaries
+support the covered state checks; they do not establish playable internet
+Versus, a 15-minute two-PC pass, or acceptance of this working tree.
+
+The launcher profile differs from that OFF run: `launcher/t4core.py` clears
+inherited network experiments before `tools/net_play.ps1` normally enables
+COALESCE=1 and DIAG=1. Runtime experiment fallbacks remain OFF. No defaults
+were changed here without a build/game test. Retain the earlier traffic-saving
+rationale in [ROLLBACK_ASYMMETRY.md](ROLLBACK_ASYMMETRY.md), but require new
+evidence for the exact launcher profile before approving it for release.
 
 ## Evidence to have before this review
 
 - Exact candidate version, reviewed source revision, build IDs on both PCs,
   input locks, zip SHA-256 and matching source export. Rebuild changed source;
-  the supplied `223c462541` results do not validate this working tree.
+  the supplied `8f1aa94684` results do not validate this working tree.
 - Resolved VU1 generator provenance/licence and dependency notices/source
   offers; reviewed Microsoft terms and pinned payload lock. No Microsoft
   sysroot in the zip. See [RELEASE_PATH_B.md](RELEASE_PATH_B.md).
@@ -50,8 +68,9 @@ is pending, not a pass. Record an evidence file or test note beside each box.
   and sound worked through the new launcher with the player's selected ISO.
 - [ ] Online host/join connected through the advertised direct-IP/VPN route;
   both players reached VS manually, selected characters/stage and finished
-  fights with usable input and sound. Both peers report no hash mismatch or
-  NETDESYNC. Clean hashes alone are insufficient if either player cannot play.
+  at least 15 minutes of Versus with usable input and sound. Both peers report
+  no hash mismatch or NETDESYNC. Clean hashes alone are insufficient if either
+  player cannot play. Both logs were collected and sent to Main.
 - [ ] Both sides were acceptably paced throughout the test, without repeated
   disruptive one-sided stalls or sustained slowdown. Review both logs and
   player observations, not only a final FPS window. Retain the sound-on
