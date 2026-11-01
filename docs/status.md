@@ -1,8 +1,17 @@
 # Status
 
-_Last updated: 2026-10-31 (automatic online Versus boot input, source copy only)_
+_Last updated: 2026-11-02 (verify evidence review, source copy only)_
 
 ## Resume here
+- **Verify evidence follow-up (2026-11-02, documentation only):** `away312043`, build
+  `943fc4631acf2c13`, still has join-side prediction stalls: OFF 117/5421 ms,
+  COALESCE+DIAG 113/4745 ms. No supplied report includes raw NETDIAG records or
+  proves a cause/cure. No runtime change was made under the owner's real-entry-point
+  proof requirement. `docs/ROLLBACK_ASYMMETRY.md` records the missing evidence,
+  wrapper/zero-comparison false-green gaps, existing guarded corrections and agents.
+  No build, game or network run here; Python tests could not start. A real verify
+  with both endpoints' full logs is required before selecting and proving a fix.
+  VU1 generator licence remains unresolved; see `docs/THIRD_PARTY.md`.
 - **Asymmetry measurements and Sunday settings (2026-10-31, source copy only):** supplied `sun0005` reports
   all have zero compared-hash mismatches, but several OFF pairs still show one-sided depth-9 rollback and
   seconds of input waiting. Coalescing cuts packets/payload about 48%; only it is recommended ON as a behavior

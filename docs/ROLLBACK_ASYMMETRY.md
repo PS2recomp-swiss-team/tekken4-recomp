@@ -1,5 +1,75 @@
 # Rollback asymmetry: one side falls behind
 
+## 2026-11-02 follow-up: cause and proving run still missing
+
+The supplied verify reports were read from the explicitly requested
+`C:\OpenRecomp-work\reports\t4-verify` directory. No other checkout was opened.
+The latest report is `away312043`, build `943fc4631acf2c13`, started
+2026-10-31T20:43:20. It does not prove a cure:
+
+| Configuration | Rollbacks H/J | Resim frames H/J | Prediction stalls H/J | Stall time H/J, ms |
+|---|---|---|---|---|
+| OFF | 248/979 | 523/4031 | 0/117 | 0/5421 |
+| COALESCE + DIAG | 287/939 | 566/4093 | 0/113 | 0/4745 |
+
+Both configurations reached live/logical 6000, with 199 hash comparisons and
+zero mismatches at each endpoint. That supports the compared state, not pacing.
+`sun0005-final` also retained join stalls with DIAG OFF and ON (97/116 stalls,
+4270/3775 ms). The earlier zero-stall coalesce result did not reproduce in
+`away312043`. None of the supplied reports contains the actual NETDIAG records.
+There is no exact supplied run that proves the one-sided problem fixed.
+
+Source review found no new demonstrated cause. The existing default-off
+`TEKKEN4_NET_REFRESH_RC` corrects stale confirmation after time-sync sleep;
+`TEKKEN4_NET_SIM_SAFE_WAIT` corrects the simulator deque-reference lifetime.
+Neither can be claimed as the cause or cure from these summaries. Reordered
+INPUT lead updates, capture/hash blocking before input publication, lost pacing
+time after a hitch, and synchronous DIAG output under the transport mutex remain
+possible contributors. INPUT batches contain at most 64 inputs, so their end can
+lag the sender's actual frontier. It is not a reliable packet-generation sequence;
+filtering it alone would not establish fresh peer lead. No speculative runtime fix
+was added under the owner's rule that changed behavior must run through the real
+entry point.
+
+### Evidence needed from the next real verify
+
+The external verifier must return its actual run name and build ID, effective
+settings from both `params.txt` files, and both peers' full `net.log`,
+`rb_frames.log`, stdout/stderr and process timing records. Locate the first local
+hitch, input-progress gap, simulator lateness or correction before selecting a
+fix. Keep the same DIAG setting and actual negotiated delay for an isolated
+fix OFF/ON comparison. A proposed run name is not proof.
+
+Use the real `tools/net_pair.ps1` entry in the maintainer's data-bearing copy.
+`-TimingDiag` forces DIAG ON after environment overrides; omit that option and
+set DIAG=0 for a diagnostic OFF reference. The GUI launcher scrubs inherited
+NET/RB variables, so a shell setting alone does not establish switch activation.
+Require both NETEND records at the requested frame, expected nonzero common
+hash coverage, zero mismatches/NETDESYNC and no peer loss. Compare both endpoints'
+stall duration, depth, correction/rebase time and boundary gaps; a balanced final
+FPS window is insufficient. Repeat and swap roles, then check two physical PCs.
+
+Do not accept wrapper exit status as proof: `net_pair.ps1` prints missing logs,
+early exits and desync counts without a reliable failing result.
+`docs/rollback/net_compare.py` also returns success for zero common hashes.
+These are verification gaps, not evidence of a runtime cause; no verifier code
+was changed without exercising its real entry point.
+
+No build, launcher, game, network script or real verification was run here.
+Existing mocked launcher and catalog tests could not start because Python was
+unavailable on PATH; they would not prove real launch or rollback behavior.
+
+The VU1 generator origin and unresolved licence are recorded in
+[THIRD_PARTY.md](THIRD_PARTY.md#vu1-generator-trace): GoW `main` at `b76921c`,
+not the separately described GPL-3.0 runtime branch. No written grant resolving
+the generator licence was found in this repository.
+
+Area agents: `reports`, `net_timing`, `rollback_state`, `diag_trace`,
+`verify_entry`, `tests_catalogs`, `vu1_provenance`, `transport_audit`.
+All were read-only. Separate reviewer `final_diff_review` checked the final
+documentation change; its batch-count wording correction was applied. Runtime
+proof remains pending the external verify result.
+
 ## Maintainer's 2026-10-31 results and Sunday decision
 
 Evidence: supplied `sun0005-1`, `-coalesce`, `-hello`, `-audio`, `-delay`, `-cost` and `-simsafe`
