@@ -1,6 +1,113 @@
 # T4 beta progress, 2026-11-02
 
-## Path privacy follow-up, current session
+## Windows ZIP device-name follow-up, current session
+
+Release remains **NO-GO**. The main gate is still the exact complete
+package's real launcher GUI and portable first-run. Private Python is absent
+here; builds, games and network helpers remain forbidden. This session takes
+the open COM/LPT superscript-digit ZIP path bypass through the actual scanner
+entry. No launcher, runtime or switch behavior changed.
+
+Done:
+
+- Eight area agents read AGENTS.md and the current progress record. File
+  ownership is exclusive. Original changed-file bytes and hashes are saved
+  in local logs without Git; root originals are in
+  `logs/release-device-session-20261102/`.
+- The [ZIP validator](tools/public_zip_scan.ps1) now refuses COM/LPT names
+  with superscript digits 1, 2 and 3. An independent real-entry audit found
+  a second route: an unflagged name byte meant superscript 2 in CP437 but
+  decoded differently on this host. Raw non-ASCII member-name bytes now
+  require the UTF-8 flag before decoded-name checks. Ordinary unflagged ASCII
+  and explicit UTF-8 names still pass. No archive is extracted or rewritten.
+- Added [actual-entry regressions](tools/test_public_zip_device_names.ps1)
+  to the [ZIP aggregate](tools/check_public_zip.ps1). The original red run
+  failed 72 of 306 assertions through 28 actual scanners: all 24 superscript
+  cases passed unexpectedly. The expanded red run failed nine of 393
+  assertions through 35 scanners: all three ambiguous-name cases still
+  passed after the decoded-name fix. Final frozen green passed 393 / 35
+  with zero failures and empty stderr. Seven tool hashes and all fixture
+  bytes/inventory stayed unchanged before, between and after; controls pass
+  before and after, refusals conceal names/content, and nothing is extracted.
+  Final evidence:
+  `logs/public-zip-device-names-8d4a145f110e4557a966856473f7629e/`.
+  Red evidence:
+  `logs/public-zip-device-names-b081df3fa64f41a0862a1c20c3502bfb/` and
+  `logs/public-zip-device-names-e478330e9ac0435a8ff1b360c7e1f151/`.
+- Independent final audit passed 21 actual scanner entries: 15 Windows
+  path cases and six encoding controls. Reserved names and ambiguous
+  non-ASCII names refused; ordinary ASCII, UTF-8 and lookalike controls
+  passed. Input/scanner hashes and fixture inventory stayed unchanged,
+  with empty stderr. Evidence:
+  `logs/zip-windows-path-audit-20261102/d57e8b81b3e149488fa62977be41bc53/` and
+  `logs/zip-windows-path-audit-20261102/encoding-1d72911c3815461bb55b1749b98d320b/`.
+- Actual starter test passed only by observing real `Tekken4.cmd` exit 1 for
+  missing private Python. GUI never started. Actual readiness tests passed
+  three checker subprocesses; direct readiness still exits 2 / BLOCKED.
+  Seven source hashes stayed unchanged, with empty stderr. Evidence:
+  `logs/launcher-gate-devices-7b77d162d543454387e0e605bb949c3d/`.
+- Actual retained LICENSE/patch export and scan exited 0 with empty stderr
+  in 5.906 / 3.178 seconds: 80 files, 2,025,621 bytes, all 79 patch diff
+  ranges unchanged. All 84 selected input/helper snapshots stayed unchanged
+  before, between and after. This subset is not complete corresponding source
+  or a player candidate. Evidence:
+  `logs/retained-export-devices-738c949154b14dac82825bd37bcc76f7/`.
+- Frozen actual [ZIP aggregate](tools/check_public_zip.ps1) exited 0 with
+  empty stderr in 498.323 seconds: 25 PowerShell files parsed, 16 suites /
+  3,519 assertions, including the 393 / 35 device suite and 440 / 47 privacy
+  suite. Both 23-tool catalogs passed, with three source root files present.
+  All 142 recursive tool-file and 79 patch names/hashes stayed unchanged
+  before catalogs, between catalogs/aggregate and after. Evidence:
+  `logs/zip-device-catalogs-2e3de32ff52b4a02b21823c728e10b8f/`.
+- Updated ZIP/export scope, the go/no-go sheet and supplied switch evidence.
+  Ordinary legacy non-ASCII ZIP names now refuse unless marked UTF-8; this
+  compatibility limit is explicit. These source checks do not validate
+  Windows extraction or the complete source/player package.
+- Separate reviewer `final_diff_review_devices` found no code blocker and
+  independently passed the actual device suite (393 assertions / 35 entries)
+  and catalogs, with empty stderr. All 227 tool/patch/launcher/starter/AGENTS
+  file names and hashes stayed unchanged. Eight saved originals matched
+  their pre-edit hashes; the scanner and aggregate reconstruct exactly after
+  reversing the intended edits. Evidence:
+  `logs/release-device-review-20261102/`.
+- The reviewer's actual document checker covered all six changed documents:
+  160 local links and 297 PowerShell parses, with no missing document/link
+  or syntax findings and empty stderr. Overall exit 1 remains on retained
+  text-only image-name fixtures and a corrupt ZIP; whole-tree checking did
+  not complete. Nothing was deleted or weakened for a pass.
+
+Open in source: existing unforced interruption/termination/watchdog branches
+and independent process absence remain unproved. Retained fixtures and the
+corrupt ZIP still obstruct the old whole-tree checker. The full tree
+aggregate was not rerun; the shared tree helper did not change, and the
+actual retained export/scan above ran. Passing these limited scans does not
+prove every privacy, provenance or Windows path issue was found.
+
+Latest owner-supplied verification, not reproduced here: draft `38a164ddec`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`;
+clean merge, 168-second build `943fc4631acf2c13`, finished
+`2026-11-02T05:44:41`. Selftest OFF: 5400 wall / 4650 logical frames,
+170 good restores, zero bad, 375 comparisons with zero mismatches and all
+85 wrong-input passes diverged. OFF same-PC pair: 6000 frames, 199 hashes
+each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/68 (0/2385 ms),
+displayed-frame p99 111.5/99.7 ms, restore-and-resim maximum 167.00/55.53 ms.
+This does not prove this edited tree, the enabled GUI profile or two PCs.
+
+Only the owner / authorized validation checkout can prove the exact complete
+package's real private-Python/Tk App startup, portable first-run/build/play/
+return, controllers, the enabled GUI profile and two physical PCs. Python
+suites, full source/player/privacy/licence review and real build/game checks
+remain unrun here. Existing unforced termination/watchdog branches and the
+old whole-tree check's retained fixtures/corrupt ZIP remain open.
+
+Area agents: `zip_device_regressions`, `zip_device_fix`,
+`tests_catalogs_devices`, `zip_windows_path_audit`, `launcher_gate_devices`,
+`retained_export_devices`, `zip_device_docs`, `latest_verify_devices`.
+Root owns this record and `docs/status.md`. Separate final reviewer:
+`final_diff_review_devices`. No Git command, build, game, network helper,
+server, push or release ran here.
+
+## Earlier path privacy follow-up
 
 Release remains **NO-GO**. The main gate is still the actual complete
 package's launcher GUI and portable first-run. Private Python is absent here;

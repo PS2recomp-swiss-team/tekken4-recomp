@@ -55,6 +55,7 @@ try {
         'public_patch_headers.ps1', 'public_tree_scan.ps1', 'public_zip_scan.ps1',
         'public_zip_deflate.ps1', 'public_zip_scan_worker.ps1',
         'scan_public_zip.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
+        'test_public_zip_device_names.ps1',
         'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1',
         'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
         'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
@@ -77,6 +78,7 @@ try {
     $shell = Join-Path $PSHOME 'powershell.exe'
     if (-not [IO.File]::Exists($shell)) { throw 'Windows PowerShell unavailable; child entries did not run.' }
     foreach ($entry in @('check_online_catalogs.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
+            'test_public_zip_device_names.ps1',
             'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1',
             'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
             'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',

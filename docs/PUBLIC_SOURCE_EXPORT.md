@@ -145,6 +145,11 @@ indices and refuses binary payloads. It does not replace the Python player's
 manifest, pinned-input or dependency-lock checks. See the
 [retained archive audit](PUBLIC_ZIP_AUDIT.md) for the bytes and outcomes
 actually checked; a source ZIP scan cannot prove a complete player package.
+ZIP path checks also refuse superscript COM/LPT device aliases and unflagged
+non-ASCII member names. The [device-name tests](../tools/test_public_zip_device_names.ps1)
+exercise those refusals and passing ASCII-unflagged and ordinary UTF-8
+controls through the actual ZIP entry. The scan never extracts members and
+does not prove Windows extraction behavior.
 
 Privacy cleanup does not settle rights to imported code or game material.
 The open provenance and licence questions in [THIRD_PARTY.md](THIRD_PARTY.md)

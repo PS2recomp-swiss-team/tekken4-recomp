@@ -113,6 +113,11 @@ function Invoke-PublicZipScan {
                 if ($data[[int]$local+30+$character] -ne $data[[int]$cursor+46+$character]) {
                     throw 'ZIP local and central member names do not match.'
                 }
+                # Unflagged non-ASCII names depend on the reader's code page.
+                # Require UTF-8 metadata so Windows device names keep their meaning.
+                if (($flags -band 0x800) -eq 0 -and $data[[int]$local+30+$character] -ge 0x80) {
+                    throw 'Non-ASCII ZIP member name without UTF-8 flag refused.'
+                }
             }
             $compressedSize = [long][BitConverter]::ToUInt32($data,[int]$cursor+20)
             $uncompressedSize = [long][BitConverter]::ToUInt32($data,[int]$cursor+24)
@@ -170,8 +175,9 @@ function Invoke-PublicZipScan {
             $directory = $name.EndsWith('/')
             $relative = if ($directory) { $name.Substring(0,$name.Length-1) } else { $name }
             $parts = $relative.Split('/')
+            # Windows also reserves COM/LPT with superscript digits 1, 2 and 3.
             if ([string]::IsNullOrWhiteSpace($relative) -or $name.StartsWith('/') -or $name.Contains('\') -or
-                @($parts | Where-Object { $_ -in @('','.','..') -or $_ -match '[:<>"|?*\x00-\x1f]|[ .]$|^(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)' }).Count) {
+                @($parts | Where-Object { $_ -in @('','.','..') -or $_ -match '[:<>"|?*\x00-\x1f]|[ .]$|^(?i:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\.|$)' }).Count) {
                 $findings.Add([pscustomobject]@{Entry=$index;Reason='unsafe ZIP member path'})
                 continue
             }

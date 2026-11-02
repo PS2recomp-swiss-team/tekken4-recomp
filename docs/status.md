@@ -1,10 +1,40 @@
 # Status
 
-_Last updated: 2026-11-02 (path privacy follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (Windows ZIP device-name follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current path privacy follow-up:**
+- **Current Windows ZIP device-name follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the real-entry work on
+  reserved COM/LPT superscript digits. The pre-fix regression ran 28 scanner
+  subprocesses and failed 72 of 306 assertions: all 24 superscript cases
+  passed unexpectedly, while ASCII refusals and clean controls worked.
+  The scanner now refuses those names and ambiguous non-ASCII unflagged
+  ZIP names. The expanded regression caught the encoding bypass too, then
+  passed frozen: 393 assertions through 35 real entries, zero failures and
+  empty stderr. ASCII and explicit UTF-8 controls passed before and after;
+  source/fixture hashes and inventory stayed unchanged, with no extraction.
+  The frozen full ZIP aggregate passed 16 suites / 3,519 assertions,
+  exit 0 with empty stderr; 142 tool files and all 79 patch names/hashes
+  stayed unchanged. Separate review independently passed the 393 / 35
+  device suite and catalogs, with 227 source names/hashes unchanged.
+  The actual document checker covered all six changed docs: 160 local
+  links and 297 PowerShell parses, no document/link/syntax findings.
+  Overall exit 1 remains on retained image-name fixtures and a corrupt ZIP;
+  no completed whole-tree check is claimed. Ordinary non-ASCII legacy ZIP
+  names require UTF-8 metadata under the new conservative policy.
+  The retained LICENSE/79-patch subset exported and scanned unchanged.
+  The real starter still refuses missing private Python; GUI never started,
+  and readiness exits 2 / BLOCKED. Exact complete-package GUI/portable
+  first-run and enabled GUI profile on two physical PCs remain owner gates.
+  Latest supplied draft `38a164ddec`: clean 168-second build
+  `943fc4631acf2c13`, finished `2026-11-02T05:44:41`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/68
+  (0/2385 ms), displayed-frame p99 111.5/99.7 ms. This was not reproduced
+  here and does not prove the edited tree or GUI profile.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier path privacy follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records a demonstrated public
   export/tree/ZIP filename and private-directory bypass, now fixed through
   shared name checks and directory-aware scans. Findings conceal rejected
@@ -28,8 +58,8 @@ _Last updated: 2026-11-02 (path privacy follow-up; release remains NO-GO)_
   `2026-11-02T05:10:52`; OFF same-PC pair, 199 hashes each, zero mismatches
   and NETDESYNC, 52.1/52.1 FPS, stalls 0/83 (0/2496 ms), displayed-frame p99
   116.3/96.4 ms. This was not reproduced here. Release remains **NO-GO**.
-  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md) and the open Windows ZIP
-  device-name finding in the progress record.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md); the Windows ZIP
+  device-name finding is addressed in the current follow-up above.
 
 - **Earlier write interruption follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records bounded real-entry work on

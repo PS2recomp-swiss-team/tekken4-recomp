@@ -32,9 +32,13 @@ not a supported direct scan entry. Use the supervised command above.
 The entry refuses paths outside this tree and reparse points. Archive members
 must have safe, unique paths, including consistent directory spelling and no
 file/directory conflicts. Symlinks and other nonregular entries are refused.
-Known limitation: a retained audit accepted COM/LPT names containing superscript
-digits. That path-check gap remains open; a passing scan is not Windows
-extraction validation. Nothing was extracted in that audit.
+Each path component refuses CON, PRN, AUX, NUL, COM1-9 and LPT1-9,
+including COM/LPT with superscript 1, 2 or 3, with or without an extension.
+Non-ASCII member names require the ZIP UTF-8 flag. Unflagged non-ASCII names
+are refused because legacy decoding depends on the host and can hide device
+aliases; this also refuses ordinary legacy names. ASCII unflagged names and
+ordinary UTF-8 names remain supported. These checks are not Windows extraction
+validation.
 The fixed limits are 10,000 entries, 32 MiB per file, 128 MiB total uncompressed
 content and a 128 MiB archive. Reported ZIP read errors and mismatched
 uncompressed lengths cause refusal. Nothing is extracted, including when
@@ -116,6 +120,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_public_zip.ps1
 
 Tests retain harmless text ZIP fixtures under unique `logs/` directories.
 They exercise the actual scan command; syntax parsing is reported separately.
+The [device-name regressions](../tools/test_public_zip_device_names.ps1)
+exercise superscript COM/LPT file and directory components, including nested
+paths and extensions, through that command. They also check refusal of
+unflagged non-ASCII names, including ambiguous legacy device aliases, and
+retain passing ASCII-unflagged and ordinary UTF-8 controls before and after.
 The [CRC vectors](../tools/test_public_zip_crc.ps1) check clean stored and
 deflated text, empty members and known CRC values. The
 [integrity cases](../tools/test_public_zip_integrity.ps1) check corrupt
