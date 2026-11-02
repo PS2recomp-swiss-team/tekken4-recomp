@@ -1,5 +1,75 @@
 # T4 beta progress, 2026-11-02
 
+## Release gate and supplied verification 4b6cea90c2
+
+Release remains **NO-GO**. The most valuable open item is actual App startup
+and portable first-run through the exact complete candidate. Sixteen area
+agents checked its independent prerequisites. No new executable local fix
+was found. Private Python, reviewed locks and the portable toolchain marker
+are absent; actual App initialization also searches outside this tree.
+Another scanner test cannot supply that missing acceptance evidence.
+
+Done:
+
+- Ran the actual [starter-refusal test](tools/test_launcher_entry.ps1):
+  test exit 0 for real `Tekken4.cmd` exit 1, missing private Python. Empty
+  stderr; four source hashes unchanged. **The App never started.** Evidence:
+  `logs/launcher-4b6-2f4cd58b010f422ab541c7ea794f2cb8/`.
+- Ran the actual [catalog checker](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): both 23-tool catalogs,
+  three root inputs and three real subprocess cases passed. Normal readiness
+  stayed 2 / BLOCKED. Empty stderr; ten source hashes unchanged. Evidence:
+  `logs/tests-catalogs-4b6-c2649877256a46c6b9637e2a07a7867b/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `4b6cea90c2`:
+  clean 226-second build `943fc4631acf2c13`, finished `2026-11-02T09:49:16`.
+  OFF selftest: 202 good restores, zero bad; 447 resim comparisons, zero
+  mismatches; all 101 wrong-input passes diverged. OFF same-PC pair: 6000
+  live/logical frames and 199 hashes each, zero mismatches/NETDESYNC,
+  47.6/47.7 FPS, stalls 0/117 (0/5326 ms), displayed-frame p99
+  163.2/119.6 ms. Supplied, not reproduced here. These summaries establish
+  neither cause nor usable pacing, actual App startup or two-PC acceptance.
+  Actual readiness checked both documents / 18 links: exit 2 / BLOCKED,
+  empty stderr; eight source/doc hashes unchanged. Evidence:
+  `logs/supplied-4b6-306c5b808eed426e8f5f68581509a120/`.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Launcher-pad navigation remains
+unimplemented. Fullscreen inheritance and offline spawn-failure log cleanup
+remain unexecuted source observations. Scanner limits remain failed
+termination, interruption inside one write and unobserved descendants.
+No production or test code changed; unchanged long aggregates and the
+whole-tree beta checker were not rerun.
+
+Owner-only next step: provide the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices. Run its actual
+`Tekken4.cmd` in the authorized validation environment using the existing
+[checklist](docs/RELEASE_PATH_B.md): responsive App/process identity, normal
+exit/reopen/settings, licence cancel/accept, then portable build/play/return.
+Python alone is insufficient. Exact build/game, shared-launcher integration,
+enabled GUI profile and two-PC acceptance still need real proof. GUI, Python
+suites, packagers, build, game and network helpers stayed **UNRUN here**.
+A same-PC pair does not replace two PCs.
+
+Sixteen area agents: `launcher_entry_4b6`, `tests_catalogs_4b6`,
+`supplied_verify_4b6`, `portable_candidate_4b6`, `python_tk_4b6`,
+`settings_process_4b6`, `controller_ui_4b6`, `offline_flow_4b6`,
+`licence_inputs_4b6`, `source_privacy_4b6`, `player_payload_4b6`,
+`corresponding_source_4b6`, `effective_profile_4b6`, `two_pc_pacing_4b6`,
+`scanner_gaps_4b6`, `integrated_launcher_4b6`.
+Separate final reviewer: `final_diff_review_4b6`. File ownership was exclusive.
+Root owns this record and `docs/status.md`. Original bytes and the 347-file
+source inventory are in `logs/release-4b6-0f96940f6e2b411dbe3f4d2112691a93/`.
+Combined actual readiness checked all four changed documents / 197 local
+links, 12 required files and seven parses, then catalogs and starter refusal:
+exit 2 / BLOCKED, empty stderr, all 347 source hashes unchanged during the run.
+Its evidence is under `strict-final/`; separate review is under `final-review/`.
+The initial `final-entry/` capture mishandled the inventory array; it is
+retained as invalid, not passing proof. Only completed captures count.
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification e6b8a2550c
 
 Release remains **NO-GO**. Actual App startup and portable first-run through
