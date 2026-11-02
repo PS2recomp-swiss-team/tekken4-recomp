@@ -90,7 +90,11 @@ Open / owner-only:
 
 Agents: `protocol_contract`, `accounts_kicked`, `rollback_evidence`,
 `rank_text`, `coexistence`, `starter_entry`, `readiness_entry`,
-`catalogs_tests`. A separate `final_diff_review` is required before finishing.
+`catalogs_tests`; separate `final_diff_review` completed with no blocking
+issue found in these tools/docs. The reviewer independently reproduced all
+three entry tests, readiness exit 2 and the existing source check's 18 fixture
+findings. Review used current files and recorded text edits; a complete
+original-byte/Git baseline was unavailable. This does not close online acceptance.
 All read AGENTS.md; file ownership was exclusive. Root owns this record and
 `docs/status.md`. No Git command, server, push or release was used.
 
