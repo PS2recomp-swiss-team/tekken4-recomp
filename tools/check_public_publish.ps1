@@ -68,6 +68,7 @@ try {
         'test_public_tree_write_failure.ps1', 'test_public_tree_worker_failure.ps1',
         'test_public_tree_interruption.ps1', 'test_public_tree_start_failure.ps1',
         'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+        'test_public_path_privacy.ps1',
         'public_zip_scan.ps1', 'public_zip_deflate.ps1', 'scan_public_zip.ps1',
         'check_public_publish.ps1'
     )
@@ -90,7 +91,8 @@ try {
             'test_public_tree_deadline.ps1', 'test_public_tree_deadline_compat.ps1',
             'test_public_tree_write_failure.ps1', 'test_public_tree_worker_failure.ps1',
             'test_public_tree_interruption.ps1', 'test_public_tree_start_failure.ps1',
-            'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1')) {
+            'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+            'test_public_path_privacy.ps1')) {
         Write-Output "Running real test entry: tools/$suite"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $suite)
         if ($LASTEXITCODE -ne 0) {

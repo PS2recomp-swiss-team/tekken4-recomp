@@ -41,6 +41,14 @@ credentials, private paths and unreviewed network details cause refusal.
 an export would omit. A screenshot copied into a staged tree must fail that
 scan. Findings report categories, not the matched private values.
 
+Staged tree scans also refuse `.agents`, `.codex` and `.aws` path components
+and files named `CODEX_PROGRESS.md`. Export already omits those working
+directories and progress files.
+Names use the same credential, private-path and network-address checks as
+file text. Tree findings use a static file placeholder and categories,
+without printing file names or matched text. These checks are limited rules,
+not a guarantee that every private name or value will be found.
+
 The shared [text scanner](../tools/public_tree_scan.ps1) gives each of its
 full-content regex operations a two-second .NET regex timeout. Match collections
 do not have one shared deadline. A timeout or regex failure stops the scan
@@ -77,6 +85,9 @@ exercise [long words](../tools/test_public_text_words.ps1),
 [content categories and timeout refusal](../tools/test_public_text_categories.ps1)
 through the actual tree and ZIP commands. Clean controls must pass before
 refusals count. A process killed by a test deadline is a failed test.
+The [path privacy tests](../tools/test_public_path_privacy.ps1) exercise
+private working paths and private-looking names through both actual tree
+and ZIP scan entries, with clean controls and sanitized refusal checks.
 The [tree deadline tests](../tools/test_public_tree_deadline.ps1) and
 [compatibility tests](../tools/test_public_tree_deadline_compat.ps1) use the
 actual export/scan entry. An entry's own deadline refusal is distinct from a

@@ -101,7 +101,8 @@ try {
         if (-not [IO.Directory]::Exists($scanRoot)) { throw 'Scan input must be an existing directory.' }
         $findings = @(Get-PublicTreeFindings $scanRoot)
         if ($findings.Count) {
-            foreach ($finding in $findings) { Write-Output ('REFUSED: {0}: {1}' -f $finding.Path, $finding.Reason) }
+            # Relative filenames can themselves contain private values.
+            foreach ($finding in $findings) { Write-Output ('REFUSED: source file: {0}' -f $finding.Reason) }
             throw 'Public tree scan refused the staged content.'
         }
         Write-Output 'Public tree scan passed. Owner content and licence review is still required. Nothing published.'
@@ -177,7 +178,7 @@ try {
             Assert-EqualPatchDiff $original $data
             $patchCount++
         }
-        foreach ($reason in @(Get-PublicFileFindings $name $data)) { $refusals.Add(('{0}: {1}' -f $name, $reason)) }
+        foreach ($reason in @(Get-PublicFileFindings $name $data)) { $refusals.Add(('source file: {0}' -f $reason)) }
         $selected.Add([pscustomobject]@{ Name = $name; Data = $data; OriginalPatch = $original })
     }
     if (-not ($selected | Where-Object { $_.Name -ceq 'LICENSE' })) { throw 'The selected tree must retain root LICENSE.' }

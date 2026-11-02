@@ -225,10 +225,10 @@ function Invoke-PublicZipScan {
                     throw 'ZIP member content CRC mismatch.'
                 }
                 $bytes += $actual
-                if (-not $directory) {
-                    foreach ($reason in @(Get-PublicFileFindings $relative $memberBytes)) {
-                        $findings.Add([pscustomobject]@{Entry=$index;Reason=$reason})
-                    }
+                # Explicit empty directories still carry public path metadata.
+                # Directory mode leaves file suffix/content rules to files.
+                foreach ($reason in @(Get-PublicFileFindings -Name $relative -Data $memberBytes -Directory:$directory)) {
+                    $findings.Add([pscustomobject]@{Entry=$index;Reason=$reason})
                 }
             } finally {
                 if ($null -ne $content) { $content.Dispose() }

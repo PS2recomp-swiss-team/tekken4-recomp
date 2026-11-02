@@ -59,7 +59,7 @@ try {
         'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
         'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
         'test_public_zip_budget_tables.ps1', 'test_public_text_words.ps1',
-        'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+        'test_public_text_lines.ps1', 'test_public_text_categories.ps1', 'test_public_path_privacy.ps1',
         'test_public_zip_deadline.ps1', 'test_public_zip_deadline_compat.ps1',
         'publish_public_tree.ps1', 'check_public_zip.ps1', 'check_online_catalogs.ps1'
     )
@@ -81,7 +81,7 @@ try {
             'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
             'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
             'test_public_zip_budget_tables.ps1', 'test_public_text_words.ps1',
-            'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+            'test_public_text_lines.ps1', 'test_public_text_categories.ps1', 'test_public_path_privacy.ps1',
             'test_public_zip_deadline.ps1', 'test_public_zip_deadline_compat.ps1')) {
         Write-Output "ENTRY: tools/$entry"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Get-CheckedPath ('tools/' + $entry))

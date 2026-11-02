@@ -1,10 +1,37 @@
 # Status
 
-_Last updated: 2026-11-02 (write interruption follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (path privacy follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current write interruption follow-up:**
+- **Current path privacy follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records a demonstrated public
+  export/tree/ZIP filename and private-directory bypass, now fixed through
+  shared name checks and directory-aware scans. Findings conceal rejected
+  names. The new suite first failed 70 assertions through 37 real entries;
+  the frozen expanded suite passed 440 assertions through 47 entries.
+  The retained LICENSE/79-patch subset exported and scanned unchanged.
+  The frozen tree aggregate passed 12 suites / 10,555 checks/assertions;
+  ZIP passed 15 suites / 3,126 assertions. Both ran the privacy suite and
+  exited 0 with empty stderr; all 141 tool files and 79 patches stayed
+  unchanged during tests. Separate review independently passed the
+  440-assertion / 47-entry suite and catalogs with 224 source hashes unchanged.
+  The actual document checker covered all six changed documents: 153 local
+  links checked and 288 PowerShell parses, with no link/syntax findings.
+  Overall exit 1 remains on retained image-name fixtures and a corrupt ZIP;
+  no complete whole-tree pass is claimed.
+  The actual starter still refuses missing private Python; GUI never started.
+  Packaging's Tk probe and launcher selftest do not start the real App.
+  Exact complete-package GUI/portable first-run and enabled GUI profile on
+  two physical PCs remain owner gates. Latest supplied draft `7ecf7f2b8f`:
+  clean 182-second build `943fc4631acf2c13`, finished
+  `2026-11-02T05:10:52`; OFF same-PC pair, 199 hashes each, zero mismatches
+  and NETDESYNC, 52.1/52.1 FPS, stalls 0/83 (0/2496 ms), displayed-frame p99
+  116.3/96.4 ms. This was not reproduced here. Release remains **NO-GO**.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md) and the open Windows ZIP
+  device-name finding in the progress record.
+
+- **Earlier write interruption follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records bounded real-entry work on
   the remaining export timeout after staging begins. No production behavior
   changed. The frozen interruption suite passed 4,678 assertions through six

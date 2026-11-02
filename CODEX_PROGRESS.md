@@ -1,6 +1,122 @@
 # T4 beta progress, 2026-11-02
 
-## Write interruption follow-up, current session
+## Path privacy follow-up, current session
+
+Release remains **NO-GO**. The main gate is still the actual complete
+package's launcher GUI and portable first-run. Private Python is absent here;
+builds, games and network helpers remain forbidden. The selected executable
+source item was a demonstrated publication-path privacy bypass.
+No launcher, runtime or switch behavior changed.
+
+Done:
+
+- Eight area agents read the instructions and audited independent areas.
+  Actual export and scan accepted a synthetic mailbox filename; actual tree
+  and ZIP scans accepted ordinary text inside private working directories.
+  An actual ZIP containing an empty private directory also passed. Tree
+  refusal diagnostics separately echoed a synthetic private-looking filename.
+  All reproductions used harmless text, no real credentials or personal data.
+- The [shared scanner](tools/public_tree_scan.ps1) now checks relative-name
+  privacy with the existing credential, path, network and email rules. Staged
+  scans refuse `.agents`, `.codex`, `.aws` and files named
+  `CODEX_PROGRESS.md`; export already omits them. Tree and ZIP scans check
+  empty directories without treating ordinary `.bin` or `.patch`
+  directories as file contents. The pinned patch exception remains limited
+  to its original diff digest, and still checks the filename and preamble.
+- [Tree findings](tools/public_tree_worker.ps1) use a static file placeholder
+  and category; ZIP findings keep numeric member indices. The same retained
+  inputs now refuse by category without printing private-looking names.
+  No input or source patch was rewritten.
+- Added [real-entry regressions](tools/test_public_path_privacy.ps1) to both
+  [tree](tools/check_public_publish.ps1) and
+  [ZIP](tools/check_public_zip.ps1) aggregates. The original red run reached
+  308 assertions / 37 actual subprocesses with 70 failures. The expanded,
+  frozen suite passed 440 assertions / 47 actual export/tree/ZIP subprocesses,
+  with zero failures and empty stderr. Clean controls passed before and
+  after; export omissions, bytes/inventory, no staging on privacy refusal,
+  no diagnostic disclosure and nine code hashes were checked.
+  Evidence: `logs/public-path-privacy-8be01e10cd3b416980fda0b87f80839f/`.
+  Original red evidence:
+  `logs/public-path-privacy-b43c80ed7d724f28a673705a0c1bc3fc/`.
+- Frozen retained-input export and scan exited 0 with empty stderr in
+  5.858 / 3.124 seconds: 80 files, 2,025,621 bytes, all 79 patch diff ranges
+  unchanged. All 87 input/code snapshots stayed unchanged before, between
+  and after. This LICENSE/patch subset is not complete corresponding source
+  or a player candidate. Evidence:
+  `logs/retained-export-name-scan-d345795ab58f43e9810a6335fc23af14/`.
+- Actual readiness tests passed three checker subprocesses; normal readiness
+  still exits 2 / BLOCKED after catalogs and the actual starter refusal.
+  Actual launcher refusal again proves only missing private Python, never GUI
+  startup. Actual player wrapper checks refused missing inputs/interpreter;
+  Python packaging and scanning never started. The packaging Tk probe and
+  launcher selftest do not start the real App and cannot close that gate.
+- Updated public scan documentation, the go/no-go sheet and switch evidence.
+  Latest supplied verification is recorded below; it was not reproduced here.
+- Frozen actual aggregates exited 0 with empty stderr: tree parsed 20
+  PowerShell files and passed 12 suites / 10,555 checks/assertions in
+  312.481 seconds; ZIP parsed 24 files and passed 15 suites / 3,126 assertions
+  in 443.494 seconds. Both ran the 440-assertion / 47-entry privacy suite.
+  Both 23-tool catalogs passed, with three source root files present.
+  All 141 tool-file and 79 patch names/hashes stayed unchanged before,
+  between and after. Evidence:
+  `logs/release-name-scan-session-20261102/aggregate-9293f946bea9414fb66c65ee769bb125/`.
+- Separate reviewer `final_diff_review_privacy` found no code blocker and
+  independently passed the actual privacy suite (440 assertions / 47 entries)
+  and catalogs, with empty stderr. All 224 tool/patch/launcher file names and
+  hashes stayed unchanged. Saved originals matched the pre-edit hashes; root
+  document edits reconstruct their exact original bytes without Git.
+  Evidence: `logs/release-name-scan-review-20261102/`.
+- The reviewer's actual document checker covered all six changed documents:
+  153 local links checked and 288 PowerShell files parsed, with no missing
+  document/link or syntax findings and empty stderr. Overall exit 1 remains
+  on retained text-only image-name fixtures and a corrupt ZIP; whole-tree
+  checking did not complete. Nothing was removed or weakened for a pass.
+  Evidence is in the review directory above.
+
+Original production bytes and baseline hashes are retained without Git in
+`logs/release-name-scan-session-20261102/`; the switch-document original is
+in `logs/latest-verify-evidence-5f7808afd50d482fb80fab7df4bb8a6b/`.
+These are local audit evidence, not a public source selection.
+
+Latest owner-supplied verification, not reproduced here: draft `7ecf7f2b8f`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`;
+clean merge, 182-second build `943fc4631acf2c13`, finished
+`2026-11-02T05:10:52`. Selftest OFF: 6000 wall / 5106 logical,
+202 successful restores, zero bad, 447 comparisons with zero mismatches,
+101/101 wrong-input divergences. OFF same-PC pair: 6000 frames, 199 hashes
+each, zero mismatches/NETDESYNC, 52.1/52.1 FPS, stalls 0/83 (0/2496 ms),
+displayed-frame p99 116.3/96.4 ms, restore-and-resim maximum 191.79/55.24 ms.
+This does not prove this edited tree, the enabled GUI profile or two PCs.
+
+Open in source:
+
+- A separate actual ZIP audit accepted COM/LPT names containing superscript
+  digits, while the ASCII-device control refused. No extraction occurred.
+  This Windows path-validation issue is unfixed, outside the selected privacy
+  change. Evidence: `logs/zip-name-audit-4ea3718b4a2f49b9a9bdcc7329b4615b/`.
+- Existing unforced interruption/termination/watchdog branches and unproved
+  independent process absence remain open. Retained intentional fixtures and
+  a corrupt ZIP still obstruct the old whole-tree source checker. Nothing is
+  deleted or weakened to manufacture a pass. Privacy rules are conservative
+  checks, not proof that every private value or provenance issue was found.
+
+Only the owner / authorized validation checkout:
+
+- Run the exact reviewed complete package's real starter through private
+  Python/Tk App startup, portable first-run/build/play/return and controller
+  checks. A Tk import/probe, mocks or missing-Python refusal do not prove it.
+- Run Python suites and complete source/player/privacy/licence review. Prove
+  the exact build/game and enabled GUI switches on two physical PCs, including
+  the advertised routes and recovery cases. This copy cannot close those gates.
+
+Area agents: `export_preflight_audit`, `text_scan_audit`,
+`zip_entry_audit`, `readiness_contract_audit`, `launcher_release_audit`,
+`tests_catalogs_release`, `release_scope_audit`, `latest_verify_evidence`.
+Separate final reviewer: `final_diff_review_privacy`. File ownership was
+exclusive; root owns this record and `docs/status.md`.
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier write interruption follow-up
 
 Release remains **NO-GO**. The highest release gate is still the actual
 packaged launcher and portable first-run. This copy lacks private Python;

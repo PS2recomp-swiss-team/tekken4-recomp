@@ -32,6 +32,9 @@ not a supported direct scan entry. Use the supervised command above.
 The entry refuses paths outside this tree and reparse points. Archive members
 must have safe, unique paths, including consistent directory spelling and no
 file/directory conflicts. Symlinks and other nonregular entries are refused.
+Known limitation: a retained audit accepted COM/LPT names containing superscript
+digits. That path-check gap remains open; a passing scan is not Windows
+extraction validation. Nothing was extracted in that audit.
 The fixed limits are 10,000 entries, 32 MiB per file, 128 MiB total uncompressed
 content and a 128 MiB archive. Reported ZIP read errors and mismatched
 uncompressed lengths cause refusal. Nothing is extracted, including when
@@ -86,7 +89,8 @@ content categories and are covered by actual ZIP and tree entry tests below.
 The supervised ZIP worker deadline also covers patch-header processing,
 path checks, decompression, I/O and the sum of regex work inside that child.
 The separate [public-tree export/scan entry](../tools/publish_public_tree.ps1)
-has no whole-process deadline; its shared regex timeouts remain narrower limits.
+also supervises its worker with a process deadline. Its wrapper preflight and
+operating-system termination remain outside that deadline.
 
 Member paths must use `/`. Some Windows ZIP convenience methods write `\`
 instead; those archives are refused. Use a packager that writes portable
@@ -97,6 +101,12 @@ member bytes for images, game data or executable/archive signatures,
 credentials, private paths, network details and other reviewed categories.
 This is a conservative text-source policy: even a legitimate runtime or
 private Python binary is refused. It cannot approve a complete player ZIP.
+
+Member paths also refuse `.agents`, `.codex` and `.aws` components and files
+named `CODEX_PROGRESS.md`. The same credential, private-path and
+network-address rules used for text also check member names. Findings keep
+numeric member indices and static categories; private names and matched text
+are not printed. These limited checks do not guarantee complete privacy.
 
 Run the real subprocess tests through their entry:
 
@@ -127,6 +137,9 @@ the actual supervised command's timeout refusal and cleanup. The
 completed scans and refusals through that command, including unusual paths.
 An outer test deadline expiring is a failed test, not a scanner refusal.
 No game data, keys, screenshots or real credentials are needed for them.
+The shared [path privacy tests](../tools/test_public_path_privacy.ps1) exercise
+private working paths and private-looking names through both actual tree
+and ZIP scan entries, including clean controls and sanitized refusals.
 Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
 remains open.
 

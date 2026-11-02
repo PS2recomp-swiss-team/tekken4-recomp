@@ -29,7 +29,7 @@ for ordinary GUI Host/Join:
 | `TEKKEN4_NET_AUTO_VS` | `0` | No supplied passing enabled AUTO_VS pair. |
 | `TEKKEN4_NET_TIMESYNC`, `TEKKEN4_NET_EARLY`, `TEKKEN4_NET_LAZY`, `TEKKEN4_NET_LOCALPAD` | `1` | Baseline settings, separate from experimental switches OFF. The supplied summary records time sync, early rollbacks and lazy captures, but is not the complete effective environment. |
 | `TEKKEN4_NET_MAXPRED` | `8` | Source profile; require both actual parameter/activation records to establish the measured value. |
-| `TEKKEN4_NET_DELAY`, `TEKKEN4_SOUND` | `auto`, `1` | Pair summary reports actual delay `2`; sound quality was not reported. |
+| `TEKKEN4_NET_DELAY`, `TEKKEN4_SOUND` | `auto`, `1` | Pair summary reports actual delay `3`; sound quality was not reported. |
 | simulator, fixed seed, forced end, shots/dumps, rollback harness overrides | cleared | Latest pair used a simulator; ordinary GUI Host/Join is a different route. |
 
 Setting COALESCE or DIAG to `0` in the shell launching the GUI does not establish
@@ -50,24 +50,24 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `15b0d73c9c`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 167 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T04:45:22`.
+Draft `7ecf7f2b8f`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 182 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T05:10:52`.
 This supersedes the earlier supplied verification summaries.
 
 - Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
   restores, zero bad restores, 447 resim comparisons with zero mismatches;
   all 101 deliberate wrong-input passes diverged. Save average/maximum was
-  0.21/5.01 ms; restore average/maximum was 0.28/0.59 ms.
+  0.20/4.62 ms; restore average/maximum was 0.27/0.33 ms.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 445/1002, resim frames 1158/4237, maximum depth 8/9;
-  prediction stalls 0/60 (0/2102 ms), time sync 2/93 (33/3150 ms).
-  Run-average FPS 52.1/52.1; final FPS windows 59.7/59.8 do not erase the
-  remaining pacing gaps. Displayed-boundary p99 was 101.3/94.6 ms.
-  Restore-and-resim maximum was 266.48/55.40 ms.
-  Rebases were 173/149 (15072/9892 ms).
+- Host/join rollbacks 299/954, resim frames 549/3733, maximum depth 5/9;
+  prediction stalls 0/83 (0/2496 ms), time sync 0/94 (0/4400 ms).
+  Run-average FPS 52.1/52.1; final FPS windows 59.9/59.9 do not erase the
+  remaining pacing gaps. Displayed-boundary p99 was 116.3/96.4 ms.
+  Restore-and-resim maximum was 191.79/55.24 ms.
+  Rebases were 151/120 (15123/8250 ms).
   Coalesced packets were zero on both endpoints.
 
 This is supplied evidence, not a run performed here. Full effective parameter

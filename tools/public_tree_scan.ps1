@@ -53,7 +53,7 @@ function Assert-PublicNoLinks {
 }
 
 function Get-PublicFileFindings {
-    param([string]$Name, [byte[]]$Data)
+    param([string]$Name, [byte[]]$Data, [switch]$Directory)
     $reasons = New-Object 'Collections.Generic.List[string]'
     $parts = $Name.Replace('\','/').Split('/')
     if ([string]::IsNullOrWhiteSpace($Name) -or $Name.StartsWith('/') -or $Name.Contains('\') -or
@@ -67,24 +67,26 @@ function Get-PublicFileFindings {
     }
     $suffix = [IO.Path]::GetExtension($Name).ToLowerInvariant()
     $leaf = $parts[-1].ToLowerInvariant()
-    if (Test-PublicImageName $Name) { $reasons.Add('image filename or content') }
-    if ($suffix -in @('.iso','.elf','.bin','.img','.cso','.chd','.mdf','.nrg','.vob','.pss','.adx',
+    $directoryParts = if ($Directory) { $parts } else { @($parts | Select-Object -SkipLast 1) }
+    if (-not $Directory -and (Test-PublicImageName $Name)) { $reasons.Add('image filename or content') }
+    if ((-not $Directory -and ($suffix -in @('.iso','.elf','.bin','.img','.cso','.chd','.mdf','.nrg','.vob','.pss','.adx',
             '.vag','.irx','.ps2','.mcr','.psu','.zip','.7z','.rar','.gz','.tar','.exe','.dll','.pyd',
             '.o','.obj','.a','.lib','.so','.dat','.sav','.save','.mcd','.vmc','.gpr','.rep','.rom','.pkg') -or
         $leaf -in @('data.bin','system.cnf','rom0','rom1','rom2') -or
-        $leaf -match '^(?:slus|sles|sces|slps|scps)[_-]\d' -or
-        @($parts | Select-Object -SkipLast 1 | Where-Object { $_ -in @('game','bios','saves','save','memcards') }).Count) {
+        $leaf -match '^(?:slus|sles|sces|slps|scps)[_-]\d')) -or
+        @($directoryParts | Where-Object { $_ -in @('game','bios','saves','save','memcards') }).Count) {
         $reasons.Add('game data or binary/archive filename')
     }
-    if ($suffix -in @('.key','.keys','.pem','.p12','.pfx','.kdbx') -or
-        $leaf -in @('.env','id_rsa','id_ed25519','credentials') -or $parts -contains 'keys') {
+    if ((-not $Directory -and ($suffix -in @('.key','.keys','.pem','.p12','.pfx','.kdbx') -or
+        $leaf -in @('.env','id_rsa','id_ed25519','credentials'))) -or $parts -contains 'keys') {
         $reasons.Add('key or credential filename')
     }
-    if ($leaf -in @('.git','.mcp.json','claude.md') -or $parts -contains '.git' -or $parts -contains 'lobby') {
+    if ((-not $Directory -and $leaf -in @('.mcp.json','claude.md','codex_progress.md')) -or
+        @($parts | Where-Object { $_ -in @('.git','.agents','.codex','.aws','lobby') }).Count) {
         $reasons.Add('private source path')
     }
-    if ($leaf -in @('register_functions.cpp','ps2_recompiled_functions.h','ps2_recompiled_stubs.h') -or
-        $leaf -match '(?:func_[0-9a-f]{6,8}|_0x[0-9a-f]{6,8})\.(?:cpp|c|h|hpp)$|\.generated\.(?:cpp|h)$') {
+    if (-not $Directory -and ($leaf -in @('register_functions.cpp','ps2_recompiled_functions.h','ps2_recompiled_stubs.h') -or
+        $leaf -match '(?:func_[0-9a-f]{6,8}|_0x[0-9a-f]{6,8})\.(?:cpp|c|h|hpp)$|\.generated\.(?:cpp|h)$')) {
         $reasons.Add('generated game source filename')
     }
     if ($Data.Length -gt 32MB) { $reasons.Add('oversized input; manual review required'); return $reasons.ToArray() }
@@ -103,6 +105,9 @@ function Get-PublicFileFindings {
     }
     try { $text = (New-Object Text.UTF8Encoding($false,$true)).GetString($Data) }
     catch { $reasons.Add('non-UTF-8 or binary content; manual review required'); return @($reasons | Select-Object -Unique) }
+    # Relative paths can disclose the same private values as file contents.
+    # Content signatures and generated-code checks still inspect only bytes.
+    $privacyText = $Name + "`n" + $text
     if (Test-PublicTextMatch $text '[\x00-\x08\x0b\x0e-\x1f]') { $reasons.Add('binary content; manual review required') }
     if (Test-PublicTextMatch $text ('(?i)data:ima' + 'ge/|<im' + 'g(?:\s|>)|!\[[^\]\r\n]*\]\s*[\[(]')) {
         $reasons.Add('embedded image or image reference; manual review required')
@@ -112,27 +117,27 @@ function Get-PublicFileFindings {
         '(?i:' + '\b(?:[a-z][a-z0-9_]*[_-])?(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|private[_-]?key|signing[_-]?key|client[_-]?secret|secret|token)\b)["'']?\s*[:=]\s*(?:[rRuUbBfF]{0,2}["''](?![<{$])[^"''\r\n]{8,}["'']|[a-zA-Z0-9_/-]{20,})'
     # A blank prefix/suffix can be tested on the hash's own line. Crossing
     # newlines here would retry the same whitespace run from every blank line.
-    if ((Test-PublicTextMatch $text $secretPattern) -or
-        (Test-PublicTextMatch $text '(?m)^[^\S\n]*[0-9a-fA-F]{64}[^\S\n]*$')) {
+    if ((Test-PublicTextMatch $privacyText $secretPattern) -or
+        (Test-PublicTextMatch $privacyText '(?m)^[^\S\n]*[0-9a-fA-F]{64}[^\S\n]*$')) {
         $reasons.Add('credential or private key content')
     }
     $personalPattern = '(?i)(?:\b[a-z]:[\\/]|(?<![a-z0-9_.\\/])\\\\[a-z0-9_.-]+[\\/]|/(?:home|Users)/[a-z0-9_.-]+|~[\\/])'
-    $personalText = $text
+    $personalText = $privacyText
     # This exact diff is the reviewed guest CD-path example already pinned by
     # publish_source.py. Only this category is excepted, never the mail preamble.
     $diff = Get-PublicTextMatch $latin '(?m)^diff --git '
-    if ($suffix -eq '.patch' -and $diff.Success) {
+    if (-not $Directory -and $suffix -eq '.patch' -and $diff.Success) {
         $sha = [Security.Cryptography.SHA256]::Create()
         try { $digest = [BitConverter]::ToString($sha.ComputeHash($Data,$diff.Index,$Data.Length-$diff.Index)).Replace('-','').ToLowerInvariant() }
         finally { $sha.Dispose() }
         if ($digest -eq '6e7e0b546efbde481c48910bf893cdc8b340475dc4d458f3e4094e9e2b276381') {
-            $personalText = [Text.Encoding]::UTF8.GetString($Data,0,$diff.Index)
+            $personalText = $Name + "`n" + [Text.Encoding]::UTF8.GetString($Data,0,$diff.Index)
         }
     }
     if (Test-PublicTextMatch $personalText $personalPattern) { $reasons.Add('personal or machine-specific path') }
     # Require the end of the token so C++ ::Block is not read as IPv6 ::B.
     # Compressed addresses are still checked even when they have few colons.
-    $ipMatches = Get-PublicTextMatches $text '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])|(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+(?:%[A-Za-z0-9_.-]+)?(?![\w:])'
+    $ipMatches = Get-PublicTextMatches $privacyText '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])|(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+(?:%[A-Za-z0-9_.-]+)?(?![\w:])'
     foreach ($match in $ipMatches) {
         $literal = $match.Value.Split('%')[0].TrimEnd('.')
         $address = $null
@@ -149,7 +154,7 @@ function Get-PublicFileFindings {
         'go.microsoft.com','learn.microsoft.com','visualstudio.microsoft.com','www.microsoft.com','developer.microsoft.com',
         'virustotal.com','www.virustotal.com','docs.virustotal.com','spdx.org','opensource.org',
         'git-scm.com','www.git-scm.com','tailscale.com','www.tailscale.com')
-    foreach ($match in (Get-PublicTextMatches $text '(?i)\b(?:https?|wss?|tcp|udp)://[^\s<>"''`]+')) {
+    foreach ($match in (Get-PublicTextMatches $privacyText '(?i)\b(?:https?|wss?|tcp|udp)://[^\s<>"''`]+')) {
         $url = $null
         if (-not [Uri]::TryCreate($match.Value.TrimEnd('.,;)]}'.ToCharArray()), [UriKind]::Absolute, [ref]$url) -or
             $url.Scheme -notin @('http','https') -or $url.DnsSafeHost.ToLowerInvariant() -notin $publicHosts -or
@@ -157,14 +162,14 @@ function Get-PublicFileFindings {
             $reasons.Add('unreviewed server URL'); break
         }
     }
-    foreach ($match in (Get-PublicTextMatches $text '(?i)\b[A-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]*\.)+[A-Z]{2,}\b')) {
+    foreach ($match in (Get-PublicTextMatches $privacyText '(?i)\b[A-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]*\.)+[A-Z]{2,}\b')) {
         if (-not (Test-PublicTextMatch $match.Value '(?i)@(?:gnu|fsf)\.org$')) { $reasons.Add('email address; manual review required'); break }
     }
-    if ((Test-PublicTextMatch $text '(?i)(?:\b[a-z_]*(?:server|host|endpoint|lobby)[a-z_]*\b["'']?\s*[:=]\s*["'']?|--(?:server|host|lobby)(?:\s+|=))(?:[a-z0-9][a-z0-9.-]*\.[a-z]{2,}|localhost)(?=[:/\s"'']|$)') -or
-        (Test-PublicTextMatch $text '(?i)\b[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}:\d{1,5}\b')) {
+    if ((Test-PublicTextMatch $privacyText '(?i)(?:\b[a-z_]*(?:server|host|endpoint|lobby)[a-z_]*\b["'']?\s*[:=]\s*["'']?|--(?:server|host|lobby)(?:\s+|=))(?:[a-z0-9][a-z0-9.-]*\.[a-z]{2,}|localhost)(?=[:/\s"'']|$)') -or
+        (Test-PublicTextMatch $privacyText '(?i)\b[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}:\d{1,5}\b')) {
         $reasons.Add('server hostname assignment')
     }
-    if ($suffix -eq '.patch') {
+    if (-not $Directory -and $suffix -eq '.patch') {
         if (-not $diff.Success) { $reasons.Add('patch has no diff boundary') }
         if (Get-Command Get-PublicPatchHeaderFindings -ErrorAction SilentlyContinue) {
             foreach ($reason in @(Get-PublicPatchHeaderFindings $Data)) { $reasons.Add($reason) }
@@ -211,7 +216,13 @@ function Get-PublicTreeFindings {
             $key = $name.ToLowerInvariant()
             if ($seen.ContainsKey($key)) { throw 'case-colliding staged paths' }
             $seen[$key] = $true
-            if ([IO.Directory]::Exists($path)) { $queue.Enqueue($path); continue }
+            if ([IO.Directory]::Exists($path)) {
+                foreach ($reason in @(Get-PublicFileFindings -Name $name -Data ([byte[]]@()) -Directory)) {
+                    [pscustomobject]@{Path=$name; Reason=$reason}
+                }
+                $queue.Enqueue($path)
+                continue
+            }
             if (-not [IO.File]::Exists($path)) { throw 'nonregular staged entry' }
             $info = New-Object IO.FileInfo($path)
             if ($info.Length -gt 32MB) {
