@@ -1,5 +1,72 @@
 # T4 beta progress, 2026-11-02
 
+## Current blocker and supplied verification d1a2bb15db
+
+Release remains **NO-GO**. Actual App startup and portable first-run remain
+the most valuable open item. Sixteen area agents checked its independent
+prerequisites; no runnable complete candidate was found. Private Python/Tk,
+dependencies, reviewed locks/notices and portable marker remain absent. App
+initialization also probes outside this permitted tree. No production or test
+code changed: no App fix could receive the required real-entry test here.
+Another source audit cannot close this gate.
+
+Done:
+
+- Actual [starter test](tools/test_launcher_entry.ps1): test exit 0, real
+  `Tekken4.cmd` exit 1 for missing private Python; empty stderr, three input
+  hashes unchanged. **The App never started.** Evidence:
+  `logs/starter-d1a2-d33c3be54f3d43f3b97421c73cc40564/summary.json`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): both exit 0, empty
+  stderr; two 23-tool catalogs, three root inputs and three actual checker
+  subprocess cases passed. Normal readiness remains 2 / BLOCKED. All 47
+  hashed source inputs were unchanged; changing documents were excluded.
+  Evidence: `logs/tests-catalogs-d1a2-161d7bea959c4cf2a814f0e4d7c8f8da/summary.json`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md),
+  [decision sheet](docs/BETA_GO_NO_GO.md) and [status](docs/status.md) with
+  supplied draft `d1a2bb15db`, finished `2026-11-02T13:40:25`: clean
+  191-second build `943fc4631acf2c13`; OFF selftest 6000 wall / 5106 logical,
+  202 good restores, zero bad, 447 comparisons with zero mismatches and
+  101/101 wrong-input divergences. OFF same-PC pair: 6000 live/logical each,
+  199 hashes each, zero mismatches/NETDESYNC, FPS 47.8/47.9, stalls 0/130
+  (0/6593 ms), displayed-frame p99 174.8/126.0 ms, delay 3. Supplied, not
+  reproduced here. Versus `7e0bf150da`, both FPS values fell, both p99 values
+  rose and join stalls/time rose. Restore-and-resim maxima fell from
+  282.18/70.29 to 255.16/63.22 ms. No cause or usable pacing is established.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Pad navigation remains absent;
+fullscreen inheritance and offline spawn-failure cleanup remain unexecuted
+source observations. Failed scanner termination, interruption inside one
+write, outer watchdog failure and unobserved descendants remain unproved.
+Existing long aggregates and the whole-tree beta checker were not rerun.
+
+Owner-only next step: supply the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices, then follow
+[actual launcher acceptance](docs/RELEASE_PATH_B.md) in the authorized
+environment: responsive App/process identity, exit/reopen/settings, licence
+cancel/accept and portable build/play/return. Retain both full logs and
+effective settings to investigate pacing. Python alone is insufficient.
+GUI, Python suites, packagers, build, game and network helpers stayed
+**UNRUN here**. A same-PC pair does not replace two PCs.
+
+Area agents: `starter_d1a2`, `tests_catalogs_d1a2`, `supplied_verify_d1a2`,
+`candidate_d1a2`, `python_tk_d1a2`, `app_boundary_d1a2`, `settings_d1a2`,
+`controller_d1a2`, `offline_d1a2`, `licences_d1a2`, `source_privacy_d1a2`,
+`player_payload_d1a2`, `source_matching_d1a2`, `gui_profile_d1a2`,
+`two_pc_d1a2`, `scanner_gaps_d1a2`. All read AGENTS.md; only starter and
+tests/catalog agents ran entries. Root owns all four document changes;
+editing ownership was exclusive. Originals and a 348-file baseline are under
+`logs/release-d1a2-a7d7b0890f1d4dfaa51767c787f51d4b/`.
+Combined actual readiness evidence is `combined-entry/summary.json` there;
+it records the four-document check, entry result and source hashes.
+Separate reviewer `final_diff_review_d1a2` owns `final-review/` there;
+its report records final diff review and independent entry results.
+Neither source check can establish App acceptance.
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Current blocker and supplied verification 7e0bf150da
 
 Release remains **NO-GO**. Actual App startup and portable first-run remain
