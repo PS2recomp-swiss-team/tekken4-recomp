@@ -1,10 +1,29 @@
 # Status
 
-_Last updated: 2026-11-02 (unexpected worker-exit follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (launcher acceptance gate; release remains NO-GO)_
 
 ## Resume here
 
-- **Current unexpected worker-exit follow-up:**
+- **Current launcher acceptance gate and evidence completion:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal
+  and readiness result: private Python is absent, GUI never started, readiness
+  remains 2 / BLOCKED. No production or test code changed. Source inspection
+  confirms neither launcher selftest, the packager's small Tk probe nor mocked
+  core tests construct the actual App. The owner must start the exact complete
+  package through `Tekken4.cmd`, verify a responsive App, close and reopen,
+  then prove portable first-run/build/play. A detached starter exit alone is
+  insufficient. Complete source/player/privacy/licence review, Python suites,
+  exact build/game, enabled GUI switches and two physical PCs remain open.
+  The prior ZIP aggregate did finish: exit 0 in 523.412 seconds, empty stderr,
+  27 sources parsed and 18 suites plus catalog; 226 tool/patch names and hashes
+  remained unchanged. The stale pending statement below is historical.
+  Latest supplied draft `59c7379771`: clean 218-second build
+  `943fc4631acf2c13`, finished `2026-11-02T07:25:58`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.2/52.2 FPS, stalls 0/82
+  (0/2530 ms), displayed-frame p99 105.8/100.1 ms. This was not reproduced
+  here and proves neither this edited tree nor the enabled GUI profile.
+
+- **Earlier unexpected worker-exit follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records new real-entry
   [tree](../tools/test_public_tree_worker_interrupt.ps1) and
   [ZIP](../tools/test_public_zip_worker_interrupt.ps1) tests. The frozen

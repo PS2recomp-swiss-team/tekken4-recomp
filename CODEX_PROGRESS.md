@@ -1,6 +1,73 @@
 # T4 beta progress, 2026-11-02
 
-## Unexpected worker-exit follow-up, current session
+## Launcher acceptance gate and evidence completion, current session
+
+Release remains **NO-GO**. The most valuable open item is the exact complete
+package's actual launcher App and portable first-run. This copy cannot prove
+it: private Python and reviewed portable inputs are absent. No production or
+test code was changed without execution proof. More scanner tests cannot
+close the launcher gate.
+
+Done:
+
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1) passed only
+  for real `Tekken4.cmd` exit 1, missing private Python. Stderr was empty
+  and five checked source hashes stayed unchanged. GUI never started.
+  Evidence: `logs/launcher-gate-current-8d2e9892a2d349cbb61eeda181a639f3/`.
+- Actual [readiness tests](tools/test_online_readiness.ps1) passed three
+  subprocess cases. Direct readiness returned 2 / BLOCKED after checking
+  12 required files, seven PowerShell parses, seven documents / 109 local
+  links, catalogs and actual starter refusal. Both stderr streams were empty
+  and eight source hashes stayed unchanged. Evidence:
+  `logs/readiness-current-c75cb47c62a24ad8bd1733163057aa6b/`.
+- Recovered the previous completed ZIP aggregate result, rather than treating
+  the stale pending line below as unfinished execution: exit 0 in 523.412
+  seconds, empty stderr, 27 sources parsed and 18 suites plus catalog.
+  Its 155-assertion worker-interruption suite ran four actual scanner entries.
+  All 226 tool/patch names and hashes matched before, between and after both
+  aggregates, and still match the current source inventory. Evidence:
+  `logs/tests-catalogs-current-e92bd13ca4964eccb139c870b240c4b7/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `59c7379771`:
+  clean 218-second build `943fc4631acf2c13`, finished `2026-11-02T07:25:58`;
+  OFF selftest 202 good restores, zero bad, 447 comparisons with zero
+  mismatches and all 101 wrong-input passes diverged. OFF same-PC pair:
+  6,000 frames, 199 hashes each, zero mismatches/NETDESYNC, 52.2/52.2 FPS,
+  stalls 0/82 (0/2530 ms), displayed-frame p99 105.8/100.1 ms. This was not
+  reproduced here and does not prove this edited tree, GUI profile or two PCs.
+
+Open: complete source/player content, privacy and licence review and Python
+suites remain unproved. Retained fixture findings and incomplete archives
+remain failures. The prior scanner termination/watchdog/write/descendant
+coverage gaps remain open; none substitutes for launcher acceptance.
+
+Only the owner or authorized validation checkout can close the main gate:
+start the exact complete package with its actual `Tekken4.cmd`, verify the
+launcher App is visible and responsive, close normally and start again. Then
+prove portable first-run, licence reject/accept, build/play/return and settings
+retention. A starter exit alone is insufficient because it starts Python
+asynchronously. Source inspection confirms `--selftest` returns before App
+construction, the packager checks a small Tk window, and the Python launcher
+suite mocks core processes. None proves App startup. Actual App startup also
+starts automatic ISO discovery outside this copy, so it belongs in the
+authorized validation environment. No personal folders were read here.
+
+Exact build/game, enabled GUI Host/Join switches and two physical PCs still
+need owner proof. No GUI, Python suite, build, game or network helper ran here.
+
+Eight area agents: `launcher_gate_current`, `portable_acceptance_audit`,
+`tests_catalogs_current`, `latest_verify_docs_current`,
+`readiness_contract_current`, `prior_evidence_completion`,
+`release_source_scope`, `launcher_test_coverage`. Separate reviewer:
+`final_diff_review_acceptance`. File ownership was exclusive. Root owns this
+record and `docs/status.md`. Original root bytes/hashes are saved without Git
+in `logs/release-acceptance-session-02c0630993c84014a37023f39931f23f/`;
+evidence-document originals are in
+`logs/latest-verify-docs-59c-current-2308918758294eb589b10bf291074adf/`.
+No Git command, deletion, build, game, forbidden helper, server, push or
+release ran here.
+
+## Earlier unexpected worker-exit follow-up
 
 Release remains **NO-GO**. The most valuable release gate is still the exact
 complete package's actual launcher App and portable first-run. Private Python
