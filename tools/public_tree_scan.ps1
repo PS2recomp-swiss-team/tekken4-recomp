@@ -77,9 +77,11 @@ function Get-PublicFileFindings {
         @($directoryParts | Where-Object { $_ -in @('game','bios','saves','save','memcards') }).Count) {
         $reasons.Add('game data or binary/archive filename')
     }
-    if ((-not $Directory -and ($suffix -in @('.key','.keys','.pem','.p12','.pfx','.kdbx') -or
-        $leaf -in @('.env','id_rsa','id_ed25519','credentials'))) -or $parts -contains 'keys') {
-        $reasons.Add('key or credential filename')
+    foreach ($part in $parts) {
+        if ([IO.Path]::GetExtension($part).ToLowerInvariant() -in @('.key','.keys','.pem','.p12','.pfx','.kdbx') -or
+            $part -in @('.env','id_rsa','id_ed25519','credentials','keys')) {
+            $reasons.Add('key or credential filename'); break
+        }
     }
     if ((-not $Directory -and $leaf -in @('.mcp.json','claude.md','codex_progress.md')) -or
         @($parts | Where-Object { $_ -in @('.git','.agents','.codex','.aws','lobby') }).Count) {
@@ -154,7 +156,9 @@ function Get-PublicFileFindings {
         'go.microsoft.com','learn.microsoft.com','visualstudio.microsoft.com','www.microsoft.com','developer.microsoft.com',
         'virustotal.com','www.virustotal.com','docs.virustotal.com','spdx.org','opensource.org',
         'git-scm.com','www.git-scm.com','tailscale.com','www.tailscale.com')
-    foreach ($match in (Get-PublicTextMatches $privacyText '(?i)\b(?:https?|wss?|tcp|udp)://[^\s<>"''`]+')) {
+    # Discover each scheme-like run once. Retrying after every dot or hyphen
+    # makes long ordinary text quadratic. TryCreate below checks URI syntax.
+    foreach ($match in (Get-PublicTextMatches $privacyText '(?i)(?<![a-z0-9+.-])[a-z0-9+.-]+://[^\s<>"''`]+')) {
         $url = $null
         if (-not [Uri]::TryCreate($match.Value.TrimEnd('.,;)]}'.ToCharArray()), [UriKind]::Absolute, [ref]$url) -or
             $url.Scheme -notin @('http','https') -or $url.DnsSafeHost.ToLowerInvariant() -notin $publicHosts -or

@@ -1,5 +1,173 @@
 # T4 beta progress, 2026-11-02
 
+## Runtime experiment: bounded catchup after pacing rebases
+
+Current priority is the owner's one-sided rollback investigation. The older
+launcher/scanner work below does not advance this runtime question. No cause
+or improvement is proved. Build, selftest and actual pair remain **UNRUN here**:
+AGENTS.md forbids builds, games and the build/network helpers in this copy.
+The requested real-entry runtime test must happen in the owner's verify.
+
+Done:
+
+- Read AGENTS.md and this record first. Sixteen area agents inspected runtime
+  paths and evidence. No raw host/join game logs exist in this tree; retained
+  verify files contain summaries and checker output. Input arrival times,
+  measured frame advantage and the exact wait sequence could not be read.
+- Supplied b13 host/join totals: 209/989 rollbacks (206/874 early), rebases
+  24691/13757 ms, time sync 0/5317 ms and prediction stalls 0/5629 ms.
+  Host's extra rebase time is 10934 ms; join's sync plus prediction waits total
+  10946 ms. These are different counters, not an accounting identity or causal
+  proof. They fit a hypothesis that the slower sender loses schedule headroom
+  in full rebases, while its ahead peer predicts deeper and waits. Earlier
+  role reversal is supplied by the owner; it suggests a timing-dependent loop.
+- Changed only runtime pacing behavior behind new default-off
+  `TEKKEN4_NET_REBASE_CATCHUP=1`. At the existing >50 ms debt guard, live frames
+  retain two vblank periods (about 33.334 ms) of deadline debt; only the excess
+  shifts the schedule. Boot rebases and the switch-off path retain the prior
+  behavior. This bounds retained debt after a hitch but can cause short catchup
+  bursts and more GPU contention. It does not guarantee two recovered frames.
+- Enabled runs log the exact switch at handshake and `NETREBASE_CATCHUP` beside
+  summaries with affected rebase count and cumulative retained debt. Retained
+  debt is not measured recovered time. Existing `rebases (... ms)` continues to
+  mean actual schedule shifts; a lower value alone is not improvement evidence.
+- Root [VERIFY_ENV.txt](VERIFY_ENV.txt) contains exactly one line:
+  `TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1`.
+  Original runtime/progress bytes are retained under
+  `logs/runtime-rebase-catchup/originals/`; no Git command was used.
+- Tests/catalog agent ran the actual catalog checker: exit 0, two 23-tool
+  catalogs and three root inputs. This did not run the changed runtime and is
+  not rollback validation. No mock, extracted arithmetic test or source check
+  is counted as real-entry runtime proof. Exact switch-file inspection and
+  original/current source comparison completed; neither executes the runtime.
+- Separate reviewer `final_diff_review_runtime` found no blocking source issue:
+  default-off/boot behavior, positive bounded shift, gated telemetry, exact
+  switch line and preserved progress history checked. Compilation, selftest
+  and OFF/ON runtime verification remain unrun. Review record:
+  `logs/runtime-rebase-catchup/final-review.txt`.
+
+Open / owner-only next verify:
+
+1. Stage this changed runtime into the real runner before building. Require a
+   build ID different from `943fc4631acf2c13`; build IDs hash staged runner
+   overrides. Keep this new build identical between OFF and ON arms. Both
+   peers must show the activation line and nonzero affected-rebase counters in
+   ON, with the switch absent in OFF. A zero counter leaves the experiment
+   unexercised. Run the actual selftest and OFF/ON pair at the same settings.
+2. Pass the file's assignments through the pair helper's `-Env` on both peers:
+   inherited variables are cleared. Keep `-TimingDiag` enabled identically in
+   both arms, and keep all other switches unchanged. Retain effective params,
+   complete host/join runtime and transport logs, including NETTS and NETDIAG.
+3. Compare paired local/input gaps and progress ages, frame/confirmed frontiers,
+   advantage, rebase debt, which side sleeps, rollback depth/count and resim
+   cost. Hypothesis predicts less sustained lead on the high-rollback peer
+   when the slow peer retains catchup debt. It is weakened if the branch is
+   exercised but lead and rollback imbalance persist. A reduced ratio obtained
+   by making both sides worse is not success: inspect total rollbacks, FPS,
+   stalls, p99 displayed times, zero hash mismatches and zero NETDESYNC too.
+4. Repeat and swap roles, then use two physical PCs. A same-PC pair cannot
+   establish internet pacing. Full per-input arrival timestamps are not in the
+   existing one-second diagnostic samples. Raw logs and runtime proof remain
+   open; no release, server or enabled GUI profile is authorized by this change.
+
+Area agents: `pair_logs`, `time_sync`, `frame_advantage`, `input_arrival`,
+`vblank_wait`, `pacing_rebase`, `transport_poll`, `prediction_window`,
+`role_startup`, `rollback_cost`, `input_resend`, `switch_wiring`,
+`tests_catalogs`, `diagnostic_fields`, `verify_comparison`, `clock_sources`.
+All followed AGENTS.md and were read-only; root exclusively owns runtime,
+VERIFY_ENV and this record. Separate reviewer: `final_diff_review_runtime`.
+No file deletion, patch edit, outside-tree read, build, game, forbidden helper,
+server, Git command, push or release ran here.
+
+## URI and credential-directory scanner regressions; supplied b13f80b4da
+
+Release remains **NO-GO**. Actual App startup and portable first-run remain
+the main release blocker. The complete reviewed candidate/private runtime
+and permitted validation environment are still absent. No repeated starter
+refusal was run or counted as App evidence.
+
+Done; aggregate verification and final review in progress:
+
+- Real publisher scan/export entries demonstrated that unreviewed URI schemes
+  and credential-named directories passed the old scanner. Independent actual
+  ZIP entries demonstrated the URI gap too. Only harmless text fixtures were
+  used. Initial failing permanent regressions remain under
+  `logs/public-uri-schemes-b20eb6b25f8647b88bd42cfe278a1085/` and
+  `logs/public-credential-paths-324343b7f8394f4e8b1a178a933d0915/`.
+- The shared scanner now discovers additional `scheme://` forms before
+  applying the existing reviewed HTTP(S) policy, and checks existing credential
+  names/suffixes on every path component. New
+  [URI](tools/test_public_uri_schemes.ps1) and
+  [credential-path](tools/test_public_credential_paths.ps1) regressions invoke
+  actual export, tree scan and ZIP scan entries. Both are registered in both
+  aggregates. Frozen standalone URI entry: exit 0, 375 assertions across 39
+  real entries, empty stderr and unchanged tool/input hashes. Evidence:
+  `logs/public-uri-schemes-10f5469ded7a4d8f96d65e4298477f3e/summary.json`.
+  Full aggregates are running sequentially; separate final review is pending.
+- Added 200,000-character dotted-text controls hit the scan limit in all
+  three modes, both before and after the URI matcher was adjusted to consume
+  each scheme-like run once. An exact copied original publisher entry also
+  refused that input; this is a pre-existing manual-review limit, not a proved
+  URI regression. Original entry controls passed with 4,000 characters and
+  with that text followed by an approved URI. Tool hashes and results are in
+  `logs/release-b13/uri_entry/baseline/summary.json`. Final regressions use
+  those bounded compatibility controls. Failed larger-control runs remain under
+  `logs/public-uri-schemes-8b16b2d3859e46478a91c861ffa6b090/` and
+  `logs/public-uri-schemes-84e67f789fa64bd582dd2c47bb7e14b2/`. URI syntax
+  and HTTP(S) policy remain checked after discovery. The credential test
+  passed 377 assertions/41 entries
+  before that final performance adjustment, with unchanged inputs and empty
+  stderr, under `logs/public-credential-paths-7da7fd5a14934ca99a121019946ed69d/`.
+- Actual catalog entry passed with exit 0, empty stderr and unchanged four
+  inputs: two 23-tool catalogs and three root inputs. Registration inspection
+  found 17 tree suites/25 parse inputs and 20 ZIP suites plus catalog/29 parse
+  inputs, with both new suites in both required and run lists. No player
+  catalog changed. Evidence: `logs/release-b13/tests_catalogs/`.
+- The actual source checker on the switch-evidence document exited 1 with
+  empty stderr. Its eight local links and 364 PowerShell parses passed; the
+  whole-tree scan found 174 retained fixture findings, including 77 incomplete
+  archives. This is not a clean whole-tree pass. Evidence:
+  `logs/release-b13/supplied_evidence/summary.json`. Nothing was deleted or
+  weakened to remove these fixtures.
+- Recorded supplied draft `b13f80b4da`, finished `2026-11-02T14:27:59`:
+  clean 188-second build `943fc4631acf2c13`; OFF selftest 6000 wall / 5106
+  logical, 202 good restores, zero bad, 447 resim comparisons with zero
+  mismatches and 101/101 wrong-input divergences. OFF same-PC pair reached
+  6000 live/logical each, 199 hashes each, zero mismatches/NETDESYNC,
+  48.1/48.1 run-average FPS, stalls 0/136 (0/5629 ms), displayed-frame
+  p99 161.6/117.1 ms, delay 3. Restore-and-resim maxima were
+  200.68/62.93 ms. Supplied, not reproduced here; no cause, usable pacing,
+  enabled GUI profile, App startup or two-PC proof follows.
+
+Open locally: failed OS termination, interruption inside one file write,
+unobserved descendants, output-collection watchdog and other suites' watchdogs
+remain unproved. Further URI forms without `://` are outside this narrow fix.
+Two actual publisher topology samples observed the worker and two console
+hosts, including a depth-two descendant; recorded identities were absent in
+two later samples. This does not prove cleanup of unobserved descendants.
+Evidence: `logs/release-b13/descendant_cleanup/`.
+
+Owner-only: supply exact reviewed candidate/ZIP hash, matching complete source
+and reviewed locks/notices; run actual App/portable acceptance in the authorized
+environment. Python suites, complete source/player content and licence review,
+enabled GUI Host/Join profile, two physical PCs and sound-on usable pacing
+remain open. GUI, Python release tools, packagers, build, game, network helpers
+and server remain **UNRUN here**. A same-PC pair is not two-PC proof.
+
+Area agents: `uri_entry`, `key_directory_entry`, `write_interruption`,
+`termination_failure`, `descendant_cleanup`, `collection_watchdog`,
+`watchdog_suites`, `tests_catalogs_b13`, `supplied_evidence_b13`,
+`source_uri_boundary`, `source_matching_b13`, `payload_scan_b13`,
+`readiness_claims_b13`, `licence_candidate_b13`, `gui_profile_b13`,
+`app_candidate_b13`; separate reviewer `final_diff_review_b13`.
+All read AGENTS.md. URI and credential agents exclusively own their respective
+new tests; supplied-evidence agent owned only the switch-evidence document.
+Root owns shared scanner/aggregate integration, remaining docs and this record.
+Originals are under `logs/release-b13/originals/` and
+`logs/release-b13/supplied_evidence/original.md`. No file was deleted, no Git
+command or outside-tree read was used, and no build, game, forbidden helper,
+server, push or release ran.
+
 ## Forced tree-test watchdog through the real publisher
 
 Release remains **NO-GO**. Actual App startup and portable first-run are still

@@ -61,6 +61,7 @@ try {
         'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
         'test_public_zip_budget_tables.ps1', 'test_public_text_words.ps1',
         'test_public_text_lines.ps1', 'test_public_text_categories.ps1', 'test_public_path_privacy.ps1',
+        'test_public_uri_schemes.ps1', 'test_public_credential_paths.ps1',
         'test_public_zip_deadline.ps1', 'test_public_zip_deadline_compat.ps1',
         'test_public_zip_process_lifecycle.ps1',
         'test_public_zip_worker_interrupt.ps1',
@@ -86,6 +87,7 @@ try {
             'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
             'test_public_zip_budget_tables.ps1', 'test_public_text_words.ps1',
             'test_public_text_lines.ps1', 'test_public_text_categories.ps1', 'test_public_path_privacy.ps1',
+            'test_public_uri_schemes.ps1', 'test_public_credential_paths.ps1',
             'test_public_zip_deadline.ps1', 'test_public_zip_deadline_compat.ps1',
             'test_public_zip_process_lifecycle.ps1', 'test_public_zip_worker_interrupt.ps1')) {
         Write-Output "ENTRY: tools/$entry"

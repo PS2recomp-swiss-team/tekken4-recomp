@@ -49,6 +49,12 @@ file text. Tree findings use a static file placeholder and categories,
 without printing file names or matched text. These checks are limited rules,
 not a guarantee that every private name or value will be found.
 
+Credential names and suffixes are checked on every path component, including
+directories and ancestors of a selected file. URI discovery checks arbitrary
+`scheme://` forms against the existing reviewed HTTP(S) policy; an approved
+hostname does not permit another scheme. These shared rules also apply to ZIP
+members. They do not establish that every private URI form is recognized.
+
 The shared [text scanner](../tools/public_tree_scan.ps1) gives each of its
 full-content regex operations a two-second .NET regex timeout. Match collections
 do not have one shared deadline. A timeout or regex failure stops the scan
@@ -88,6 +94,9 @@ refusals count. A process killed by a test deadline is a failed test.
 The [path privacy tests](../tools/test_public_path_privacy.ps1) exercise
 private working paths and private-looking names through both actual tree
 and ZIP scan entries, with clean controls and sanitized refusal checks.
+The [URI scheme tests](../tools/test_public_uri_schemes.ps1) and
+[credential path tests](../tools/test_public_credential_paths.ps1) exercise
+the actual export, tree scan and ZIP scan entries with harmless text fixtures.
 The [tree deadline tests](../tools/test_public_tree_deadline.ps1) and
 [compatibility tests](../tools/test_public_tree_deadline_compat.ps1) use the
 actual export/scan entry. An entry's own deadline refusal is distinct from a

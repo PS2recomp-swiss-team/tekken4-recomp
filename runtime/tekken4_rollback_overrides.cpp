@@ -88,6 +88,7 @@
 // TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
 // TEKKEN4_NET_DIAG=1      one-second host timing/lead/deadline samples (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
+// TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
 // TEKKEN4_STATE_PROBE=1    read-only live-boundary discovery log (requires a rollback mode; docs/DIRECTFIGHT_T4.md).
 // TEKKEN4_NET_RESULT=<path>  diagnostic session result JSON, default off; winner/score remain unproved TODOs.
 #include "game_overrides.h"
@@ -1156,6 +1157,9 @@ namespace tekken4_rollback
         bool costProfile = false;
         bool diag = false;
         bool refreshRc = false;
+        bool rebaseCatchup = false;
+        uint64_t catchupRebases = 0;
+        double catchupDebtMs = 0;
         // Host diagnostics only. Totals are cumulative; maxima cover the last diagnostic interval.
         std::chrono::steady_clock::time_point diagLast{};
         double diagDebtMaxMs = 0, diagGapMaxMs = 0, diagRollbackMaxMs = 0,
@@ -1622,8 +1626,8 @@ namespace tekken4_rollback
         std::fprintf(g_log, "NETTS f=%" PRIu64 " ahead %.2f frames: gave up %d frame(s)\n", f, adv, frames);
     }
 
-    // Never more than ~3 frames behind the host schedule: a slow stretch (a rollback, the stage that runs at 33 fps)
-    // is not caught up later in a burst.
+    // Normally discard all debt beyond ~3 frames. The opt-in experiment keeps two vblank periods of live debt
+    // so a slow sender can recover some headroom; excess debt is still discarded after a long hitch.
     void npPacingGuard()
     {
         const auto next = g_runtime->eeScheduler().nextVblankHostDeadline();
@@ -1634,9 +1638,17 @@ namespace tekken4_rollback
             g_np.diagDebtMaxMs = std::max(g_np.diagDebtMaxMs, std::chrono::duration<double, std::milli>(late).count());
         if (late > std::chrono::milliseconds(50))
         {
-            npShift(late);
+            auto shift = late;
+            if (g_np.rebaseCatchup && g_frame >= g_np.rbStart)
+            {
+                const auto keep = std::chrono::duration_cast<std::chrono::steady_clock::duration>(kVblank * 2);
+                shift -= keep; // late > 50 ms, keep ~= 33 ms: the shift remains positive.
+                ++g_np.catchupRebases;
+                g_np.catchupDebtMs += std::chrono::duration<double, std::milli>(keep).count();
+            }
+            npShift(shift);
             ++g_np.rebases;
-            g_np.rebaseMs += std::chrono::duration<double, std::milli>(late).count();
+            g_np.rebaseMs += std::chrono::duration<double, std::milli>(shift).count();
         }
     }
 
@@ -1745,6 +1757,9 @@ namespace tekken4_rollback
                      cs.captures ? static_cast<double>(cs.capturePages) / static_cast<double>(cs.captures) : 0.0,
                      cs.restores ? static_cast<double>(cs.restorePages) / static_cast<double>(cs.restores) : 0.0,
                      cs.verifyMismatchPages ? (" VERIFY MISMATCH PAGES " + std::to_string(cs.verifyMismatchPages)).c_str() : "");
+        if (g_np.rebaseCatchup)
+            std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
+                         g_frame, g_np.catchupRebases, g_np.catchupDebtMs);
         if (g_np.hashProfile)
             std::fprintf(g_log,
                          "NETHASH_PROFILE f=%" PRIu64 " collected=%" PRIu64 " pending peak=%zu; queue avg %.3f max %.3f ms;"
@@ -1829,6 +1844,8 @@ namespace tekken4_rollback
                      g_np.early ? "on" : "off", g_np.earlyMs, g_np.lazy ? 1 : 0);
         if (g_np.refreshRc)
             std::fprintf(g_log, "NET remote input refresh before prediction wait/late scan enabled\n");
+        if (g_np.rebaseCatchup)
+            std::fprintf(g_log, "NET TEKKEN4_NET_REBASE_CATCHUP=1: live rebases retain two vblank periods of deadline debt\n");
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -2273,6 +2290,8 @@ namespace tekken4_rollback
             g_np.diag = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_REFRESH_RC"))
             g_np.refreshRc = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_REBASE_CATCHUP"))
+            g_np.rebaseCatchup = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCALPAD"))
             g_np.localPad = parseNumber(v) != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_PAD"))

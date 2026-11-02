@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02 (App still unrun; supplied draft 294b927b6f; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft b13f80b4da; NO-GO)_
 
 ## Resume here
 
@@ -13,19 +13,21 @@ _Last updated: 2026-11-02 (App still unrun; supplied draft 294b927b6f; NO-GO)_
   responsive actual App/process identity, exit/reopen/settings, licence
   cancel/accept and build/play/return. Actual starter refusal, both 23-tool
   catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
-  No production or test code changed. The App never started.
-  Latest supplied draft `294b927b6f`: clean 185-second build
-  `943fc4631acf2c13`, finished `2026-11-02T13:53:59`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 47.8/47.8 FPS, stalls 0/139
-  (0/5619 ms), displayed-frame p99 166.1/120.5 ms, actual delay 3.
-  Restore-and-resim maximum was 110.51/66.70 ms.
+  The App never started here.
+  Latest supplied draft `b13f80b4da`: clean 188-second build
+  `943fc4631acf2c13`, finished `2026-11-02T14:27:59`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 48.1/48.1 FPS, stalls 0/136
+  (0/5629 ms), displayed-frame p99 161.6/117.1 ms, actual delay 3.
+  Restore-and-resim maximum was 200.68/62.93 ms.
   Cause and usable pacing
   remain unproved. Supplied, not reproduced here; no App, enabled
   GUI-profile or two-PC acceptance.
   Owner next: provide the reviewed complete candidate, matching complete
   source and locks/notices, then run the existing checklist in the authorized
   environment. Full content/privacy/licence, Python suites and exact
-  build/game acceptance remain open. No new executable local fix was found.
+  build/game acceptance remain open. Real scanner entries reproduced
+  unreviewed URI schemes and credential-named directory bypasses; the
+  shared tree/ZIP scanner and new entry regressions address those cases.
 - **Earlier launcher acceptance gate and evidence completion:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal
   and readiness result: private Python is absent, GUI never started, readiness

@@ -50,6 +50,58 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
+Draft `b13f80b4da`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 188 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T14:27:59`.
+This supersedes the earlier supplied verification summaries retained below.
+
+- Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
+  restores, zero bad restores, 447 resim comparisons with zero mismatches;
+  all 101 deliberate wrong-input passes diverged. Save average/maximum was
+  0.20/4.86 ms; restore average/maximum was 0.28/0.50 ms.
+- Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
+  endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
+  zero mismatches, zero NETDESYNC lines and peer OK. Measured RTT was
+  149/148 ms (host/join), with 32 samples and delay 3 on both endpoints.
+
+| Pair measurement | Host | Join |
+|---|---:|---:|
+| Final FPS window / run average | 59.4 / 48.1 | 59.8 / 48.1 |
+| Rollbacks / resim frames / maximum depth | 209 / 299 / 5 | 989 / 4382 / 9 |
+| Depth counts, in depth order | 1:153, 2:31, 3:17, 4:7, 5:1 | 1:74, 2:177, 3:200, 4:123, 5:84, 6:139, 7:40, 8:40, 9:112 |
+| Frames on predicted input / mispredicted | 2495 / 209 | 8174 / 989 |
+| Restore-and-resim p50 / p90 / maximum, ms | 5.71 / 15.72 / 200.68 | 22.94 / 50.72 / 62.93 |
+| Stalls / total ms | 0 / 0 | 136 / 5629 |
+| Time sync / total ms | 0 / 0 | 93 / 5317 |
+| Rebases / total ms | 224 / 24691 | 182 / 13757 |
+| Displayed-frame p50 / p90 / p99, ms | 16.7 / 17.9 / 161.6 | 16.7 / 28.3 / 117.1 |
+| Packets out / in / simulator-dropped | 19923 / 19426 / 589 | 20007 / 19314 / 571 |
+| Resends / coalesced | 1855 / 0 | 1576 / 0 |
+| Payload bytes out / in | 3488400 / 3404585 | 3505828 / 3381674 |
+| Capture / restore / hash average, ms | 0.42 / 0.45 / 3.92 | 0.40 / 0.47 / 3.92 |
+| Lockstep waits / total ms / lock delay | 1 / 74 / 7 | 0 / 0 / 7 |
+| Early rollbacks / vblank wait ms | 206 / 10572 | 874 / 8839 |
+| Lazy captures skipped | 55 | 426 |
+| Frames over 20 ms / over 34 ms, of 5401 | 449 / 341 | 825 / 456 |
+| RDRAM pages per capture / restore | 186 / 145 | 181 / 166 |
+
+Against the preceding supplied report (`294b927b6f`), run-average FPS rose
+from 47.8 to 48.1 on both sides. Displayed-frame p99 fell from 166.1/120.5
+to 161.6/117.1 ms. Join stalls fell from 139 to 136, while total stall time
+rose from 5619 to 5629 ms. Restore-and-resim maximum changed from
+110.51/66.70 to 200.68/62.93 ms: host rose, join fell. Actual delay remained
+3 on both endpoints. These summaries are not a controlled comparison and
+do not establish a cause. Clean state checks do not establish usable pacing.
+
+This is supplied evidence, not a run performed here. Full effective parameter
+records and raw logs were not supplied in this prompt. "Switches OFF" must not
+be expanded into a claim that baseline time sync, early rollback or lazy capture
+were disabled. The latest report proves no newly enabled experimental switch,
+actual App startup, enabled GUI profile or two-PC play. A pair on one PC does
+not replace two physical PCs.
+
+## Previous supplied verification 294b927b6f
+
 Draft `294b927b6f`, merge base `8b15202341` (branch base `7992837fc3`),
 onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 185 seconds,
 build ID `943fc4631acf2c13`. Finished `2026-11-02T13:53:59`.
