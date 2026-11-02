@@ -1,46 +1,52 @@
 # T4 beta progress, 2026-11-02
 
-## Next action remains the first exercised catchup verify
+## Current status: catchup experiment still has no real verify
 
-Done this continuation: 24 read-only area agents checked independent runtime,
-evidence and test paths. No paired runtime logs were found: all 14 retained
-latest-verify/runtime/release-b13 evidence directories have zero .log files.
-The supplied existing-name refusal launched no pair. Input arrival times,
-sustained advantage and actual wait ordering are still unknown.
+Done this continuation: 24 read-only area agents checked separate runtime,
+evidence and test areas. The 14 retained latest-verify/runtime/release-b13
+directories still contain no .log files. The supplied existing-name refusal
+launched no pair. Input arrival timing, sustained advantage and which peer
+actually waited remain unknown. No cause of the 206/874 imbalance is proved.
 
-No new runtime edit or test pass is claimed. The pending default-off catchup
-experiment already changes the requested runtime path. Its hypothesis remains
-that discarding all late deadline debt keeps a slow sender behind, while its
-ahead peer predicts further and waits. Source supports the mechanism, not its
-causal role. Adding another unrun change would not answer this question.
+The pending default-off runtime change remains the single experiment.
+Hypothesis: full deadline rebases discard the slow sender's catchup headroom;
+the ahead peer predicts further, rolls back more and waits. Resimulation
+restores the saved live deadline, leaving elapsed work as debt. The experiment
+retains 33.334 ms at the >50 ms guard. Source supports this mechanism, not its
+causal role or benefit. No new runtime edit or test pass is claimed.
 
-Open / owner-only: preserve existing output and use a fresh unused verify name.
-Stage the pending working-tree runtime, build and regenerate identity, then
-test the same new build OFF and ON. input_build.cmd stages committed HEAD;
-that route can omit the pending edit. The actual outer verify route is absent.
-An unchanged ID fits stale staging or a stale stamp but proves neither.
-Require an ID different from 943fc4631acf2c13 AND both ON peers' literal
-activation plus nonzero NETREBASE_CATCHUP rebases. VERIFY_ENV.txt stays:
+Open / owner-only: preserve existing output and choose a fresh unused name.
+Stage the working-tree runtime into the actual runner, build and regenerate
+identity. input_build.cmd stages committed HEAD and can omit this edit;
+the outer verify route is absent, so whether staging omitted it is unknown.
+Use the same new build for OFF and ON, with an ID different from
+943fc4631acf2c13. Identity hashes staged source, not executable bytes.
+VERIFY_ENV.txt remains exactly one line:
 TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
-Pass through common -Env, keeping diagnostics and every other setting equal
-in both arms. Retain full paired logs and effective params. Compare sustained
-lead, sender gaps, frontier progress, actual waits and absolute rollback/resim
-work with pacing. Lower ratios or rebase totals alone do not prove improvement.
+Pass through common -Env; peer overrides must not replace it. Keep TimingDiag,
+scripts, simulation and every other switch equal across both arms. Require
+both ON peers' literal activation and nonzero NETREBASE_CATCHUP rebases.
+Retain full paired logs and effective params. Compare sustained lead, sender
+gaps, frontier progress, actual waits, absolute rollback/resim work and pacing.
+Lower ratios or rebase totals alone prove no improvement. Comparable problems
+with ON exercised weaken the hypothesis. Repeat runs; role swaps also change
+simulation streams and input scripts.
 
 Compilation, selftest and real OFF/ON runtime entry remain UNRUN: AGENTS.md
-forbids the required build/game/network entries here. The tests/catalog agent
-confirmed selftest and catalog checks do not execute the live pacing guard.
-No substitute green check was run. Only this progress record changed.
+forbids the required build/game/network entries here. Only Mode::Net reaches
+the live pacing guard; selftest and catalog checks do not. No substitute green
+check ran. Only this progress section changed; runtime and VERIFY_ENV did not.
 
-Area agents: pair_logs_now, catchup_math_now, sync_order_now, advantage_now,
-arrival_now, vblank_now, polling_now, prediction_now, roles_now, resim_now,
-resend_now, switch_route_now, tests_catalogs_now, build_identity_now,
-clock_domains_now, simulation_now, sampling_now, catchup_telemetry_now,
-state_ring_now, mismatch_now, coalescing_now, diagnostic_lock_now,
-frontier_refresh_now, falsification_now. Separate final reviewer:
-final_diff_review_now. All agents are read-only; root alone edits this record.
-No Git command, outside-tree read, deletion, patch edit, build, game, forbidden
-helper, server, push or release ran this continuation.
+Area agents: pair_logs_pass, catchup_guard_pass, timesync_pass, advantage_pass,
+arrival_pass, vblank_pass, poll_delivery_pass, prediction_pass, roles_pass,
+resim_pass, resend_pass, env_route_pass, tests_catalogs_pass,
+build_identity_pass, clocks_pass, simulation_pass, sampling_pass,
+telemetry_pass, state_ring_pass, mismatch_pass, coalescing_pass,
+diag_contention_pass, frontier_refresh_pass, falsification_pass.
+Separate final reviewer: final_diff_review_pass found no blocking source issue;
+runtime proof remains unrun. All agents are read-only; root alone edits this
+record. No Git command, outside-tree read, deletion,
+patch edit, build, game, forbidden helper, server, push or release ran here.
 
 ## Current refusal: stage the pending runtime before the next verify
 
