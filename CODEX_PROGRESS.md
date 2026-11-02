@@ -1,5 +1,51 @@
 # T4 beta progress, 2026-11-02
 
+## Continuation: pending runtime experiment needs its first real run
+
+Done: 24 independent area agents read AGENTS.md and checked the runtime,
+transport, evidence and test routes. No raw paired game/transport logs were
+found. The latest supplied result is still an existing-name refusal before
+launch. No input-arrival trace, measured advantage or actual wait ordering
+can be recovered from it. No new runtime edit or test pass is claimed.
+
+The existing default-off catchup patch remains the single pending experiment.
+Hypothesis: full deadline rebases discard the slow sender's catchup headroom,
+leaving its ahead peer predicting deeper and waiting. Resimulation restores
+the saved live deadline; the guard then discards debt above 50 ms. The switch
+retains 33.334 ms of live debt. Source fits this mechanism but does not prove
+it caused the supplied imbalance. Reordered peer-lead metadata, stale frontier
+samples and diagnostic lock contention remain unproved alternatives.
+
+Open / owner-only: stage the pending runtime patch into the real runner and
+choose a fresh unused verify name. Run the same new build OFF and ON, keeping
+TimingDiag, scripts, simulation and all other switches identical. Require a
+build ID different from 943fc4631acf2c13, both ON peers' literal activation,
+and nonzero NETREBASE_CATCHUP rebases. The ID hashes staged source, not binary
+bytes. Keep VERIFY_ENV.txt unchanged, exactly one line:
+TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
+Pass it through common -Env; per-peer overrides must not replace it. The outer
+verify wrapper is absent here, so its file ingestion remains unchecked.
+
+Retain full paired runtime/transport logs and effective settings. Compare
+sustained lead, confirmed progress, sender gaps, actual waits, absolute
+rollback/resimulation work and pacing. A smaller ratio or rebase counter is
+insufficient. If exercised ON leaves those problems comparable, the hypothesis
+is weakened. Role swaps also change simulator streams and input scripts.
+Compilation, selftest, actual OFF/ON pair and improvement remain UNRUN.
+AGENTS.md forbids their real entries here. Selftest does not call this pacing
+path. No catalog rerun or substitute test was counted as runtime evidence.
+
+Area agents: pair_log_inventory, catchup_bounds, timesync_wait,
+advantage_estimate, input_frontier, vblank_deadlines, transport_poll,
+prediction_wait, role_startup, resim_cost, resend_order, env_route,
+tests_catalogs, build_identity, clock_domains, network_simulation,
+local_sampling, diagnostic_counters, state_ring, prediction_compare,
+coalescing, thread_contention, frontier_refresh, experiment_falsification.
+All read-only; root owns this progress insertion. Separate final reviewer:
+final_diff_review_evidence_gate. Runtime and VERIFY_ENV.txt remain unchanged.
+No Git command, outside-tree read, deletion, patch edit, build, game, forbidden
+helper, server, push or release ran here.
+
 ## Current continuation: real verify still blocked before launch
 
 The latest supplied result again refused an existing output name before
