@@ -131,6 +131,12 @@ a failed or missing check; do not replace a published asset or reuse a version.
 
 9. **Public repositories.** Prepare fresh local output directories:
 
+   For the tested PowerShell source-staging entry point and patch-header/image
+   cleanup, follow [PUBLIC_SOURCE_EXPORT.md](PUBLIC_SOURCE_EXPORT.md). Scan the
+   exact final public trees before the owner copies them. The older Python
+   commands below are separate paths and were not run here; their presence is
+   not evidence of the new cleanup behaviour.
+
    ```text
    python -B tools/make_public_repo.py --out release-output/player
    python -B tools/publish_source.py --ref vX.Y.Z --out release-output/source

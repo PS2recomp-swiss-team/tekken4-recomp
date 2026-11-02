@@ -1,5 +1,90 @@
 # T4 beta progress, 2026-11-02
 
+## Public-tree preparation, latest session
+
+Publication remains **NO-GO** for the full source/player trees. The new
+PowerShell path runs here without Python. It stages files only; it does not
+publish, use Git, build or start a game. The earlier Python attempts below
+remain historical failures, not executed Python scans.
+
+Done:
+
+- Added [publish_public_tree.ps1](tools/publish_public_tree.ps1), with separate
+  patch-header and content-scan helpers. Fresh staging omits image files,
+  removes patch author mailboxes, mail transport metadata and coauthor trailers,
+  and compares every byte from the first `diff --git` line through EOF before
+  and after writing. Display-name attribution and diff notices remain.
+- Scans refuse images, disguised image/binary signatures, private mail metadata,
+  secrets, machine paths, nonpublic network addresses and unreviewed URLs.
+  Export preflights all selected bytes, then scans the written tree again.
+  Scan-only checks every staged file without applying export exclusions.
+- Ran the real entry with `-Include @('LICENSE','patches')` into a fresh folder
+  under `logs/public-publish-tests`: exit 0, 80 files, all 79 patches checked,
+  zero image files, postwrite scan passed. There are 78 top-level patches and
+  one debug patch; 46 source preambles contain mailboxes/coauthor trailers.
+  Source patches were not rewritten or renumbered.
+- Ran a broader real selection (runtime, config, launcher, tools, README and
+  selected docs): exit 1 before staging. Findings remain in README, launcher
+  core and several tools. These need owner scope/content review; no broad
+  source-tree pass is claimed. No images exist in this clean input copy;
+  omission/refusal is tested with harmless text filenames and in-memory bytes.
+- Added entry-point tests and [check_public_publish.ps1](tools/check_public_publish.ps1).
+  Tests caught a real PowerShell default-argument failure, which was fixed and
+  rerun. Header tests passed 63 checks, including three actual exports and six
+  actual scans; safety tests passed 32 assertions through actual subprocesses
+  and in-memory signature checks. Both existing 23-tool catalogs have present,
+  unique entries. Catalog inspection does not execute the Python packagers.
+- Final independent review found a compressed-IPv6 scan bypass. The scanner
+  was fixed; real scan regressions now refuse it without echoing the address.
+  Root and reviewer ran the finished `check_public_publish.ps1`: exit 0,
+  63 patch checks, 32 safety assertions, six syntax parses, both catalogs and
+  unchanged names/SHA-256 hashes for all 79 source patches. The reviewer also
+  independently exported and compared all 79 diff byte ranges. No remaining
+  blocking issue was found in these tool changes; full publication stays NO-GO.
+- Documented the workflow in [PUBLIC_SOURCE_EXPORT.md](docs/PUBLIC_SOURCE_EXPORT.md)
+  and the remaining permission/notice questions in
+  [THIRD_PARTY.md](docs/THIRD_PARTY.md). Document/link checks passed for these
+  pages and RELEASING. The older whole-tree filename checker now refuses the
+  intentional text-only `.png` test fixtures retained under logs; this is not
+  a clean whole-tree checker pass. Nothing was deleted to make it green.
+  Final real checker run covered all four changed documents and 27 local links,
+  with 49 PowerShell syntax parses; exit 1 solely on those 18 retained fixture
+  filenames. The old filename checker was not weakened.
+
+Open / owner-only:
+
+- Review the exact complete public source and player outputs. The successful
+  LICENSE/patch export is a test subset, not complete corresponding source.
+  Old Python publishers/packagers do not call the new PowerShell sanitizer;
+  their outputs must separately pass the new scan and their existing checks.
+  Python suites, payload/zip scans and full player output remain unrun here.
+- Resolve the VU1 generator grant, PS2SDK reverb/FXAA and imported-code notice
+  chains, SCE/game-derived map publication scope, quoted pricing material,
+  exact FFmpeg LGPL/source obligations, dependency notices and Microsoft terms.
+  Header cleanup proves no rights and cannot replace author-notice review.
+- Build and run the exact reviewed candidate in the authorized real checkout,
+  validate the actual launcher and portable path, and test two physical PCs.
+  No build, launcher GUI or game was run in this copy. No network service,
+  Git write, history rewrite or release was performed.
+
+The owner's latest supplied verification identifies draft `21d1fbb4b6`, merge
+base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean merge;
+174-second build `943fc4631acf2c13`. Selftest: 232 successful restores,
+514 compared resim frames and zero mismatches. Same-PC 6000-frame pair with
+switches off: 199 hash comparisons per side, zero mismatches and zero NETDESYNC
+lines; run-average 49.8 fps on both sides, join 122 stalls / 3169 ms. Finished
+2026-11-02T01:05:32. This supersedes the older supplied measurement below.
+It was not reproduced here and does not prove the edited tree, launcher profile
+or two-PC internet play. No personal worktree paths are copied into this record.
+
+Agents this session: `patch_headers`, `public_scanner`, `publish_entry`,
+`patch_entry_tests`, `publish_safety_tests`, `tests_catalogs`,
+`licence_questions`, `publish_docs`; separate `final_diff_review` reviewed the
+finished files and independently ran the checker. Root owns this record and
+integration checks. Each agent read AGENTS.md; file ownership was exclusive.
+
+## Earlier beta audit record
+
 Decision: **NO-GO**. The Sunday target was 2026-11-01. Missing acceptance
 evidence moves the release date. No build or game was started in this copy.
 This file was absent when this session began; there was no earlier progress

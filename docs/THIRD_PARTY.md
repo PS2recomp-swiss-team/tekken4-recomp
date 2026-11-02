@@ -132,6 +132,24 @@ FFmpeg subcomponents, Microsoft selections or all upstream transitive notices.
   tests. No `lobby/` tree is present; their claimed historical results do not
   inventory or license a future public lobby bundle.
 
+## Public-tree privacy gate
+
+The public-tree staging tool removes private mail addresses and Co-Authored-By
+trailers from patch preambles, while retaining the diff bytes exactly. It omits
+image files and scans the staged tree. These are privacy and content checks,
+not permission to publish. Original patches remain in this working copy.
+Retain author names, copyright notices, licence texts and provenance credits;
+mail-header cleanup must not erase notices carried by the diff. Review any
+attribution that existed only in a removed trailer before publication.
+
+A clean scan does not settle the VU1 generator grant, PS2SDK reverb-table and
+FXAA provenance, exact inherited PAL/GoW/LightVelox/Blackline notices, rights
+in SCE/game-derived maps or the extracted pricing table. It also does not
+settle the chosen FFmpeg LGPL build/source obligations, exact dependency
+notices or Microsoft's terms. Those questions remain open on the local
+evidence above. GPL-3.0 covers the port's declared source licence; it grants
+no rights to game screenshots, assets or original game code.
+
 ## Owner follow-up before publication
 
 1. Obtain the exact VU1 generator licence resolution from Waffle565/its rights
