@@ -1,5 +1,82 @@
 # T4 beta progress, 2026-11-02
 
+## Current: send-time lead experiment after ordered-lead comparison
+
+Latest owner-supplied verify: draft d17f6d8031, build e50c0af46744c322,
+finished 2026-11-02T16:23:01. The printed build changed; the old unchanged-ID
+concern is superseded. Ordered-lead OFF/ON rollbacks were host 223/212,
+join 965/973; resim frames host 468/461, join 4110/4054. Join still had
+126/132 stalls and 93/95 time-sync corrections, versus host 0 stalls and
+2/0 corrections. Both arms reported zero hash mismatches and NETDESYNC lines.
+This weakens the ordering hypothesis. Full activation/rejection diagnostics
+were not supplied, so whether that branch changed feedback is still unknown.
+
+Done: 24 independent read-only area agents checked runtime, transport,
+evidence and tests/catalogs. The eight .log files in this tree are ZIP scanner
+outputs, not paired runtime logs. Exact input first-arrival times, sustained
+advantage and actual wait ordering cannot be reconstructed from summaries.
+The imbalance is real work: all four depth histograms reproduce the reported
+rollback and resim totals. Predicted-input counts include resimulation;
+early rollback figures are subtotals. No root cause is proved.
+
+New single hypothesis: a slow sender keeps advertising an inflated old lead
+while remote inputs arrive during resimulation or waits. Its ahead peer then
+underestimates its advantage and yields too little, predicting deeper. Both
+boundary sends precede npTimeSync/setLead. The resend thread keeps that stored
+value until the next live estimate; ORDERED_LEAD cannot fix stale content in
+newer envelopes. Root added default-off TEKKEN4_NET_LIVE_LEAD in
+runtime/tekken4_net.cpp: sample signed localMax - remoteContig under the
+transport mutex for each outgoing INPUT, with the existing +/-100 clamp.
+At steady live boundaries this equals the current mine formula. Keep zero
+startup feedback until the first setLead. Lockstep prefill briefly adds
+lockDelay-delay; existing tsFrom excludes that transition from sampling.
+No input, wire layout, controller gain or wait policy was changed.
+
+Both arms now log a separate bounded-size NETDIAG line: lead_live,
+lead_send_cached, lead_send_fresh, lead_send_diff, lead_send_changed and
+lead_send_delta_max. The values are from the last attempted INPUT send;
+counters are cumulative after coalescing, before simulated loss/delivery.
+A changed send does not prove that packet was delivered or affected a wait.
+
+VERIFY_ENV.txt contains exactly one line:
+TEKKEN4_NET_LIVE_LEAD=1;TEKKEN4_NET_DIAG=1
+
+Open / owner-only: stage this working-tree runtime, build once and regenerate
+identity, then run the real selftest and same-build OFF/ON pair. The actual
+live entry is tools/net_pair.ps1. Selftest and catalog checks do not enter
+npBoundary/npTimeSync. Pass the file line through common -Env. Keep DIAG=1
+(or TimingDiag) in BOTH arms; only LIVE_LEAD differs. Keep ORDERED_LEAD,
+REBASE_CATCHUP and every other experiment equal and off. Peer overrides must
+not replace the common experiment. Retain complete paired runtime/transport
+logs, stdout/stderr and effective params. Require both ON peers' literal
+TEKKEN4_NET_LIVE_LEAD=1 activation, lead_live=1 and increasing lead_send_changed
+after lockstep/tsFrom warmup, with nonzero delta. OFF lead_send_changed must stay zero;
+lead_send_diff measures the stale-feedback opportunity in either arm.
+Compare cached/fresh direction, input/progress/local gaps, estimated advantage,
+NETTS corrections, actual waits, absolute rollback/resim work and displayed
+pacing. More corrective yielding can be expected; fewer corrections or a
+smaller rollback ratio alone is no win. Similar poor behavior with altered
+feedback weakens this hypothesis. Repeat same-PC runs, then two physical PCs.
+
+Compilation, selftest and real pair validation of this change remain UNRUN here:
+AGENTS.md forbids builds, game and tools/net_* execution in this copy. This
+is an unvalidated default-off candidate, not a demonstrated fix. No model,
+source checker or catalog pass is counted as runtime evidence. Original bytes
+for this continuation are in logs/runtime-live-lead/originals. Root alone
+edits runtime, VERIFY_ENV and this progress record. Separate final diff review
+found no blocking source issue in signed math, locking, startup, OFF feedback,
+wire layout, counters, diagnostic bounds, exact environment line or preserved
+progress history. It cannot replace compilation or real-entry validation.
+
+Area agents: pair_evidence, timesync_sign, lead_estimator, peer_feedback,
+input_arrivals, wait_order, vblank_pacing, polling_delivery, prediction_budget,
+startup_roles, resim_cost, resend_order, switch_route, tests_catalogs,
+build_identity, clock_domains, simulation_bias, input_sampling, telemetry,
+state_ring, mismatch_detection, coalescing, diag_contention, frontier_refresh.
+Separate reviewer: final_diff_review_live_lead. No Git command, outside-tree
+read, deletion, patch edit, build, game, forbidden helper, server, push or
+release ran this continuation.
+
 ## Current: ordered peer-lead experiment after the real catchup comparison
 
 Latest owner-supplied verify: draft 657b040128, build a597efc21b859a12,

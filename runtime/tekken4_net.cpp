@@ -223,6 +223,11 @@ namespace t4net
             Ring local, remote;
             uint32_t localMax = 0, remoteContig = 0, peerAck = 0;
             int8_t localLead = 0, peerLeadV = 0;
+            // TEKKEN4_NET_LIVE_LEAD=1: sample pacing feedback with the outgoing input frontiers.
+            bool liveLead = false, leadReady = false;
+            int8_t leadSendCached = 0, leadSendFresh = 0;
+            uint64_t leadSendDiff = 0, leadSendChanged = 0;
+            int leadSendDeltaMax = 0;
             // TEKKEN4_NET_ORDERED_LEAD=1: ignore regressing pacing metadata, not inputs.
             bool orderedLead = false;
             uint32_t peerLeadAck = 0, peerLeadEnd = 0;
@@ -435,7 +440,13 @@ namespace t4net
             ih->ack = s.remoteContig;
             ih->first = first;
             ih->count = static_cast<uint8_t>(count);
-            ih->lead = s.localLead;
+            // setLead runs once per live frame, after its first sends. Resends during rollback or waits
+            // can otherwise keep advertising that old value while received input advances.
+            const int64_t gap = static_cast<int64_t>(s.localMax) - static_cast<int64_t>(s.remoteContig);
+            const int8_t freshLead = s.leadReady
+                                         ? static_cast<int8_t>(std::max<int64_t>(-100, std::min<int64_t>(100, gap)))
+                                         : s.localLead; // keep startup metadata until the first live estimate
+            ih->lead = s.liveLead ? freshLead : s.localLead;
             ih->delay = delayWire();
             WireIn *wi = reinterpret_cast<WireIn *>(ih + 1);
             for (uint32_t i = 0; i < count; i++)
@@ -462,6 +473,19 @@ namespace t4net
             {
                 ++s.st.coalesced;
                 return; // keep the resend deadline: a skipped call is not a send attempt
+            }
+            if (s.diag)
+            {
+                s.leadSendCached = s.localLead;
+                s.leadSendFresh = freshLead;
+                const int delta = std::abs(static_cast<int>(freshLead) - static_cast<int>(s.localLead));
+                if (delta)
+                {
+                    ++s.leadSendDiff;
+                    if (s.liveLead)
+                        ++s.leadSendChanged;
+                    s.leadSendDeltaMax = std::max(s.leadSendDeltaMax, delta);
+                }
             }
             sendTo(buf, static_cast<int>(bytes));
             s.lastSendMs = nowMs();
@@ -967,6 +991,10 @@ namespace t4net
                              s.orderedLead, s.peerLeadAck, s.peerLeadEnd,
                              static_cast<unsigned long long>(s.leadStale), static_cast<unsigned long long>(s.leadStaleDiff),
                              static_cast<unsigned long long>(s.leadRejected));
+                        note("NETDIAG lead_live=%d lead_send_cached=%d lead_send_fresh=%d lead_send_diff=%llu lead_send_changed=%llu lead_send_delta_max=%d",
+                             s.liveLead, s.leadSendCached, s.leadSendFresh,
+                             static_cast<unsigned long long>(s.leadSendDiff), static_cast<unsigned long long>(s.leadSendChanged),
+                             s.leadSendDeltaMax);
                         s.diagTickGapUs = s.diagRxWaitUs = s.diagLocalGapUs = s.diagInputGapUs = 0;
                         s.diagLeadBack = 0;
                     }
@@ -1072,6 +1100,8 @@ namespace t4net
         s.simSafeWait = simSafeWait && std::strcmp(simSafeWait, "1") == 0;
         const char *orderedLead = std::getenv("TEKKEN4_NET_ORDERED_LEAD");
         s.orderedLead = orderedLead && std::strcmp(orderedLead, "1") == 0;
+        const char *liveLead = std::getenv("TEKKEN4_NET_LIVE_LEAD");
+        s.liveLead = liveLead && std::strcmp(liveLead, "1") == 0;
         s.lastInputBytes = 0;
         s.startMs = nowMs();
         s.log = std::fopen(config.logPath.c_str(), "w");
@@ -1201,6 +1231,8 @@ namespace t4net
             note("TEKKEN4_NET_SIM_SAFE_WAIT=1: simulator wait uses a copied deadline while its queue is unlocked");
         if (s.orderedLead)
             note("TEKKEN4_NET_ORDERED_LEAD=1: ignore peer lead when INPUT ack or end regresses; inputs and hashes unchanged");
+        if (s.liveLead)
+            note("TEKKEN4_NET_LIVE_LEAD=1: INPUT lead uses current signed localMax - remoteContig, clamped to +/-100");
         std::thread(rxThread).detach();
         std::thread(tickThread).detach();
         if (s.sim)
@@ -1475,6 +1507,7 @@ namespace t4net
         State &s = S();
         std::lock_guard<std::mutex> lk(s.mu);
         s.localLead = static_cast<int8_t>(std::max(-100, std::min(100, lead)));
+        s.leadReady = true;
     }
 
     int peerLead()
