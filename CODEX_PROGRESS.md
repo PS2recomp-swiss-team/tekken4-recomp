@@ -1,5 +1,40 @@
 # T4 beta progress, 2026-11-02
 
+## Repeat refusal: runtime proof is still the next open item
+
+Done this pass: 24 read-only area agents checked the pending experiment and
+its evidence route. The in-tree latest-verify/runtime/release-b13 folders have
+no raw paired timing logs. The supplied existing-name refusal stopped before
+launch. Input arrivals, sustained advantage and actual wait ordering remain
+unknown. No new runtime change, build or test pass is claimed. Runtime and
+VERIFY_ENV.txt are unchanged. The separate tests/catalog agent confirmed that
+selftest and catalog checks do not enter the live pacing guard.
+
+Open / owner-only: preserve the existing output and use a fresh unused verify
+name. Stage the pending runtime, build once, then run that same new build OFF
+and ON with equal TimingDiag, scripts, simulation and all other switches.
+Require a build ID different from 943fc4631acf2c13, both ON peers' literal
+activation and nonzero NETREBASE_CATCHUP rebases. VERIFY_ENV.txt stays exactly:
+TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
+Pass it through common -Env; peer overrides must not replace it. Retain full
+paired logs and params. The outer verify wrapper is absent here. Compare
+sustained lead, sender gaps, actual waits and absolute rollback/resim work;
+lower rebase counters or a smaller rollback ratio alone prove no improvement.
+Compilation, selftest and real OFF/ON pair remain UNRUN under AGENTS.md.
+The existing catchup hypothesis remains unproved; another source audit cannot
+replace the first real run of this experiment.
+
+Area agents: paired_log_evidence, catchup_guard_math, timesync_wait_order,
+advantage_estimation, arrival_frontier, vblank_schedule, transport_polling,
+prediction_waits, role_startup, resimulation_deadlines, resend_ordering,
+switch_env_route, tests_catalog_coverage, build_identity_staging, clock_domains,
+network_simulation, local_input_sampling, catchup_diagnostics, state_ring_limits,
+prediction_mismatch, send_coalescing, diagnostic_lock_cost, frontier_refresh,
+experiment_falsification. Root alone edits this record. Separate final reviewer:
+final_diff_review_repeat. All agents follow AGENTS.md. No Git command,
+outside-tree read, deletion, patch edit, build, game, forbidden helper, server,
+push or release ran this pass.
+
 ## Continuation: pending runtime experiment needs its first real run
 
 Done: 24 independent area agents read AGENTS.md and checked the runtime,
