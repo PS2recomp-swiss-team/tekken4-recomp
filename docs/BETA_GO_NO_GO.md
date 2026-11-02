@@ -9,23 +9,23 @@ player's own Tekken 4 USA v1.00 ISO (SLUS-20328). No lobby, ranked mode or
 matchmaking. Release as a beta pre-release. No build or game was run in this
 source-only copy, and no two-PC pass was supplied.
 
-Latest supplied owner verification finished `2026-11-02T10:31:53`: draft
-`ab64c85901`, merge base `8b15202341` (branch base `7992837fc3`), onto
-`us-slus20328` at `c17fd979ca`; clean merge, build OK in 187 seconds,
+Latest supplied owner verification finished `2026-11-02T10:54:33`: draft
+`ca749414b0`, merge base `8b15202341` (branch base `7992837fc3`), onto
+`us-slus20328` at `c17fd979ca`; clean merge, build OK in 184 seconds,
 build ID `943fc4631acf2c13`, experimental switches OFF. The self-test reported
 6000 wall / 5106 logical frames, 202 good restores, zero bad restores and
 zero mismatches in 447 resim frame comparisons; all 101 wrong-input checks
 diverged. The simulated 150 ms RTT, 5 ms jitter, 3% loss pair on one PC
 reached live/logical 6000 on both peers, with 199 hash comparisons and zero
 mismatches each, and no NETDESYNC lines. Run-average FPS was 47.9/47.9
-(host/join); displayed-frame p99 was 166.4/118.4 ms. Host/join stalls were
-0/128 (0/5136 ms), and restore-and-resim maximum was 98.85/70.98 ms.
+(host/join); displayed-frame p99 was 153.0/120.9 ms. Host/join stalls were
+0/125 (0/4838 ms), and restore-and-resim maximum was 92.66/70.43 ms.
 See [switch evidence](ONLINE_SWITCH_EVIDENCE.md) for the detailed supplied
 summary. These results support the covered state checks; they do not
 establish playable internet Versus, a 15-minute two-PC pass, actual App
 startup, or acceptance of this working tree. This verification was not
-reproduced here. Both run-average FPS values rose from the preceding supplied
-report; both displayed-frame p99 values rose. The summaries do not
+reproduced here. Both run-average FPS values were unchanged from the preceding
+supplied report; host displayed-frame p99 fell and join p99 rose. The summaries do not
 establish why or prove usable pacing.
 
 The launcher profile differs from that OFF run: `launcher/t4core.py` clears
@@ -39,7 +39,7 @@ evidence for the exact launcher profile before approving it for release.
 
 - Exact candidate version, reviewed source revision, build IDs on both PCs,
   input locks, zip SHA-256 and matching source export. Rebuild changed source;
-  the supplied `ab64c85901` results do not validate this working tree.
+  the supplied `ca749414b0` results do not validate this working tree.
 - Resolved VU1 generator provenance/licence and dependency notices/source
   offers; reviewed Microsoft terms and pinned payload lock. No Microsoft
   sysroot in the zip. See [RELEASE_PATH_B.md](RELEASE_PATH_B.md).
