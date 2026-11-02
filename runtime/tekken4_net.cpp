@@ -243,6 +243,12 @@ namespace t4net
             uint32_t strangers = 0;
             // TEKKEN4_NET_DIAG=1: wall-clock transport diagnostics, no wire/simulation changes.
             bool diag = false, simSafeWait = false;
+            // Only the simulator worker's relative thread priority changes; packet scheduling stays the same.
+            bool simNormalPriority = false;
+            std::atomic<bool> simPriorityReady{false}, simPriorityOk{false};
+            std::atomic<int> simThreadPriority{0};
+            std::atomic<uint64_t> simSpinCalls{0}, simSpinUs{0}, simSpinMaxUs{0}, simSendCalls{0},
+                                  simLateMaxUs{0}, simLateOver2ms{0};
             uint64_t diagLastUs = 0, diagTickUs = 0, diagTickGapUs = 0, diagRxWaitUs = 0;
             uint64_t diagInputUs = 0, diagInputGapUs = 0, diagProgressUs = 0;
             uint64_t diagLocalUs = 0, diagLocalGapUs = 0;
@@ -907,9 +913,16 @@ namespace t4net
         void simThread()
         {
             State &s = S();
-            const BOOL priorityOk = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+            const int requested = s.simNormalPriority ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_HIGHEST;
+            const BOOL priorityOk = SetThreadPriority(GetCurrentThread(), requested);
+            const int reported = GetThreadPriority(GetCurrentThread());
+            s.simPriorityOk.store(priorityOk != FALSE, std::memory_order_relaxed);
+            s.simThreadPriority.store(reported, std::memory_order_relaxed);
+            s.simPriorityReady.store(true, std::memory_order_release);
+            note("NETSIMPRIO_START normal_priority=%d requested_priority=%d thread_priority=%d set_ok=%d",
+                 s.simNormalPriority, requested, reported, priorityOk);
             if (s.diag)
-                note("NETDIAG thread=sim priority=%d set_ok=%d", GetThreadPriority(GetCurrentThread()), priorityOk);
+                note("NETDIAG thread=sim priority=%d set_ok=%d", reported, priorityOk);
             std::unique_lock<std::mutex> lk(s.simMu);
             for (;;)
             {
@@ -931,8 +944,14 @@ namespace t4net
                         // holds only a value while unlocked, then rechecks the queue under simMu.
                         const uint64_t dueUs = front.dueUs;
                         lk.unlock();
+                        const uint64_t spinStart = qpcUs();
                         while (qpcUs() < (s.simSafeWait ? dueUs : front.dueUs))
                             std::this_thread::yield();
+                        const uint64_t spinUs = qpcUs() - spinStart;
+                        s.simSpinCalls.fetch_add(1, std::memory_order_relaxed);
+                        s.simSpinUs.fetch_add(spinUs, std::memory_order_relaxed);
+                        if (spinUs > s.simSpinMaxUs.load(std::memory_order_relaxed))
+                            s.simSpinMaxUs.store(spinUs, std::memory_order_relaxed);
                         lk.lock();
                     }
                     continue;
@@ -940,14 +959,19 @@ namespace t4net
                 SimPacket packet = std::move(front);
                 s.simQueue.pop_front();
                 lk.unlock();
+                const uint64_t late = qpcUs() - packet.dueUs;
+                if (late > s.simLateMaxUs.load(std::memory_order_relaxed))
+                    s.simLateMaxUs.store(late, std::memory_order_relaxed);
+                if (late >= 2000)
+                    s.simLateOver2ms.fetch_add(1, std::memory_order_relaxed);
                 if (s.diag)
                 {
-                    const uint64_t late = qpcUs() - packet.dueUs;
                     if (late > s.diagSimLateUs.load(std::memory_order_relaxed))
                         s.diagSimLateUs.store(late, std::memory_order_relaxed);
                     if (late >= 2000)
                         s.diagSimLateCount.fetch_add(1, std::memory_order_relaxed);
                 }
+                s.simSendCalls.fetch_add(1, std::memory_order_relaxed);
                 sendWire(packet.bytes.data(), static_cast<int>(packet.bytes.size()), packet.to);
                 lk.lock();
             }
@@ -1098,6 +1122,8 @@ namespace t4net
         s.diag = diag && std::strcmp(diag, "1") == 0;
         const char *simSafeWait = std::getenv("TEKKEN4_NET_SIM_SAFE_WAIT");
         s.simSafeWait = simSafeWait && std::strcmp(simSafeWait, "1") == 0;
+        const char *simNormalPriority = std::getenv("TEKKEN4_NET_SIM_NORMAL_PRIORITY");
+        s.simNormalPriority = simNormalPriority && std::strcmp(simNormalPriority, "1") == 0;
         const char *orderedLead = std::getenv("TEKKEN4_NET_ORDERED_LEAD");
         s.orderedLead = orderedLead && std::strcmp(orderedLead, "1") == 0;
         const char *liveLead = std::getenv("TEKKEN4_NET_LIVE_LEAD");
@@ -1229,6 +1255,8 @@ namespace t4net
                  config.simSeed, config.role == Role::Host ? 1 : 2, s.simSafeWait);
         if (s.simSafeWait)
             note("TEKKEN4_NET_SIM_SAFE_WAIT=1: simulator wait uses a copied deadline while its queue is unlocked");
+        if (s.simNormalPriority)
+            note("TEKKEN4_NET_SIM_NORMAL_PRIORITY=1: only the simulator worker uses NORMAL instead of HIGHEST thread priority; sim_active=%d", s.sim);
         if (s.orderedLead)
             note("TEKKEN4_NET_ORDERED_LEAD=1: ignore peer lead when INPUT ack or end regresses; inputs and hashes unchanged");
         if (s.liveLead)
@@ -1581,7 +1609,19 @@ namespace t4net
     {
         State &s = S();
         std::lock_guard<std::mutex> lk(s.mu);
-        return s.st;
+        Stats out = s.st;
+        out.simActive = s.sim;
+        out.simNormalPriority = s.simNormalPriority;
+        out.simPriorityReady = s.simPriorityReady.load(std::memory_order_acquire);
+        out.simPriorityOk = s.simPriorityOk.load(std::memory_order_relaxed);
+        out.simThreadPriority = s.simThreadPriority.load(std::memory_order_relaxed);
+        out.simSpinCalls = s.simSpinCalls.load(std::memory_order_relaxed);
+        out.simSpinUs = s.simSpinUs.load(std::memory_order_relaxed);
+        out.simSpinMaxUs = s.simSpinMaxUs.load(std::memory_order_relaxed);
+        out.simSendCalls = s.simSendCalls.load(std::memory_order_relaxed);
+        out.simLateMaxUs = s.simLateMaxUs.load(std::memory_order_relaxed);
+        out.simLateOver2ms = s.simLateOver2ms.load(std::memory_order_relaxed);
+        return out;
     }
 
     void bye()

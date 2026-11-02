@@ -1,5 +1,123 @@
 # T4 beta progress, 2026-11-03
 
+## Current: test simulator sender priority on the same-PC pair
+
+Latest supplied real verify finished 2026-11-03T00:41:21. The previous
+REPLAY_BEFORE_SYNC switch was recognized but its changed ordering NEVER ran:
+both peers report mismatch=deferred=applied=0 across 96 eligible corrections.
+It does not explain this run. Keep it default-off and do not repeat it here.
+The complete ON pair is host/join 321/922 rollbacks (2.87x), 638/3636 replay
+frames (5.70x), mean depths 1.99/3.94. Join excess stall+sync is 7110 ms;
+host excess rebase is 7087 ms. This supports coupled pacing, not the order
+of causation. More join corrections means the controller estimated it AHEAD.
+OFF host is truncated and delay changed 2 -> 3, so no aggregate OFF/ON benefit
+can be attributed. Latest output has no executable hash or build ID; earlier
+history already records IDs newer than 943fc4631acf2c13. Exact bytes remain
+unproved by the supplied summary.
+
+Done: 24 separate read-only area agents read AGENTS.md/current progress.
+Safe inventory found eight .log files, all scanner/ZIP output, and no paired
+runtime, rb_frames, transport or arrival chronology. No reparse point was
+traversed. Input first arrivals, advantage sequence and first-wait order are
+UNKNOWN. No fixed host/join sign, input commit, ACK or scheduler-restore defect
+was established. Do not reconstruct that missing chronology from summaries.
+
+One new hypothesis: each outgoing network simulator worker runs at Windows
+THREAD_PRIORITY_HIGHEST and yield-spins during the final <=1.5 ms to a packet
+deadline. Two such workers on one PC can compete with game input producers,
+amplifying unequal producer/replay gaps. This is a source-supported scheduling
+opportunity, NOT a proved initiating cause or a two-PC Internet defect.
+
+Root changed runtime/tekken4_net.cpp behind literal, default-off
+TEKKEN4_NET_SIM_NORMAL_PRIORITY=1. ONLY the simulator worker's requested
+relative priority changes from HIGHEST to NORMAL. Its wait/spin condition,
+queue behavior, due times, loss/jitter RNG, wire layout and game pacing policy
+are retained. Existing SIM_SAFE_WAIT remains a separate equal/off setting;
+its retained unlocked deque-reference hazard is not fixed by this experiment.
+No simulator means no changed scheduling behavior. Failed priority calls do
+not fall back to a different policy and must be reported as unexercised.
+
+Both arms collect host-only atomic observations: thread-started, priority
+call success, reported relative priority, spin calls/wall duration/max,
+sendWire attempts, packet lateness max and count >=2 ms. No log in spin loop.
+NETSIMPRIO_START in transport log records requested/reported priority and
+success. runtime/tekken4_net.h exposes observations through Stats;
+runtime/tekken4_rollback_overrides.cpp appends NETSIMPRIO to the retained
+NETSUMMARY line. Spin time is WALL time including preemption, not CPU time;
+do not add it to waits. Send calls are attempts, not successful sends.
+Lateness is measured before sendWire, not socket arrival. Atomic snapshots
+are observations of a running worker, not a transactional accounting record.
+OFF includes shared measurement/logging overhead; zero overhead is not claimed.
+
+VERIFY_ENV.txt is one ASCII line plus LF, no BOM:
+TEKKEN4_NET_SIM_NORMAL_PRIORITY=1
+
+Open / owner-only REAL-ENTRY TEST: stage/build these exact reviewed THREE
+runtime files and run actual paired Mode::Net games OFF/ON using the external
+verify wrapper. It must forward VERIFY_ENV.txt via -Env; net_pair does not
+read it. Put these common settings in BOTH arms, outside the ON-only file:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+Use RBSTART=600, TIMESYNC=1, normal 20-sample filter, RB_MODE unset/net,
+RTT150/jitter5/loss3, 6000 frames, matching workload and foreground conditions.
+Keep every other experiment equal/off, especially REPLAY_BEFORE_SYNC,
+REPLAY_BATCH, ATOMIC_INPUT, FULL_SYNC, SUBFRAME_SYNC, FAST_SYNC, LIVE_LEAD,
+ORDERED_LEAD, REBASE_CATCHUP, EARLY_DEADLINE, PRED_HEADROOM and SIM_SAFE_WAIT.
+Retain full paired rb_frames/transport logs, effective parameters and stderr.
+Compare reviewed/staged SHA-256 of all three modules, refresh identity, clear
+explicit BUILD overrides and retain each launched executable SHA-256. Identity
+hashes staged sources, not executable bytes. Equal RNG seeds do not guarantee
+identical frame-level delivery. No build or identity refresh happened here.
+
+Require BOTH arms sim_active=started=set_ok=1, nonzero spin_calls/send_calls.
+Require OFF normal_priority=0/thread_priority=2 (HIGHEST); ON literal banner
+and normal_priority=1/thread_priority=0 (NORMAL), plus matching START records.
+GetThreadPriority reports a relative setting, not instantaneous CPU priority;
+retain process_class from NETDIAG. No active worker or failed set means UNRUN.
+Compare cumulative late_max_ms/late_ge2ms and interval sim_late_ms/sim_late_n,
+producer local_gap_ms, receiver rx_lock_ms and tick_gap_ms. Read paired steady
+wait/sync events to find first recorded wait and prior publication/frontier
+gaps; existing diagnostics still do not log each unique input's first arrival.
+Require lower absolute aggregate replay/depth/burden and acceptable frame
+tails/FPS, not just a ratio improved by worsening the other peer or changing
+the effective network. If lowering priority worsens packet lateness, report
+that tradeoff; do not call it equivalent-network proof. If priority really
+changes but gaps and rollback burden persist, weaken this hypothesis. Require
+zero hash mismatches/NETDESYNC, repeat same roles, swap roles, then test two
+physical PCs. Default stays OFF; release acceptance remains OPEN.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+This is inventory only. No test entry runs actual paired npBoundary;
+SELFTEST dispatches to a different boundary. Root checked retained originals,
+source bytes and environment encoding. These are SOURCE CHECKS, not runtime
+proof. Compilation, switch propagation/activation, priority result, safety,
+timing and performance are UNRUN: AGENTS.md forbids builds, games and
+tools/net_* here. No changed runtime entry ran. This change has NOT met the
+real-entry-test requirement; only the owner's actual paired verify can close
+it. No substitute/mock test is represented as evidence that it ran.
+
+Original bytes of the five changed files are retained under
+logs/runtime-sim-normal-priority/originals. Root alone edits runtime/progress/
+env files. No Git command, outside-tree access, deletion, patch edit, build,
+game, forbidden helper, server, push or release was performed.
+
+Area agents used: pair_logs, verify_metrics, advantage_sign, sync_filter,
+prediction_cap, vblank_deadline, input_sampling, publication_guard,
+transport_send, transport_receive, resend_coalesce, arrival_observability,
+simulated_network, early_replay, replay_scheduler, snapshot_state, hash_locks,
+startup_roles, switch_history, build_identity, tests_catalogs, experiment_design,
+runtime_entry_route, fresh_feedback. Separate final_diff_review_sim_priority
+reviewed the final five-file diff with no blocking source issue. It checked
+OFF/ON scope, atomics/ready publication, format arguments, retained unsafe
+reference, exact env bytes and byte-identical progress history. Review is
+SOURCE ONLY; no compile, activation, runtime safety or benefit is proved.
+Reviewed runtime SHA-256:
+tekken4_net.cpp dd612b5f9cc1c42c55c6bcc71ce60ebc3acae884c3a4a90b9f26f19f4a98b117
+tekken4_net.h d266a422f3cb66e3b0af583e6c2d887ee2324685deb14eb3f0f32c68298c23e4
+tekken4_rollback_overrides.cpp 9691013fa87716aad4088a00140493147fbcdbe72e6bb06b2e1e443db5952563
+
+# T4 beta progress, 2026-11-03
+
 ## Current: test replay before an already-selected time-sync correction
 
 Latest supplied real verify finished 2026-11-03T00:21:54. REPLAY_BATCH acted:

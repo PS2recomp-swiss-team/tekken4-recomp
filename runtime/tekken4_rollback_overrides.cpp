@@ -2113,11 +2113,18 @@ namespace tekken4_rollback
         std::fprintf(g_log, "; NETREPLAYSYNC replay_before_sync=%d time_sync=%d eligible=%" PRIu64
                             " mismatch=%" PRIu64 " deferred=%" PRIu64 " applied=%" PRIu64 " pending=%d"
                             " deferred_us=%" PRId64 " applied_us=%" PRId64
-                            " delay_ms=%.3f max_delay_ms=%.3f last_f=%" PRIu64 " last_from=%" PRIu64 "\n",
+                            " delay_ms=%.3f max_delay_ms=%.3f last_f=%" PRIu64 " last_from=%" PRIu64,
                      g_np.replayBeforeSync ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.replaySyncEligible,
                      g_np.replaySyncMismatch, g_np.replaySyncDeferred, g_np.replaySyncApplied,
                      g_np.pendingSync.active ? 1 : 0, g_np.replaySyncDeferredUs, g_np.replaySyncAppliedUs,
                      g_np.replaySyncDelayMs, g_np.replaySyncMaxDelayMs, g_np.replaySyncFrame, g_np.replaySyncFrom);
+        std::fprintf(g_log, "; NETSIMPRIO normal_priority=%d sim_active=%d started=%d set_ok=%d thread_priority=%d"
+                            " spin_calls=%" PRIu64 " spin_ms=%.3f spin_max_ms=%.3f send_calls=%" PRIu64
+                            " late_max_ms=%.3f late_ge2ms=%" PRIu64 "\n",
+                     st.simNormalPriority ? 1 : 0, st.simActive ? 1 : 0, st.simPriorityReady ? 1 : 0,
+                     st.simPriorityOk ? 1 : 0, st.simThreadPriority, st.simSpinCalls,
+                     st.simSpinUs / 1000.0, st.simSpinMaxUs / 1000.0, st.simSendCalls,
+                     st.simLateMaxUs / 1000.0, st.simLateOver2ms);
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
                          g_frame, g_np.catchupRebases, g_np.catchupDebtMs);

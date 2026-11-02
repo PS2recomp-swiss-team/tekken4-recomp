@@ -143,6 +143,11 @@ namespace t4net
         uint64_t bytesIn = 0;
         // TEKKEN4_NET_COALESCE=1: identical boundary INPUT calls not sent (not send attempts, not in packetsOut).
         uint64_t coalesced = 0;
+        // Simulator scheduling experiment, host-only. Spin time is wall time, not CPU time or another wait total.
+        bool simActive = false, simNormalPriority = false, simPriorityReady = false, simPriorityOk = false;
+        int simThreadPriority = 0; // Windows relative priority; meaningful only when simPriorityReady.
+        uint64_t simSpinCalls = 0, simSpinUs = 0, simSpinMaxUs = 0, simSendCalls = 0,
+                 simLateMaxUs = 0, simLateOver2ms = 0;
     };
     Stats stats();
 
