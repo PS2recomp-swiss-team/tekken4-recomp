@@ -58,6 +58,14 @@ these PowerShell checks as evidence that those paths clean patch headers or
 remove screenshots. Scan and review the exact final public trees again after
 any later copying or packaging.
 
+ZIP contents can also be checked without extraction using the separate
+[PowerShell ZIP scan](PUBLIC_ZIP_SCAN.md). It applies the conservative public
+source/privacy policy to member bytes, reports categories with numeric member
+indices and refuses binary payloads. It does not replace the Python player's
+manifest, pinned-input or dependency-lock checks. See the
+[retained archive audit](PUBLIC_ZIP_AUDIT.md) for the bytes and outcomes
+actually checked; a source ZIP scan cannot prove a complete player package.
+
 Privacy cleanup does not settle rights to imported code or game material.
 The open provenance and licence questions in [THIRD_PARTY.md](THIRD_PARTY.md)
 remain owner gates. Retain GPL-3 and third-party notices. Only the owner may

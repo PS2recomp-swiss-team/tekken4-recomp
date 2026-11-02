@@ -1,8 +1,25 @@
 # Status
 
-_Last updated: 2026-11-02 (package 5 source checks; online acceptance blocked)_
+_Last updated: 2026-11-02 (ZIP content scan follow-up; release remains NO-GO)_
 
 ## Resume here
+- **Current ZIP follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records
+  the real PowerShell [ZIP content entry](PUBLIC_ZIP_SCAN.md). Prior filename
+  checks and missing-Python attempts did not read payload contents. Both real
+  suites passed (60 and 171 assertions; 10 and 33 subprocesses). Independent
+  review reproduced two false passes, fixed and verified with the same ZIPs.
+  All three retained source archives were read and refused for 46 patch-mail
+  members each; hashes stayed unchanged. A sanitized LICENSE/79-patch subset
+  with portable member paths passed; it is not a complete source/player
+  candidate. See [PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md). Whole-tree source
+  checking remains red on retained image-name/unsafe/corrupt ZIP test fixtures.
+  Latest supplied verification is draft `477105a109`, clean 164-second build
+  `943fc4631acf2c13`, finished `2026-11-02T01:50:45`: switches OFF, same-PC
+  pair, 199 hashes per side, zero mismatches, run-average 52.3 FPS, host/join
+  stalls 0/78 (0/2862 ms). It proves neither this edited tree nor the GUI's
+  enabled profile or two-PC play. See
+  [ONLINE_SWITCH_EVIDENCE.md](ONLINE_SWITCH_EVIDENCE.md). No build, game or
+  network helper runs are permitted in this copy.
 - **Latest asymmetry evidence (2026-11-02, documentation only):** all 17 requested
   verify summaries were read. Latest `all4`, draft `ce8072b92f`, build
   `943fc4631acf2c13`, finished 01:39:52: switches OFF, rollbacks H/J 311/931,

@@ -1,5 +1,87 @@
 # T4 beta progress, 2026-11-02
 
+## ZIP content scan follow-up, current session
+
+Release remains **NO-GO**. The most useful open source-only item selected here
+is reading the retained ZIP contents through an actual scanner entry, rather
+than treating filename checks or a missing Python interpreter as a payload scan.
+No production launcher, runtime, switch or server behavior changed.
+
+Done:
+
+- Added [scan_public_zip.ps1](tools/scan_public_zip.ps1) and its bounded,
+  read-only ZIP helper. It refuses outside-tree paths, links, unsafe/colliding
+  member names, unsupported metadata, oversized inputs and read failures.
+  It never extracts or executes members. Findings print numeric positions and
+  categories, not member names or matched values. SHA-256 identifies the exact
+  locked archive snapshot checked. The existing source-content rules apply;
+  this cannot approve legitimate binary player payloads.
+- Real subprocess tests require clean text ZIPs to pass before checking
+  refusals. The first aggregate run caught a fixture-writer error and failed;
+  its owner fixed the fixture and reran it. Independent review reproduced two
+  real false passes with harmless text ZIPs: mismatched local-header names and
+  unindexed gaps. The helper now rejects inconsistent local/central headers
+  and gaps/overlaps. The reviewer reran the same unchanged reproductions:
+  clean still passes; both bypasses now refuse. No test was weakened.
+- Ran [check_public_zip.ps1](tools/check_public_zip.ps1): eight syntax parses,
+  actual catalogs (23 unique tools each, three root files), 60 positive-entry
+  assertions / 10 subprocesses, and 171 safety assertions / 33 subprocesses.
+  Root, the area agent and independent reviewer runs exited 0. All 79 patch
+  names and SHA-256 hashes stayed unchanged.
+- The actual command read all three retained source-test archives: 123, 124
+  and 124 files; each exited 1 after scanning contents. Each has 46 members
+  with email, patch-author mailbox and coauthor-mail categories (138 category
+  records per archive). Archive hashes stayed unchanged. See
+  [PUBLIC_ZIP_AUDIT.md](docs/PUBLIC_ZIP_AUDIT.md) for exact identities/results.
+- Exercised the existing public-source export on `LICENSE` and all 79 patches:
+  80 files, cleaned preambles, byte-identical diff parts, postwrite scan passed.
+  The Windows convenience ZIP writer then produced backslash paths and the
+  ZIP entry correctly refused them. A separate archive with explicit portable
+  paths passed: 80 files, 2,025,621 bytes, SHA-256
+  `fb80808520f464250cd13a548413f2d04771461251e8bdb03993599aae3d1f7d`.
+  Both experiments remain under logs; neither is a complete source/player
+  candidate. No retained input archive or source patch was rewritten.
+
+Open / owner-only:
+
+- The scan does not recompute CRCs, authenticate producers, inspect every
+  possible hidden compressed representation, validate player manifests/locks
+  or establish licences. Its restricted ordinary-ZIP support refuses ZIP64,
+  comments, extra fields and data descriptors. See
+  [PUBLIC_ZIP_SCAN.md](docs/PUBLIC_ZIP_SCAN.md) for scope and commands.
+- Whole-tree source checking remains red: in addition to the 18 older text-only
+  image-name fixtures, retained unsafe ZIP fixtures trigger name findings and
+  intentionally corrupt ZIPs stop the old archive-name reader. Document links
+  and PowerShell parses run before that stop: the final six-document check
+  resolved 51 local links and parsed 58 PowerShell files, then exited 1 on an
+  intentionally corrupt ZIP. Nothing was deleted or the old checker weakened
+  to manufacture a pass.
+- Review and prepare the exact complete public source/player outputs. Run the
+  Python suites and payload checks with a real interpreter, then prove the
+  actual launcher, exact build, game and two-PC routes in the authorized
+  checkout. GUI startup, Host/Join, results, private protocol and licensing
+  gates elsewhere in this record remain open. No Python, GUI, build, game or network helper
+  ran here; a source ZIP pass cannot close those gates.
+
+Eight area agents read AGENTS.md and have separate file ownership:
+`zip_reader`, `zip_entry`, `zip_entry_tests`, `zip_safety_tests`,
+`zip_catalogs_tests`, `zip_docs`, `archive_audit`, `verify_evidence`.
+Separate `final_diff_review` independently ran the aggregate checker, latest
+archive scan and before/after bypass reproductions, and reviews the finished
+diff against the saved original document bytes. Root owns this record and
+`docs/status.md`. All work stays in this tree; no Git command,
+build, game, network helper, server, push or release is authorized.
+
+Latest owner-supplied verification, not reproduced here: draft `477105a109`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 164-second build `943fc4631acf2c13`. Selftest: 232 successful restores,
+514 resim comparisons, zero mismatches, 116/116 deliberate wrong-input
+divergences. Same-PC 6000-frame pair, experiment switches OFF: 199 hashes per
+side, zero mismatches and NETDESYNC lines, run-average 52.3 FPS on both sides;
+host/join stalls 0/78 (0/2862 ms). Finished `2026-11-02T01:50:45`.
+This supersedes the supplied reports below. It does not prove this edited
+tree, the GUI's enabled COALESCE/DIAG profile or two physical PCs.
+
 ## Package 5 online follow-up, latest session
 
 Online acceptance remains **BLOCKED**. No production launcher, runtime, switch

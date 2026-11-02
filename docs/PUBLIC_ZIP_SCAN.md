@@ -1,0 +1,62 @@
+# Read-only public ZIP content scan
+
+Use [scan_public_zip.ps1](../tools/scan_public_zip.ps1) for a conservative
+source/privacy check of a ZIP already inside this working copy. It reads
+members in memory without extracting or running them. It does not write or
+repair the archive, start the launcher, build, start a game or publish.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/scan_public_zip.ps1 -Archive dist/sunday/tekken4-sunday-test-20261031-205628-895451.zip
+```
+
+Exit 0 means only that this limited scan passed. Exit 1 means findings or an
+invalid input. Findings use numeric member indices and categories, without
+printing member names or matched content. Keep the reported archive SHA-256
+with the result so it identifies the bytes checked. See
+[PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md) for actual retained-archive results.
+
+The entry refuses paths outside this tree and reparse points. Archive members
+must have safe, unique paths, including consistent directory spelling and no
+file/directory conflicts. Symlinks and other nonregular entries are refused.
+The fixed limits are 10,000 entries, 32 MiB per file, 128 MiB total uncompressed
+content and a 128 MiB archive. ZIP read errors and incomplete reads cause
+refusal. Nothing is extracted, including when a member path is unsafe.
+
+Only ordinary single-disk ZIPs are supported. ZIP64, comments, extra fields
+and data descriptors are refused. Local headers must match the central
+directory, and member regions must cover the bytes before that directory
+without gaps or overlaps. CRCs are not recomputed, and compressed-byte
+representations and producer identity are not authenticated. This is not
+proof that every possible hidden byte has been found. SHA-256 identifies
+the archive bytes read.
+
+Member paths must use `/`. Some Windows ZIP convenience methods write `\`
+instead; those archives are refused. Use a packager that writes portable
+member paths and scan its exact output without relaxing the path check.
+
+The existing [public source scanner](../tools/public_tree_scan.ps1) checks
+member bytes for images, game data or executable/archive signatures,
+credentials, private paths, network details and other reviewed categories.
+This is a conservative text-source policy: even a legitimate runtime or
+private Python binary is refused. It cannot approve a complete player ZIP.
+
+Run the real subprocess tests through their entry:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_public_zip.ps1
+```
+
+Tests retain harmless text ZIP fixtures under unique `logs/` directories.
+They exercise the actual scan command; syntax parsing is reported separately.
+No game data, keys, screenshots or real credentials are needed for them.
+Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
+remains open.
+
+The Python packager's payload manifest, pinned inputs, dependency locks and
+hash rules remain separate checks. This command does not run that packager,
+prove complete corresponding source, establish licence permission or test the
+actual launcher. The owner still needs the reviewed final source/player
+outputs, Python suites and payload checks, then a real launcher, build, game
+and two-PC run in the authorized checkout. A passing source ZIP scan does not
+close [BETA_GO_NO_GO.md](BETA_GO_NO_GO.md) or the rights questions in
+[THIRD_PARTY.md](THIRD_PARTY.md).
