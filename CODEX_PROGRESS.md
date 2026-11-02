@@ -1,5 +1,47 @@
 # T4 beta progress, 2026-11-02
 
+## Current refusal: stage the pending runtime before the next verify
+
+Done: 24 read-only area agents checked independent runtime/evidence paths.
+No raw .log files exist in the 14 latest-verify*, runtime* and release-b13
+evidence directories. The supplied existing-name refusal did not launch a
+pair. Arrival timing, sustained advantage and actual wait ordering remain
+unknown. No runtime fix, causal proof or test pass is claimed this pass.
+
+Concrete staging risk: tools/input_build.cmd stages committed HEAD overrides,
+so that route can omit the pending working-tree runtime edit. This helper was
+read, not run; the absent outer verify wrapper prevents identifying the route
+actually used. tools/t4_buildid.py hashes staged runner source, not executable
+bytes. An unchanged ID is consistent with stale staging but does not prove it.
+
+Open / owner-only: preserve existing output; use a fresh unused verify name.
+Stage the pending runtime source, build once, then run that same new build OFF
+and ON with equal diagnostics, scripts, simulation and all other switches.
+Require an ID different from 943fc4631acf2c13, both ON peers' literal activation
+and nonzero NETREBASE_CATCHUP rebases. VERIFY_ENV.txt remains exactly:
+TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
+Pass it through common -Env without peer overrides replacing it. Retain full
+paired logs and effective params. Test whether retained catchup debt reduces
+sustained lead, sender gaps, actual waits and absolute rollback/resim work.
+Lower rebase totals or a smaller rollback ratio alone prove no improvement.
+
+Compilation, selftest and real OFF/ON pair remain UNRUN under AGENTS.md.
+The tests/catalog agent confirmed that selftest and catalog checks never enter
+the live pacing guard. No substitute check was counted as runtime validation.
+Runtime and VERIFY_ENV.txt are unchanged. Root alone edits this record.
+
+Area agents: pair_evidence_current, catchup_guard_current, timesync_current,
+advantage_current, arrival_current, vblank_current, polling_current,
+prediction_wait_current, startup_roles_current, resim_deadline_current,
+resend_current, switch_route_current, tests_catalogs_current,
+build_identity_current, clock_domains_current, simulation_current,
+sampling_current, catchup_telemetry_current, state_ring_current,
+mismatch_current, coalescing_current, diagnostic_contention_current,
+frontier_refresh_current, falsification_current. Separate final reviewer:
+final_diff_review_current. All follow AGENTS.md; no agent edits overlap.
+No Git command, outside-tree read, deletion, patch edit, build, game, forbidden
+helper, server, push or release ran this pass.
+
 ## Repeat refusal: runtime proof is still the next open item
 
 Done this pass: 24 read-only area agents checked the pending experiment and
