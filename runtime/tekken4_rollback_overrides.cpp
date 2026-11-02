@@ -1153,6 +1153,10 @@ namespace tekken4_rollback
         // phase 3b: early rollback (T5 sec. 27): the boundary may come up to earlyMs before its vblank time; what is
         // already known to be mispredicted is rolled back in that wait, and inputs that arrive during it too
         bool early = true;
+        bool earlyDeadline = false;
+        uint64_t earlyDeadlineSkips = 0, earlyDeadlineRevisits = 0, earlyOverdueRollbacks = 0,
+                 earlyOverdueRevisits = 0, earlyDeferredLate = 0;
+        uint64_t earlyRollbackFrame = ~0ull, earlyDeferredFrame = ~0ull;
         double earlyMs = 4.0;
         bool lazy = true; // re-simulated boundaries no rollback can reach again are not captured (T5 sec. 33.4)
         bool hashProfile = false;
@@ -1538,6 +1542,7 @@ namespace tekken4_rollback
                                 ") -- DESYNC likely\n", f, g, g_np.ringFrame[slot]);
             return false;
         }
+        const bool overdueEarly = early && std::chrono::steady_clock::now() >= g_np.liveT;
         g_np.liveVblank = g_runtime->eeScheduler().nextVblankHostDeadline();
         g_np.rbT0 = std::chrono::steady_clock::now();
         ps2_rollback::restore(*g_runtime, g_np.ring[slot]);
@@ -1548,7 +1553,18 @@ namespace tekken4_rollback
         const uint64_t depth = f - g;
         ++g_np.rollbacks;
         if (early)
+        {
             ++g_np.earlyRollbacks;
+            if (overdueEarly)
+            {
+                ++g_np.earlyOverdueRollbacks;
+                if (g_np.earlyRollbackFrame == f)
+                    ++g_np.earlyOverdueRevisits;
+            }
+            g_np.earlyRollbackFrame = f;
+        }
+        else if (g_np.earlyDeferredFrame == f)
+            ++g_np.earlyDeferredLate;
         g_np.maxDepth = std::max(g_np.maxDepth, depth);
         ++g_np.depthHist[std::min<uint64_t>(depth, 16u)];
         g_np.resim = true;
@@ -1689,6 +1705,13 @@ namespace tekken4_rollback
                      g_np.diagWaitNeed, g_np.rollbacks, g_np.diagRollbackMaxMs,
                      g_np.fastSync ? 1 : 0, g_np.leadWindow, g_np.syncEvals, g_np.syncEvalFrame,
                      g_np.syncEarlyEvals, g_np.syncEarlyCorrections);
+        std::fprintf(g_log, "NETDIAG steady_ms=%.3f f=%" PRIu64 " slot=%d early_deadline=%d"
+                            " early_due_skips=%" PRIu64 " early_due_revisits=%" PRIu64
+                            " early_overdue_rb=%" PRIu64 " early_overdue_revisits=%" PRIu64
+                            " early_deferred_late=%" PRIu64 "\n",
+                     steadyMs, g_frame, g_np.slot, g_np.earlyDeadline ? 1 : 0,
+                     g_np.earlyDeadlineSkips, g_np.earlyDeadlineRevisits,
+                     g_np.earlyOverdueRollbacks, g_np.earlyOverdueRevisits, g_np.earlyDeferredLate);
         g_np.diagGapMaxMs = g_np.diagDebtMaxMs = g_np.diagSyncOverMaxMs = g_np.diagWaitMaxMs = g_np.diagRollbackMaxMs = 0;
     }
 
@@ -1861,6 +1884,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET remote input refresh before prediction wait/late scan enabled\n");
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NET TEKKEN4_NET_REBASE_CATCHUP=1: live rebases retain two vblank periods of deadline debt\n");
+        if (g_np.earlyDeadline)
+            std::fprintf(g_log, "NET TEKKEN4_NET_EARLY_DEADLINE=1: overdue early scans defer to sync/wait and late rollback\n");
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -1985,6 +2010,16 @@ namespace tekken4_rollback
             const auto waitT0 = std::chrono::steady_clock::now();
             for (;;)
             {
+                // Once overdue, reach sync and the prediction wait before replaying again. Do not scan here:
+                // npScan advances checked; the late scan below must still see every pending mismatch.
+                if (!lockstep && g_np.early && g_np.earlyDeadline && std::chrono::steady_clock::now() >= g_np.liveT)
+                {
+                    ++g_np.earlyDeadlineSkips;
+                    if (g_np.earlyRollbackFrame == f)
+                        ++g_np.earlyDeadlineRevisits;
+                    g_np.earlyDeferredFrame = f;
+                    break;
+                }
                 if (!lockstep && g_np.early)
                 {
                     const uint64_t g = npScan(f, rc);
@@ -2296,6 +2331,8 @@ namespace tekken4_rollback
             g_np.lockDelaySetting = std::max(0, std::min(kMaxLockDelay, std::atoi(v)));
         if (const char *v = std::getenv("TEKKEN4_NET_EARLY"))
             g_np.early = parseNumber(v) != 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_EARLY_DEADLINE"))
+            g_np.earlyDeadline = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_EARLY_MS"))
             g_np.earlyMs = std::max(0.0, std::min(12.0, std::atof(v)));
         if (const char *v = std::getenv("TEKKEN4_NET_LAZY"))

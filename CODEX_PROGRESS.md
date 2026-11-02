@@ -1,5 +1,108 @@
 # T4 beta progress, 2026-11-02
 
+## Current: deadline-first early rollback after the real FAST_SYNC comparison
+
+Latest owner-supplied verify: draft 950e73dce1, build 86157305ed349c48,
+finished 2026-11-02T17:02:36. The printed build ID changed; the old unchanged
+943fc4631acf2c13 concern is superseded. FAST_SYNC OFF/ON rollbacks were host
+245/238, join 961/917; resim frames host 346/422, join 3894/3795. Join sync
+corrections rose 95 to 151 and stall time rose 4453 to 5173 ms. More frequent
+corrections did little to resolve the imbalance. Both arms reported zero
+hash mismatches and NETDESYNC lines. Full activation logs were not supplied.
+
+Done: 25 independent area agents audited runtime, transport, evidence and
+tests/catalogs. No paired runtime/transport logs exist in this tree; its eight
+.log files are scanner output. No outside-tree log path was opened. Exact
+input first arrivals, sustained advantage and chronological wait order remain
+unknown. All four depth histograms reproduce actual rollback/resim work.
+The host's extra discarded pacing time nearly equals the join's extra waits;
+this is consistent with pacing accounting, not proof of a slow-host cause.
+
+Single new hypothesis: overdue early rollbacks repeatedly postpone time sync
+and the prediction wait, letting the ahead peer replay separately as inputs
+arrive instead of first yielding and batching corrections. The early loop
+currently scans and starts rollback BEFORE checking liveT. A resim return can
+therefore start another early rollback after that deadline. Early rollback
+counts alone do not show replay happened in spare vblank time. The supplied
+878/799 join early rollbacks make this worth testing, but do not prove chains.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_EARLY_DEADLINE=1. At an expired liveT it skips the early scan and
+reaches existing sync/prediction waiting before the existing late scan. It
+does not call npScan and discard a mismatch: checked remains pending. Late
+correction still precedes final hashes and live input selection. No logical
+frame/ring slot advances during this deferral. Input samples, transport,
+prediction limit, controller gains and deadlines are unchanged. OFF retains
+its scheduling decisions, with added diagnostics. This candidate may merely
+move replay later or worsen frame tails; it is not a demonstrated fix.
+
+Activation logs the literal switch after handshake. An additional one-second
+NETDIAG line in both arms reports early_deadline and cumulative counters:
+early_due_skips counts expired early scans skipped; early_due_revisits is its
+subset after an earlier early rollback at that same live frame;
+early_overdue_rb counts early rollbacks started after liveT, with
+early_overdue_revisits the subset after an earlier early rollback there;
+early_deferred_late counts successful late rollbacks at a skipped live frame,
+including repeated late replays. Skips alone do not prove a mismatch was
+pending at the skipped instant. Scan overhead can cross liveT after the ON
+precheck, so early_overdue_rb need not be exactly zero ON. Counters are
+host-only and not restored. No per-input first-arrival telemetry was invented.
+
+VERIFY_ENV.txt contains exactly one line:
+TEKKEN4_NET_EARLY_DEADLINE=1;TEKKEN4_NET_DIAG=1
+
+Open / owner-only: stage these reviewed working-tree bytes, build and refresh
+identity, then run actual selftest and repeated same-build OFF/ON pairs through
+tools/net_pair.ps1. The absent outer wrapper must pass the file line via common
+-Env; net_pair does not read the file itself. Keep DIAG=1 or TimingDiag in BOTH
+arms and only EARLY_DEADLINE different. Keep FAST_SYNC, LIVE_LEAD, ORDERED_LEAD,
+REBASE_CATCHUP, REFRESH_RC and other experiments equal/off. Leave ordinary early
+rollback enabled. Peer overrides must not replace the common experiment.
+Retain full paired runtime/transport logs, stdout/stderr and effective params.
+The printed source ID and params alone do not prove executable activation.
+
+Require literal activation and early_deadline=1 on both ON peers. OFF should
+show early_deadline=0 and zero early_due_skips, early_due_revisits and
+early_deferred_late. On the
+burdened OFF peer require early_overdue_rb>0, and early_overdue_revisits>0 to
+support repeated overdue chains specifically. ON should exercise
+early_due_skips and early_deferred_late; early_due_revisits>0 demonstrates a
+return from early resim was deferred. Zero opportunity counters leave the
+mechanism unexercised or weaken it; skip counts without late corrections are
+not proof of changed rollback work. Compare dated NETDIAG/NETTS, transport
+progress/local gaps, actual waits, absolute rollback/resim totals and depths,
+stalls, run FPS and displayed-frame tails. A smaller ratio or early count
+alone is no win. Similar poor behavior with the branch exercised weakens the
+hypothesis. Repeat same-PC runs, then two physical PCs; role swaps also change
+input/simulator streams. Full first-arrival timing remains unavailable.
+
+Compilation, selftest and real OFF/ON entry validation remain UNRUN here:
+AGENTS.md forbids builds, games and tools/net_* execution. No fake harness,
+source assertion or catalog result is counted as runtime proof. Selftest
+dispatches through netBoundary, not npBoundary/npTimeSync. The tests/catalogs
+agent ran the real check_online_catalogs.ps1: exit 0, both 23-tool catalogs
+and three root inputs; this proves only catalogs. Owner validation must prove
+compilation, switch activation, safety and benefit before enabling by default.
+Original bytes for the three edited files are in
+logs/runtime-early-deadline/originals. Root alone edits runtime, VERIFY_ENV and
+this record; all area agents are read-only. Separate final diff review found
+no blocking source issue in OFF behavior, parsing/activation, checked, late
+correction, hashes/ring, counter formats, exact environment line and preserved
+history. Its one wording clarification now spells out the three zero OFF
+counters; early_overdue_revisits may be positive OFF. Review does not prove
+compilation or runtime safety/benefit. No Git command, outside-tree read,
+deletion, patch edit, build, game,
+forbidden helper, server, push or release ran this continuation.
+
+Area agents: pair_evidence, timesync_sign, timesync_settling, peer_feedback,
+input_arrivals, wait_order, vblank_pacing, prediction_budget, startup_roles,
+resim_cost, transport_poll, resend_order, switch_route, tests_catalogs,
+build_identity, clock_domains, simulation_bias, input_sampling, telemetry,
+state_ring, mismatch_detection, coalescing, diag_contention, frontier_refresh,
+experiment_falsification. state_ring retried after a capacity failure;
+timesync_sign, prediction_budget and transport_poll supplied findings before
+their final response hit capacity. Separate reviewer: final_diff_review_early_deadline.
+
 ## Current: shorter time-sync window after the real LIVE_LEAD comparison
 
 Latest owner-supplied verify: draft 7c12b4b5ba, build 09ae6812c84e6c3e,
