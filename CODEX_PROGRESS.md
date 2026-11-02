@@ -1,6 +1,104 @@
 # T4 beta progress, 2026-11-02
 
-## DEFLATE completion follow-up, current session
+## DEFLATE work-budget follow-up, current session
+
+Release remains **NO-GO**. The selected open source-only item is the scanner's
+unbounded DEFLATE parser work. This session adds fixed archive-wide work
+counters and proves them through the actual scanner entry. No launcher,
+runtime, switch or server behavior changed.
+
+Done:
+
+- Read AGENTS.md and this progress record first. Saved original bytes under
+  `logs/zip-budget-session-cdfb502b7eb94bad855b1f258365f296/` for review without Git.
+- Added one shared budget per archive: 1,024 blocks, 2,097,152 decoded symbols
+  and 1,048,576 allocated Huffman lookup slots. Exhaustion refuses even a
+  structurally valid archive. The counters do not promise a wall-time bound.
+- The actual valid and malformed DEFLATE entries passed 123/11 and 260/26
+  assertions/scanner subprocesses on the changed implementation.
+- New block-boundary tests passed 98 assertions through six real scanner
+  processes, including cumulative member limits. A saved pre-fix scanner copy
+  accepted the same unchanged over-budget input the current entry refuses.
+
+- New [symbol](tools/test_public_zip_budget_symbols.ps1) and
+  [table](tools/test_public_zip_budget_tables.ps1) suites passed 59/4 and
+  185/5 assertions/real scanner subprocesses. All three new suites total
+  342 assertions through 15 processes. Exact boundaries pass; over-budget
+  cases refuse. Independent .NET reads validate the fixtures first.
+- The first proposed 1,048,576-symbol allowance caused incomplete refusals
+  on ordinary retained inputs. Supplemental helper diagnosis identified
+  exhaustion; those early refusals were not accepted as content scans. The
+  final 2,097,152 allowance restored completed scans on all four inputs.
+- Final actual retained scans: expected exit 1 with the same 138 mail-category
+  records for each Sunday archive; portable subset exit 0, 80 files and
+  2,025,621 bytes. All input/helper/integration hashes stayed unchanged.
+  Times were 41.919/40.759/40.959/19.112 seconds under concurrent load;
+  no speed comparison is claimed. See [audit](docs/PUBLIC_ZIP_AUDIT.md).
+- Final helper SHA-256 is
+  `5f37e906109b081b622938c25f58f0908c56cfbd642b4c539563a7974eb508df`.
+  Earlier implementation/budget attempts are preliminary evidence only.
+
+- Frozen [aggregate](tools/check_public_zip.ps1) exited 0: 16 required source
+  files parsed and kept identical hashes, both actual catalogs reported 23
+  unique present tools plus three root files, and all 79 patch names/hashes
+  stayed unchanged. Nine suites passed 1,146 assertions through 111 scanner
+  processes, including completed retained-archive scans. Evidence is under
+  `logs/zip-budget-aggregate-8b87c249237a49a7a9e1486c9ef36df8/`.
+- Root independently reran the unchanged pre-fix block fixture through the
+  current actual scanner: exit 1 / REFUSED, SHA-256
+  `8ea07c713870b99b8eac70079c6db7309ef75f6edd0341df328d61e3e91a234b`.
+
+- Separate reviewer `final_diff_review_budget` independently ran the frozen
+  aggregate: exit 0, the same 1,146 assertions / 111 scanner processes,
+  unchanged 16 required source hashes and all 79 patch names/hashes. Review
+  against saved original bytes found no blocking code/test issue. Evidence is
+  under `logs/zip-budget-review-0da92b7635d1445da6c2885f24869261/`.
+- Root's real document checker covered all five changed documents. Local
+  links resolved and PowerShell parsing completed; overall exit 1 remains on
+  retained image-name/unsafe-name/corrupt-ZIP fixtures. No fixture was removed
+  or checker weakened. See the final check output under
+  `logs/zip-budget-session-cdfb502b7eb94bad855b1f258365f296/`.
+
+Open / owner-only:
+
+- A retained valid giant-word fixture exceeded a real scanner test's 180-second
+  deadline. Its cause was not isolated; text-regex costs are a source-based
+  suspicion, not a proven diagnosis. The unchanged fixture SHA-256 is
+  `9adcb8e2df7445658ad78a7c4c766ab098b43e720c89ae83e773c6bd8d297bf1`,
+  under `logs/public-zip-budget-symbols-002a5d4df9a6480aa3b0c6cab3667f0f/`.
+  Timeout was a failed test, never counted as a scanner refusal or pass.
+  A pure-newline fixture also timed out at 180 seconds; its cause likewise
+  remains unisolated. SHA-256 is
+  `6b19a98f6ac0d7fb98442a7d7398988697dd5151cb47aedfdacc8bc3976feaae`,
+  under `logs/public-zip-budget-symbols-95f661108f6b4c7b9a440d90ab140444/`.
+  Final budget fixtures use short lines and completed through the real entry.
+- Parser work counters do not impose a hard process deadline or make scans fast.
+  Whole-tree source checking remains red on retained test fixtures.
+- Exact complete source/player/privacy/licence review, Python suites/payload
+  checks, actual launcher GUI/portable first-run, build/game, enabled GUI
+  switches and two physical PCs remain open. Builds, games and network helpers
+  are forbidden here. A source scanner pass cannot close these acceptance gates.
+
+Latest owner-supplied verification, not reproduced here: draft `8676b7430f`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 214-second build `943fc4631acf2c13`, finished `2026-11-02T02:35:39`.
+Selftest: 6000 wall / 5106 logical frames, 202 successful restores, zero bad,
+447 resim comparisons with zero mismatches, 101/101 wrong-input divergences.
+Switches-OFF same-PC pair: 6000 frames, 199 hashes per side, zero mismatches
+and NETDESYNC lines; host/join run-average FPS 52.1/52.1, stalls 0/70
+(0/2298 ms), displayed-frame p99 106.3/97.9 ms. This supersedes older supplied
+reports below; it proves neither this edited tree, the enabled GUI profile nor
+two-PC play. See [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md).
+
+Nine area agents have exclusive files: `deflate_work_budget`,
+`zip_budget_integration`, `budget_block_tests`, `budget_symbol_tests`,
+`budget_table_tests`, `tests_catalogs_budget`, `budget_scan_docs`,
+`budget_retained_audit`, `latest_verify_evidence`. Separate read-only reviewer
+`final_diff_review_budget` owns finished-diff review. Root owns this record
+and `docs/status.md`. All read AGENTS.md. No Git command, build, game,
+network helper, server, push or release ran here.
+
+## Earlier DEFLATE completion follow-up
 
 Release remains **NO-GO**. The selected source-only open item was the observed
 truncated empty-DEFLATE false pass. No launcher, runtime, switch or server

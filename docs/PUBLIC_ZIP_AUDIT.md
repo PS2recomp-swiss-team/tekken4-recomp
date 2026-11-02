@@ -112,6 +112,40 @@ Final command output and hash/timing records are the `final-*` files under
 Earlier files there are preliminary runs; some preceded the final helper.
 No member was extracted, modified or executed.
 
+## DEFLATE work-budget follow-up
+
+Reran all four inputs through the actual scanner after adding one shared
+archive-wide budget: 1,024 DEFLATE blocks, 2,097,152 decoded symbols and
+1,048,576 Huffman lookup slots. These are work limits, not a wall-time limit.
+The final helper SHA-256 was
+`5f37e906109b081b622938c25f58f0908c56cfbd642b4c539563a7974eb508df`
+before and after every subprocess. The reader helper hash also stayed
+unchanged. Every input hash matched the identities already recorded above,
+and every scanner-reported identity matched its input hash.
+
+| Input | Exit | Entries / files / bytes read | Elapsed seconds |
+|---|---:|---:|---:|
+| Sunday `042256-264836` | 1 | 123 / 123 / 4,187,421 | 41.919 |
+| Sunday `205433-879960` | 1 | 124 / 124 / 4,207,076 | 40.759 |
+| Sunday `205628-895451` | 1 | 124 / 124 / 4,207,280 | 40.959 |
+| Portable sanitized subset | 0 | 80 / 80 / 2,025,621 | 19.112 |
+
+All Sunday scans completed and reported only the same 138 mail-category
+records each; the portable subset passed. These observed wall times include
+PowerShell startup and concurrent symbol-budget tests. They are not an
+isolated benchmark, a speed improvement claim or a time guarantee.
+
+The first proposed symbol allowance was 1,048,576. Two real retained-input
+scans stopped with generic refusals before reporting content counts. A
+separate raw-helper diagnosis identified symbol exhaustion in the first
+archive; that diagnosis was not scanner-entry proof. The allowance was
+raised before the four final runs above. Preliminary evidence remains under
+`logs/public-zip-budget-audit-245a1378e4784827b4386f22916a652d/`;
+the completed frozen runs, hashes and output are under
+`logs/public-zip-budget-audit-final-f1c16c2c43594ad3a59b03c1c5469469/`.
+No retained archive was changed to obtain these results. The sanitized
+subset is still not complete corresponding source or a player candidate.
+
 ## Sanitized source subset experiment
 
 The real `publish_public_tree.ps1` entry also staged `LICENSE` and all

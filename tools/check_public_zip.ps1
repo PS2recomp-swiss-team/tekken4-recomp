@@ -57,7 +57,8 @@ try {
         'scan_public_zip.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
         'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1',
         'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
-        'check_public_zip.ps1', 'check_online_catalogs.ps1'
+        'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
+        'test_public_zip_budget_tables.ps1', 'check_public_zip.ps1', 'check_online_catalogs.ps1'
     )
     foreach ($name in $required) {
         $path = Get-CheckedPath ('tools/' + $name)
@@ -74,7 +75,9 @@ try {
     if (-not [IO.File]::Exists($shell)) { throw 'Windows PowerShell unavailable; child entries did not run.' }
     foreach ($entry in @('check_online_catalogs.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
             'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1',
-            'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1')) {
+            'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
+            'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
+            'test_public_zip_budget_tables.ps1')) {
         Write-Output "ENTRY: tools/$entry"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Get-CheckedPath ('tools/' + $entry))
         if ($LASTEXITCODE -ne 0) {

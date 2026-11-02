@@ -1,6 +1,16 @@
 # Raw DEFLATE framing checks for the bounded source ZIP reader.
 # This counts output; ZipArchive still supplies and CRC-checks the actual bytes.
 
+function New-PublicDeflateBudget {
+    # One budget per archive, shared by every compressed member. These count
+    # parser work, not elapsed time; slow machines can still take longer.
+    return [pscustomobject]@{
+        BlocksRemaining=1024
+        SymbolsRemaining=2097152
+        TableSlotsRemaining=1048576
+    }
+}
+
 function Read-PublicDeflateBits {
     param($State, [int]$Count)
 
@@ -15,7 +25,7 @@ function Read-PublicDeflateBits {
 }
 
 function New-PublicDeflateTable {
-    param([int[]]$Lengths, [bool]$AllowSingle, [bool]$AllowEmpty)
+    param([int[]]$Lengths, [bool]$AllowSingle, [bool]$AllowEmpty, $Budget)
 
     $counts = New-Object int[] 16
     $maximum = 0
@@ -28,6 +38,8 @@ function New-PublicDeflateTable {
     }
     if (-not $maximum) {
         if (-not $AllowEmpty) { throw 'Empty ZIP DEFLATE code tree.' }
+        if ($Budget.TableSlotsRemaining -lt 1) { throw 'ZIP DEFLATE work budget exceeded.' }
+        $Budget.TableSlotsRemaining--
         return [pscustomobject]@{ Codes=(New-Object int[] 1); Mask=0; Maximum=0 }
     }
     $left = 1
@@ -45,6 +57,8 @@ function New-PublicDeflateTable {
         $next[$length] = $code
     }
     $size = 1 -shl $maximum
+    if ($Budget.TableSlotsRemaining -lt $size) { throw 'ZIP DEFLATE work budget exceeded.' }
+    $Budget.TableSlotsRemaining -= $size
     $codes = New-Object int[] $size
     for ($symbol = 0; $symbol -lt $Lengths.Length; $symbol++) {
         $length = $Lengths[$symbol]
@@ -63,8 +77,10 @@ function New-PublicDeflateTable {
 }
 
 function Read-PublicDeflateSymbol {
-    param($State, $Table)
+    param($State, $Table, $Budget)
 
+    if ($Budget.SymbolsRemaining -lt 1) { throw 'ZIP DEFLATE work budget exceeded.' }
+    $Budget.SymbolsRemaining--
     # Peek at most three bytes. Zero padding the lookup is safe only when the
     # selected code's actual length still fits in the bounded member stream.
     $position = [int]$State.Bit
@@ -86,7 +102,8 @@ function Assert-PublicZipDeflate {
         [Parameter(Mandatory=$true)][byte[]]$Data,
         [Parameter(Mandatory=$true)][int]$Offset,
         [Parameter(Mandatory=$true)][int]$Length,
-        [Parameter(Mandatory=$true)][long]$ExpectedLength
+        [Parameter(Mandatory=$true)][long]$ExpectedLength,
+        [Parameter(Mandatory=$true)]$Budget
     )
 
     if ($Offset -lt 0 -or $Length -lt 1 -or [long]$Offset + $Length -gt $Data.Length -or
@@ -104,6 +121,8 @@ function Assert-PublicZipDeflate {
     # RFC 1951's nineteen code-length symbols in transmission order.
     $order = @(16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15)
     do {
+        if ($Budget.BlocksRemaining -lt 1) { throw 'ZIP DEFLATE work budget exceeded.' }
+        $Budget.BlocksRemaining--
         $final = Read-PublicDeflateBits $state 1
         $type = Read-PublicDeflateBits $state 2
         if ($type -eq 0) {
@@ -121,10 +140,10 @@ function Assert-PublicZipDeflate {
                     for ($symbol = 0; $symbol -lt 288; $symbol++) {
                         $lengths[$symbol] = if ($symbol -le 143) { 8 } elseif ($symbol -le 255) { 9 } elseif ($symbol -le 279) { 7 } else { 8 }
                     }
-                    $fixedLiteral = New-PublicDeflateTable $lengths $false $false
+                    $fixedLiteral = New-PublicDeflateTable $lengths $false $false $Budget
                     $lengths = New-Object int[] 32
                     for ($symbol = 0; $symbol -lt 32; $symbol++) { $lengths[$symbol] = 5 }
-                    $fixedDistance = New-PublicDeflateTable $lengths $false $false
+                    $fixedDistance = New-PublicDeflateTable $lengths $false $false $Budget
                 }
                 $literal = $fixedLiteral
                 $distance = $fixedDistance
@@ -137,11 +156,11 @@ function Assert-PublicZipDeflate {
                 for ($index = 0; $index -lt $codeCount; $index++) {
                     $codeLengths[$order[$index]] = Read-PublicDeflateBits $state 3
                 }
-                $codeTable = New-PublicDeflateTable $codeLengths $false $false
+                $codeTable = New-PublicDeflateTable $codeLengths $false $false $Budget
                 $lengths = New-Object int[] ($literalCount+$distanceCount)
                 $index = 0
                 while ($index -lt $lengths.Length) {
-                    $symbol = Read-PublicDeflateSymbol $state $codeTable
+                    $symbol = Read-PublicDeflateSymbol $state $codeTable $Budget
                     if ($symbol -lt 16) {
                         $lengths[$index] = $symbol
                         $index++
@@ -163,8 +182,8 @@ function Assert-PublicZipDeflate {
                     }
                 }
                 if (-not $lengths[256]) { throw 'ZIP DEFLATE end code missing.' }
-                $literal = New-PublicDeflateTable $lengths[0..($literalCount-1)] $true $false
-                $distance = New-PublicDeflateTable $lengths[$literalCount..($lengths.Length-1)] $true $true
+                $literal = New-PublicDeflateTable $lengths[0..($literalCount-1)] $true $false $Budget
+                $distance = New-PublicDeflateTable $lengths[$literalCount..($lengths.Length-1)] $true $true $Budget
             }
             # Keep the common literal path in this loop. Per-symbol PowerShell
             # function binding is expensive on ordinary source archives.
@@ -173,7 +192,12 @@ function Assert-PublicZipDeflate {
             $position = [int]$state.Bit
             $endBit = [int]$state.EndBit
             $lastByte = $endBit -shr 3
+            # Keep this counter local on the literal path. Synchronize before
+            # distance decoding and after the block so all members share it.
+            $symbolsRemaining = [int]$Budget.SymbolsRemaining
             while ($true) {
+                if ($symbolsRemaining -lt 1) { throw 'ZIP DEFLATE work budget exceeded.' }
+                $symbolsRemaining--
                 $byte = $position -shr 3
                 $bits = 0
                 if ($byte -lt $lastByte) { $bits = [int]$Data[$byte] }
@@ -190,7 +214,9 @@ function Assert-PublicZipDeflate {
                     $state.Bit = $position
                     $lengthIndex = $symbol-257
                     $run = $lengthBase[$lengthIndex] + (Read-PublicDeflateBits $state $lengthExtra[$lengthIndex])
-                    $distanceSymbol = Read-PublicDeflateSymbol $state $distance
+                    $Budget.SymbolsRemaining = $symbolsRemaining
+                    $distanceSymbol = Read-PublicDeflateSymbol $state $distance $Budget
+                    $symbolsRemaining = [int]$Budget.SymbolsRemaining
                     if ($distanceSymbol -gt 29) { throw 'Reserved ZIP DEFLATE distance symbol.' }
                     $back = $distanceBase[$distanceSymbol] + (Read-PublicDeflateBits $state $distanceExtra[$distanceSymbol])
                     if ($back -gt $produced) { throw 'ZIP DEFLATE distance exceeds output history.' }
@@ -199,6 +225,7 @@ function Assert-PublicZipDeflate {
                 } else { throw 'Reserved ZIP DEFLATE literal symbol.' }
                 if ($produced -gt $ExpectedLength) { throw 'ZIP DEFLATE output exceeds declared length.' }
             }
+            $Budget.SymbolsRemaining = $symbolsRemaining
             $state.Bit = $position
         } else { throw 'Reserved ZIP DEFLATE block type.' }
         if ($produced -gt $ExpectedLength) { throw 'ZIP DEFLATE output exceeds declared length.' }

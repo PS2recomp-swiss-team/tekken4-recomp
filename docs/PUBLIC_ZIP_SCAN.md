@@ -42,11 +42,23 @@ streams, trailing bytes and concatenated streams are refused. This check
 does not extract content or replace the later .NET read and CRC comparison.
 It is not proof that every possible hidden byte has been found.
 
-The PowerShell format check adds CPU time. Byte and memory bounds do not
-provide a wall-time or work-budget limit; archives with many blocks can be
-expensive to check. See the measured retained-input timings in
-[PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md). A slow scan is not evidence of a
-completed scan or a pass.
+The raw DEFLATE check has one fixed work budget shared by all compressed
+members in an archive: 1,024 blocks, 2,097,152 decoded Huffman symbols and
+1,048,576 allocated Huffman lookup slots. Symbols include literals,
+length/distance codes, code-length codes and end-of-block codes. Empty
+lookup tables consume one slot. A reused fixed table is charged when it is
+first allocated in that member. Stored DEFLATE blocks consume the block
+budget; their bytes remain subject to the existing size limits.
+
+Exceeding any counter causes refusal, including for a structurally valid
+archive. Counters do not reset between members, and the command has no option
+to raise them. These are parser work limits, not a wall-time guarantee or a
+speed improvement. The PowerShell check can still be slow. See the measured
+retained-input timings in [PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md). A slow
+scan is not evidence of a completed scan or a pass. A retained very-long-word
+fixture also exceeded a test's 180-second deadline; the cause was not isolated.
+That observed performance limitation remains open. The scan has no global
+wall-time guarantee.
 
 Member paths must use `/`. Some Windows ZIP convenience methods write `\`
 instead; those archives are refused. Use a packager that writes portable
@@ -73,6 +85,10 @@ content and matching but incorrect header CRCs after a clean control passes.
 The [valid DEFLATE cases](../tools/test_public_zip_deflate_valid.ps1) and
 [invalid DEFLATE cases](../tools/test_public_zip_deflate_invalid.ps1) exercise
 compressed-format checks through the same actual scanner entry.
+The [block budget](../tools/test_public_zip_budget_blocks.ps1),
+[symbol budget](../tools/test_public_zip_budget_symbols.ps1) and
+[table budget](../tools/test_public_zip_budget_tables.ps1) suites exercise the
+fixed work counters through that entry, including cumulative member work.
 No game data, keys, screenshots or real credentials are needed for them.
 Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
 remains open.

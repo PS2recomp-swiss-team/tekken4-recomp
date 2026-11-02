@@ -147,9 +147,12 @@ function Invoke-PublicZipScan {
 
         # .NET can return zero bytes for a truncated empty DEFLATE stream.
         # Check complete raw streams before trusting its output length/CRC.
+        # One work budget covers every compressed member in this archive.
+        $deflateBudget = New-PublicDeflateBudget
         foreach ($compressedMember in $deflateMembers) {
             Assert-PublicZipDeflate -Data $data -Offset $compressedMember.Offset `
-                -Length $compressedMember.Length -ExpectedLength $compressedMember.ExpectedLength
+                -Length $compressedMember.Length -ExpectedLength $compressedMember.ExpectedLength `
+                -Budget $deflateBudget
         }
 
         $memory = New-Object IO.MemoryStream(,$data)

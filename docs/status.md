@@ -1,18 +1,33 @@
 # Status
 
-_Last updated: 2026-11-02 (DEFLATE completion follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (DEFLATE work-budget follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current DEFLATE completion follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+- **Current DEFLATE work-budget follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records archive-wide limits of 1,024 blocks, 2,097,152 symbols and 1,048,576
+  Huffman lookup slots. The frozen aggregate passed 1,146 assertions through
+  111 actual scanner processes; all 79 patch names/hashes stayed unchanged.
+  Exact boundaries and cumulative member work ran. All four retained inputs
+  kept completed results and unchanged hashes. The separate reviewer independently
+  passed the same frozen aggregate and found no blocking code/test issue. No hard wall-time bound or speed improvement is claimed; two
+  180-second fixture timeouts remain open. Latest supplied draft `8676b7430f`,
+  clean 214-second build `943fc4631acf2c13`, finished `2026-11-02T02:35:39`:
+  OFF same-PC pair, 199 hashes each, zero mismatches/NETDESYNC, host/join
+  52.1/52.1 FPS, stalls 0/70 (0/2298 ms), displayed-frame p99 106.3/97.9 ms.
+  This does not prove this edited tree, enabled GUI profile or two-PC play.
+  Release remains **NO-GO**. See [scanner scope](PUBLIC_ZIP_SCAN.md) and
+  [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier DEFLATE completion follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
   records the unchanged truncated-empty stream that previously passed and now
   refuses through the actual scanner. Complete empty controls pass. New valid
   and malformed-stream suites ran through the actual scanner. The separate
   reviewer's frozen aggregate passed 804 assertions / 96 scanner processes;
   all 79 patch names/hashes stayed unchanged. Final retained archives kept
   expected results and hashes, but scans took about 40-42 seconds versus about
-  4 seconds previously under different concurrent load. There is no work/time
-  budget; this resource limit remains open. See [audit](PUBLIC_ZIP_AUDIT.md).
+  4 seconds previously under different concurrent load. Those runs predate the work
+  budget above; no hard time limit was established. See [audit](PUBLIC_ZIP_AUDIT.md).
   Latest owner-supplied draft `8f27d7f6be`, clean 161-second build
   `943fc4631acf2c13`, finished `2026-11-02T02:17:42`, reports a switches-OFF
   same-PC pair: 199 hashes per side, zero mismatches/NETDESYNC, host/join
