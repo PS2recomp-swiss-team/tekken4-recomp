@@ -89,14 +89,31 @@ stays unchanged and retries refuse it; the same selected files export to fresh
 outputs. This proves a write error after staging begins, not a timeout during
 writing.
 
+The [interruption tests](../tools/test_public_tree_interruption.ps1) use the
+actual entry with a 1,501-file text fixture. A complete export establishes the
+write window; bounded deadline calibration must then leave a nonempty,
+incomplete selection twice. Deadlines before staging or after all selected
+files arrive do not count as interruption coverage. Retained bytes must match
+source prefixes, retries must refuse without changing the partial tree, and
+the unchanged source must export completely to fresh outputs before and after.
+This exercises interruption in the write loop or its path checks; it does not
+prove that termination occurred inside a file's `Write` call.
+
 The [worker-load tests](../tools/test_public_tree_worker_failure.ps1) briefly
 hold read locks on the actual worker and shared text helper without changing
 their bytes. The real entry refuses scan and export without creating staging;
 the unchanged fixture passes after the locks are released. Run the checker
 and these failure suites alone: concurrent tree or ZIP scans can refuse while
-the locks are held. OS process-start failure, termination-error and test-watchdog
-failure branches remain unforced. These tests do not prove absence of orphan
-processes.
+the locks are held.
+
+The [worker-start tests](../tools/test_public_tree_start_failure.ps1) pass an
+oversized `Include` array through the actual entry. The encoded worker command
+exceeds the Windows command-line limit and refuses without creating staging.
+A separate native process-start probe confirms that limit; small-array controls
+export the same two source files before and after the refusals. This covers an
+OS process-start failure, not every possible startup error. Termination-error
+and test-watchdog failure branches remain unforced. These tests do not prove
+absence of orphan processes.
 
 Image and binary signature checks use memory fixtures; they do not add game
 data or screenshots.

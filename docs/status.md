@@ -1,10 +1,40 @@
 # Status
 
-_Last updated: 2026-11-02 (export failure coverage follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (write interruption follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current export failure coverage follow-up:**
+- **Current write interruption follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records bounded real-entry work on
+  the remaining export timeout after staging begins. No production behavior
+  changed. The frozen interruption suite passed 4,678 assertions through six
+  actual entries: two confirmed deadline refusals retained 691/851 of 1,501
+  files, retries left them unchanged, and fresh complete controls passed.
+  This locates interruption in the write loop or its path checks, not inside
+  one write call. The process-start suite passed 51 assertions through four
+  actual entries, including two oversized-command refusals with no staging.
+  The retained LICENSE/patch subset exported/scanned successfully with all
+  79 patch diff ranges unchanged; this is not complete corresponding source.
+  The frozen aggregate passed 11 suites with 11,429 checks/assertions and
+  19 syntax parses; all 116 tool hashes and 79 patch names/hashes stayed
+  unchanged. Its interruption rerun retained 884/938 files; assertion counts
+  vary with the retained file count.
+  Separate review independently passed both new suites and catalogs; all 121
+  recursive tool-script hashes and 79 patch names/hashes stayed unchanged.
+  The actual document checker resolved 111 local links across four changed
+  documents and parsed 278 PowerShell files; overall exit 1 remains on retained
+  image-name fixtures and a corrupt ZIP, with no completed whole-tree check.
+  The actual starter still refuses missing private Python; actual
+  readiness exits 2 / BLOCKED. The GUI never started. The main release gate
+  remains the exact complete package's real launcher and portable first-run,
+  followed by the enabled GUI profile on two physical PCs. Latest supplied
+  draft `15b0d73c9c`: clean 167-second build `943fc4631acf2c13`, finished
+  `2026-11-02T04:45:22`; OFF same-PC pair, 199 hashes each, zero mismatches
+  and NETDESYNC, 52.1/52.1 FPS, stalls 0/60 (0/2102 ms), displayed-frame p99
+  101.3/94.6 ms. This is supplied evidence and does not prove this edited tree.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier export failure coverage follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records new actual-entry tests for
   partial staging after a filesystem write error and worker/helper load failure.
   No production behavior changed. Failed export output stays unapproved even

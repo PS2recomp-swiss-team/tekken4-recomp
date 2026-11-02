@@ -1,6 +1,98 @@
 # T4 beta progress, 2026-11-02
 
-## Export failure coverage follow-up, current session
+## Write interruption follow-up, current session
+
+Release remains **NO-GO**. The highest release gate is still the actual
+packaged launcher and portable first-run. This copy lacks private Python;
+builds, games and network helpers remain forbidden. The bounded source-only
+item selected here is the open timeout after export staging begins. No
+production launcher, scanner, runtime or switch behavior changed.
+Original bytes and hashes for this session are saved without Git under
+`logs/release-interruption-session-20261102/original/` and `baseline.json`.
+
+Done:
+
+- Added [interruption tests](tools/test_public_tree_interruption.ps1) without
+  worker hooks or production changes. The frozen actual suite passed 4,678
+  assertions through six actual export processes. Two eight-second deadlines
+  with confirmed worker termination retained 691 and 851 of 1,501 selected
+  files. Every retained file matched a source prefix; retries refused without
+  changing output. Complete before/after exports passed with identical bytes
+  and inventory; the source and five code hashes stayed unchanged. This proves
+  interruption in the write loop or its path checks, not inside a particular
+  `stream.Write`. Evidence:
+  `logs/public-tree-interruption-f9d0f173ace14c7397e7e604106e2600/`.
+  The earlier 4,630-assertion run is preliminary for this revision.
+- Actual `test_launcher_entry.ps1` exited 0 only because real `Tekken4.cmd`
+  exited 1 for missing private Python. Actual readiness exited 2 / BLOCKED;
+  both stderr streams were empty and six source hashes stayed unchanged.
+  GUI never started. Evidence:
+  `logs/release-interruption-session-20261102/launcher-gate-2f24f850683e48dd98e8acfba3f4c93d/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) to the latest
+  owner-supplied report below. No runtime switch was changed.
+- Added [process-start failure tests](tools/test_public_tree_start_failure.ps1).
+  The actual test entry passed 51 assertions through four actual exports:
+  duplicate `Include` controls completed before and after two oversized
+  worker-command refusals with no staging. A separate native probe observed
+  error 206 and is not counted as an export entry. No production bytes changed.
+  Evidence: `logs/public-tree-start-failure-91e94b3c664847d2af4cbb25120c4848/`.
+- Independent retained-input export and scan completed with exit 0 and empty
+  stderr in 5.582 and 2.915 seconds: 80 files, 2,025,621 bytes, 79 unchanged
+  patch diff ranges. All 84 input/code snapshots stayed unchanged before,
+  between and after. Evidence: `logs/retained-export-interruption-20261102/`.
+  This subset is not complete corresponding source or a player candidate.
+- The frozen actual [aggregate](tools/check_public_publish.ps1) and hash
+  harness exited 0 with empty stderr: 19 PowerShell files parsed, 11 suites
+  passed 11,429 checks/assertions. Interruption rerun: 5,518 assertions through
+  six entries, 884/938 of 1,501 files retained at eight seconds. Start failures:
+  51 assertions through four entries. Both 23-tool catalogs passed. All 116
+  direct tool names/hashes and 79 patch names/hashes stayed unchanged. Evidence:
+  `logs/release-interruption-session-20261102/catalog-agent/`.
+  Assertion counts vary with the number of retained files checked. The full
+  ZIP aggregate was not rerun; shared text tests ran both actual scanner routes.
+- Separate reviewer `final_diff_review_interruption` independently passed the
+  frozen interruption suite (4,864 assertions / six actual entries, 764/840
+  files retained), start suite (51 / four) and actual catalogs (23 tools each,
+  three root files). All 121 recursive tool-script names/hashes and 79 patch
+  names/hashes stayed unchanged; stderr was empty. No code blocker was found.
+  Evidence: `logs/release-interruption-review-20261102/`.
+- The actual document checker covered all four changed documents: 111 local
+  links resolved and 278 PowerShell files parsed. Overall exit 1 remains on
+  retained text-only image-name fixtures and a corrupt ZIP; the whole-tree
+  check did not complete. Stderr was empty. Nothing was deleted or weakened
+  to manufacture a pass. Evidence:
+  `logs/release-interruption-session-20261102/root-doc-check.txt`.
+
+Latest owner-supplied verification, not reproduced here: draft `15b0d73c9c`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 167-second build `943fc4631acf2c13`, finished `2026-11-02T04:45:22`.
+Selftest OFF: 6000 wall / 5106 logical, 202 successful restores, zero bad,
+447 comparisons with zero mismatches, 101/101 wrong-input divergences.
+OFF same-PC pair: 6000 frames, 199 hashes each, zero mismatches/NETDESYNC;
+host/join FPS 52.1/52.1, stalls 0/60 (0/2102 ms), displayed-frame p99
+101.3/94.6 ms, restore-and-resim maximum 266.48/55.40 ms. This does not prove
+this edited tree, the enabled GUI profile or two physical PCs.
+
+Open / owner-only:
+
+- Interruption inside a single `stream.Write`, completed-attempt calibration
+  fallback, termination-error and outer-watchdog failure branches are unforced.
+  Independent process absence is unproved. Existing intentional fixture
+  findings still prevent a completed whole-tree source check.
+- The owner must run the exact reviewed complete package's real starter through
+  private Python/Tk GUI startup and portable first-run/build/play/return in the
+  authorized validation checkout. Python suites, complete source/player and
+  licence review, enabled GUI switches and two physical PCs remain unproved.
+
+Eight area agents: `write_interruption_test`, `failure_branch_review`,
+`tests_catalogs_interruption`, `launcher_gate_interruption`,
+`retained_export_interruption`, `export_interruption_docs`,
+`latest_owner_evidence_interruption`, `release_priority_audit`.
+Root owns this record and `docs/status.md`; file ownership is exclusive.
+Separate final-diff reviewer: `final_diff_review_interruption`.
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier export failure coverage follow-up
 
 Release remains **NO-GO**. The actual launcher is still the main release gate:
 private Python is missing. The actionable source-only item selected here is
