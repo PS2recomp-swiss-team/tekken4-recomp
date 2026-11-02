@@ -1,5 +1,74 @@
 # T4 beta progress, 2026-11-02
 
+## Current blocker and supplied verification 75cdf51c7c
+
+Release remains **NO-GO**. The most valuable open item is actual App startup
+and portable first-run. Sixteen area agents checked its prerequisites. The
+complete candidate, private Python/Tk, dependencies, reviewed locks/notices
+and portable marker remain absent. Actual App initialization also discovers
+locations outside this permitted tree. No production or test code changed:
+no App fix could receive the required real-entry proof here. Repeating source
+audits or ordinary scanner fixtures cannot close this acceptance gate.
+
+Done:
+
+- Actual [starter test](tools/test_launcher_entry.ps1): test exit 0, real
+  `Tekken4.cmd` exit 1 for missing private Python. Empty stderr; three input
+  hashes unchanged. **The App never started.** Evidence:
+  `logs/launcher-75cd-a9c6cff53c7c46c99a0a43d70e2fe39d/summary.json`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): both exit 0, empty
+  stderr; two 23-tool catalogs, three root inputs and three real checker
+  subprocess cases passed. Normal readiness remains 2 / BLOCKED. Fourteen
+  input hashes unchanged. Evidence:
+  `logs/tests-catalogs-75cd-cec3f126a25742d9808b404669c235d5/summary.json`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md),
+  [decision sheet](docs/BETA_GO_NO_GO.md) and [status](docs/status.md) with
+  supplied draft `75cdf51c7c`, finished `2026-11-02T12:58:17`: clean
+  195-second build `943fc4631acf2c13`; OFF selftest 6000 wall / 5106
+  logical frames, 202 good restores, zero bad, 447 comparisons with zero
+  mismatches and 101/101 wrong-input divergences. OFF same-PC pair: 6000
+  live/logical frames, 199 hashes each, zero mismatches/NETDESYNC,
+  FPS 47.7/47.7, stalls 0/143 (0/5951 ms), displayed-frame p99
+  168.7/117.7 ms, delay 3. Supplied, not reproduced here. Versus
+  `09fb6191e9`, host FPS stayed the same, join FPS fell and both p99 values
+  fell. Join stalls rose while total stall time fell. Restore-and-resim
+  maximum rose from 19.14/63.48 to 254.37/77.48 ms. No cause or usable
+  pacing is established.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Pad navigation remains absent;
+fullscreen inheritance and offline spawn-failure cleanup are unexecuted
+source observations. Failed scanner termination, interruption inside one
+write and unobserved descendants remain unproved. Existing long aggregates
+and the whole-tree beta checker were not rerun.
+
+Owner-only next step: provide the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices, then follow
+[actual launcher acceptance](docs/RELEASE_PATH_B.md) in the authorized
+environment: responsive App/process identity, exit/reopen/settings, licence
+cancel/accept and portable build/play/return. Python alone is insufficient.
+Capture both full logs and effective settings before investigating the
+254.37 ms host maximum. GUI, Python suites, packagers, build, game and
+network helpers stayed **UNRUN here**. A same-PC pair does not replace two PCs.
+
+Area agents: `launcher_entry_75cd`, `tests_catalogs_75cd`,
+`supplied_verify_75cd`, `portable_candidate_75cd`, `python_tk_75cd`,
+`settings_process_75cd`, `controller_ui_75cd`, `offline_flow_75cd`,
+`licence_inputs_75cd`, `source_privacy_75cd`, `player_payload_75cd`,
+`corresponding_source_75cd`, `effective_profile_75cd`, `two_pc_pacing_75cd`,
+`scanner_gaps_75cd`, `integrated_launcher_75cd`. All read AGENTS.md; only
+starter and tests/catalog agents ran entries. Root owns all four document
+changes; editing ownership was exclusive. Originals and a 347-file baseline
+are retained under `logs/release-75cd-7f84cc757b614439b3704f039548478f/`.
+Combined actual readiness evidence is `combined-entry/summary.json` there;
+it records the entry result and source hashes. Separate reviewer
+`final_diff_review_75cd` owns `final-review/` there; its report records final
+diff review and independent entry verification. Neither check can establish
+App acceptance. No Git command, deletion, outside-tree read, build, game,
+forbidden helper, server, push or release ran here.
+
 ## Current blocker and supplied verification 09fb6191e9
 
 Release remains **NO-GO**. Actual App startup and portable first-run remain

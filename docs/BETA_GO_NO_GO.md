@@ -9,25 +9,27 @@ player's own Tekken 4 USA v1.00 ISO (SLUS-20328). No lobby, ranked mode or
 matchmaking. Release as a beta pre-release. No build or game was run in this
 source-only copy, and no two-PC pass was supplied.
 
-Latest supplied owner verification finished `2026-11-02T12:45:15`: draft
-`09fb6191e9`, merge base `8b15202341` (branch base `7992837fc3`), onto
-`us-slus20328` at `c17fd979ca`; clean merge, build OK in 226 seconds,
+Latest supplied owner verification finished `2026-11-02T12:58:17`: draft
+`75cdf51c7c`, merge base `8b15202341` (branch base `7992837fc3`), onto
+`us-slus20328` at `c17fd979ca`; clean merge, build OK in 195 seconds,
 build ID `943fc4631acf2c13`, experimental switches OFF. The self-test reported
 6000 wall / 5106 logical frames, 202 good restores, zero bad restores and
 zero mismatches in 447 resim frame comparisons; all 101 wrong-input checks
 diverged. The simulated 150 ms RTT, 5 ms jitter, 3% loss pair on one PC
 reached live/logical 6000 on both peers, with 199 hash comparisons and zero
-mismatches each, and no NETDESYNC lines. Run-average FPS was 47.7/47.8
-(host/join); displayed-frame p99 was 175.1/120.7 ms. Host/join stalls were
-0/138 (0/6526 ms), and restore-and-resim maximum was 19.14/63.48 ms.
+mismatches each, and no NETDESYNC lines. Run-average FPS was 47.7/47.7
+(host/join); displayed-frame p99 was 168.7/117.7 ms. Host/join stalls were
+0/143 (0/5951 ms), and restore-and-resim maximum was 254.37/77.48 ms.
 Both endpoints reported actual delay 3.
 See [switch evidence](ONLINE_SWITCH_EVIDENCE.md) for the detailed supplied
 summary. These results support the covered state checks; they do not
 establish playable internet Versus, a 15-minute two-PC pass, actual App
 startup, or acceptance of this working tree. This verification was not
-reproduced here. Both run-average FPS values fell from 48.0/48.1 in the preceding
-supplied report (`628d969cdd`); both displayed-frame p99 values rose.
-Join stalls and total stall time increased; actual delay remained 3.
+reproduced here. Host run-average FPS stayed at 47.7 and join fell from 47.8
+to 47.7 versus the preceding supplied report (`09fb6191e9`); both
+displayed-frame p99 values fell. Join stalls increased, while total stall
+time decreased. Restore-and-resim maximum rose from 19.14/63.48 ms;
+actual delay remained 3.
 The summaries do not establish why or prove usable pacing.
 
 The launcher profile differs from that OFF run: `launcher/t4core.py` clears
@@ -41,7 +43,7 @@ evidence for the exact launcher profile before approving it for release.
 
 - Exact candidate version, reviewed source revision, build IDs on both PCs,
   input locks, zip SHA-256 and matching source export. Rebuild changed source;
-  the supplied `09fb6191e9` results do not validate this working tree.
+  the supplied `75cdf51c7c` results do not validate this working tree.
 - Resolved VU1 generator provenance/licence and dependency notices/source
   offers; reviewed Microsoft terms and pinned payload lock. No Microsoft
   sysroot in the zip. See [RELEASE_PATH_B.md](RELEASE_PATH_B.md).
