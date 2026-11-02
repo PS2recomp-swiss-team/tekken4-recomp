@@ -1,5 +1,137 @@
 # T4 beta progress, 2026-11-03
 
+## Current: test replay before an already-selected time-sync correction
+
+Latest supplied real verify finished 2026-11-03T00:21:54. REPLAY_BATCH acted:
+ON host/join rollbacks 381/834, replay frames 751/2818, mean depth 1.97/3.38.
+Join/host rollback ratio 2.19 and replay ratio 3.75 remain unequal. Join OFF
+-> ON replay fell 3768 -> 2818, but >34 ms frames rose 379 -> 448. Combined
+stall+sync+BATCH category time on join rose 6535 -> 12073.445 ms. Most batch
+calls were early, so this sum does NOT prove extra wall time. OFF host is
+truncated; aggregate OFF/ON improvement cannot be established. Keep batching
+default-off. No supplied build ID/executable hash identifies this latest run.
+Earlier history already contains newer IDs than 943fc4631acf2c13; no current
+executable identity is proved by that historical observation.
+
+Done: 24 separate area agents read AGENTS.md/current progress and inspected
+source/evidence, all read-only. Safe inventory found eight .log files, all
+ZIP/scanner output; no rb_frames or host/join/arrival/transport chronology.
+No reparse point was traversed or outside-tree location opened. Requested
+paired first arrivals, advantage sequence and first-wait order remain UNKNOWN.
+No fixed host/join runtime defect was established. Latest ON join's 89 sync
+corrections versus host's 3 means its controller repeatedly estimated it ahead;
+more waiting does not mean it was behind. Excess join stall+sync 4441 ms nearly
+matches excess host rebases 4409 ms, without identifying the initiating cause.
+
+One new bounded hypothesis: a mismatch confirmed during the final early sleep
+can wait through a selected 16-67 ms time-sync correction before late replay.
+This delays correcting the state and may amplify publication/rollback burden.
+This is a source ordering opportunity, NOT an established cause of the ratio.
+Only 57/834 latest join rollbacks were late; overlap with corrections may be
+small. Existing correction sleep also lets confirmations arrive before replay;
+replaying sooner can INCREASE repeated replay. Actual overlap and net benefit
+must be measured. Earlier startup/controller/rebase/early/headroom/publication/
+flush/atomic/batch experiments are not promoted or repeated as this candidate.
+
+Root changed only runtime/tekken4_rollback_overrides.cpp for behavior, behind
+default-off literal TEKKEN4_NET_REPLAY_BEFORE_SYNC=1. At an actually eligible
+correction, BOTH arms nonconsumingly inspect the same confirmed interval.
+OFF applies the existing selected correction immediately. ON, only with a
+confirmed mismatch and valid snapshot, consumes that mismatch and starts the
+ordinary late rollback first. Store the exact selected frame, frontier, lead,
+duration and settling-frame count in host-only state. Mark lastLiveFrame on
+return so replay never takes another filter sample or selects another wait.
+After npEndResim restores the live scheduler at matching catch-up f, clear the
+pending flag and apply that saved correction once, before any later scan.
+Failure to start rollback clears pending state and applies normally. No new
+wait duration, input sampling policy, wire layout or guest snapshot data added.
+On pending catch-up, retain the saved pre-sleep frontier unless the existing
+explicit REFRESH_RC guard is enabled, just as in the immediate ordering.
+Controller resets/accounting share the original application body, preserved
+byte-for-byte in npApplyTimeSync. Normal post-sleep RTT still sets the hold.
+OFF adds observations, scan locks and diagnostics; zero timing overhead is not
+claimed. This is an ordering test, not a claim the asymmetry has been fixed.
+
+Both arms append NETREPLAYSYNC to the same retained NETSUMMARY line:
+replay_before_sync, time_sync, eligible (selected correction opportunities),
+mismatch (opportunities with a confirmed mismatch), deferred, applied, pending,
+deferred_us/applied_us (selected durations, not extra waits), delay_ms/max_delay_ms
+(selection to application START, including replay and intervening work), last_f
+and last_from (last deferred correction). These are decision counts, not arrivals.
+DIAG=1 emits NETREPLAYSYNC_EVENT for each selected opportunity in both arms,
+with shared steady-clock selection time, slot, f, rc, mismatch/from/snapshot_ok,
+deferred, adv and give_us. With no mismatch, from is the unsigned sentinel.
+ON NETREPLAYSYNC_APPLY marks application start; the existing NETFULLSYNC_EVENT
+or NETSUBFRAME_EVENT then records the actual sleep and unchanged chosen give.
+For a deferred correction rc_before is the saved SELECTION frontier, not a
+fresh measurement at sleep start; rc_after is current after the sleep.
+The new delay_ms is NOT another wait total and must not be added to workload.
+Existing restore+resim cost excludes the correction sleep in either ordering.
+
+VERIFY_ENV.txt is one ASCII line plus LF, no BOM:
+TEKKEN4_NET_REPLAY_BEFORE_SYNC=1
+
+Open / owner-only REAL-ENTRY TEST: stage/build these exact reviewed runtime
+bytes and run actual paired Mode::Net games OFF/ON through the external verify
+wrapper. It must forward VERIFY_ENV.txt via -Env; net_pair does not read it.
+Set common settings in BOTH arms, outside the ON-only file:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+Keep RBSTART=600, TIMESYNC=1, normal 20-sample filter, RB_MODE unset/net,
+RTT150/jitter5/loss3, 6000 frames; all previous experiments equal/off,
+especially REPLAY_BATCH, ATOMIC_INPUT, FULL_SYNC, SUBFRAME_SYNC, FAST_SYNC,
+EARLY_DEADLINE and PRED_HEADROOM. Retain full paired runtime/transport logs,
+effective params and stdout/stderr. Compare reviewed/staged SHA-256, refresh
+identity, retain SHA-256 of each launched executable, and avoid explicit BUILD
+overrides. Build identity hashes staged inputs, not executable bytes. Same RNG
+seeds do not ensure identical frame-level delivery between arms.
+
+Require OFF replay_before_sync=0, deferred=applied=pending=0 and selected
+opportunity events. Require ON literal banner, replay_before_sync=1 and
+0 < deferred=applied <= mismatch <= eligible, pending=0 on normal final,
+deferred_us=applied_us, and matching selection/application/sleep events at the
+same f with the same give_us. Require at most one filter sample/selected correction per live f,
+valid restored snapshots and unchanged scheduler restoration. Zero/tiny overlap
+weakens this candidate as a major cause; zero deferred means unexercised.
+Compare absolute aggregate replay/depth, repeated replay, combined waits, FPS
+and frame tails; a ratio improved by worsening the other side is no success.
+Require zero hashes mismatching/NETDESYNC, repeat same roles, swap roles and
+then two physical PCs. Keep default-off; release acceptance remains OPEN.
+
+Ran: tests_catalogs ran actual tools/check_online_catalogs.ps1, exit0: both
+23-tool catalogs, three root inputs and Host/Join dependencies present. This
+is inventory only. No existing test entry runs paired npBoundary; SELFTEST
+bypasses it. Root compared extracted correction body against retained original
+and checked encoding/env bytes. These are SOURCE CHECKS, not runtime tests.
+Compilation, switch activation, correction preservation, safety, timing and
+performance are UNRUN: AGENTS.md forbids builds, games and tools/net_* here.
+No changed runtime entry ran. This candidate does NOT meet the real-entry-test
+requirement yet. Only the owner's actual paired game verify can close it.
+
+Original bytes of source/progress/env are retained under
+logs/runtime-replay-before-sync/originals. Root alone edits these three files;
+all agents are read-only. No Git, outside-tree access, deletion, patch edit,
+build, game, forbidden helper, server, push or release was performed.
+
+Area agents: pair_log_inventory, verify_metrics, timesync_estimate,
+timesync_filter, prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+experiment_gate reviewed the design, required preserving the selected correction
+and once-live markers, and warned that earlier replay can lose confirmations.
+Separate final reviewer final_diff_review_replay_before_sync completed the
+three-file review with no remaining source blocker. It caught and root fixed
+an implicit frontier refresh in ON; both arms now retain pre-sleep rc unless
+REFRESH_RC is enabled. Reviewer checked OFF policy, nonconsuming scan, snapshot
+validation, pending lifetime, once-live markers, scheduler restoration, exact
+correction body, summary formats, env bytes and retained history. Source review
+only: activation, runtime safety and benefit remain unproved.
+Reviewed runtime SHA-256:
+91b23bb7f8adb7fa6007cc18cade1b2383a18114f1d7a7d965d79861cfc541fd
+
+# T4 beta progress, 2026-11-03
+
 ## Current: test bounded confirmation batching before replay
 
 Latest supplied verify finished 2026-11-02T23:57:30. ATOMIC_INPUT enabled
