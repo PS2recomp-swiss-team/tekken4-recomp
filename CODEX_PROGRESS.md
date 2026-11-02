@@ -1,5 +1,80 @@
 # T4 beta progress, 2026-11-02
 
+## Current continuation: headroom still needs its first real paired result
+
+Latest owner-supplied excerpt: draft de203b767d, clean merge, build completed
+in 249 s, printed build ID 559637893924db84. This supersedes the old unchanged
+943fc4631acf2c13 concern. The excerpt stops at switches-OFF SELFTEST: 1800 wall
+and logical frames, zero rollbacks, restores, replay comparisons and wrong-input
+passes. No paired result, ON activation or effective selftest settings were
+supplied. A completed build and this zero-work summary do not prove rollback
+restore/replay or the pending headroom experiment. No new improvement is claimed.
+
+Done this continuation: 24 independent read-only area agents reviewed evidence,
+runtime scheduling, transport and test coverage. Exactly eight .log files are
+present, all ZIP scanner outputs. No host/join runtime or transport pair logs
+are available here. Exact first-arrival times, sustained frame advantage and
+chronological wait order remain unknown. No outside-tree path was opened.
+The latest meaningful paired summary remains the EARLY_DEADLINE comparison
+recorded below; no new PRED_HEADROOM comparison has been received.
+
+No new runtime code or switch was added. Keep the existing single hypothesis:
+releasing the prediction wait at its minimum frontier leaves the ahead peer
+near the prediction cap; repeated deep replay then delays its next fresh
+input. Existing PRED_HEADROOM requests up to two extra confirmations before
+late replay. It is a pending experiment, not a fix or a proven root cause.
+Replacing it before its real result would leave another hypothesis untested.
+The time-sync sign is consistent with the measured-ahead peer waiting; source
+review found no host/join sign inversion or count-only explanation. Sampling
+and sending precede sync/prediction waits, but replay delays the NEXT sample.
+
+VERIFY_ENV.txt is unchanged and still contains exactly:
+TEKKEN4_NET_PRED_HEADROOM=1;TEKKEN4_NET_DIAG=1
+
+Correction to earlier selftest wording below: the absent outer verify wrapper's
+mode is unknown. Source dispatches RB_MODE=test to testBoundary, selfnet to
+netBoundary, and net to npBoundary. Both test modes bypass the changed netplay
+entry. The in-tree perf_rb_check.ps1 uses test. Do not infer the supplied run's
+mode, or claim the runtime experiment was exercised, from the SELFTEST label.
+Retain effective mode/start/every/depth settings and full output to explain the
+zero-work selftest. That is a separate coverage gap from paired netplay proof.
+
+Open / owner-only: build the exact staged candidate in the authorized checkout
+and run the real same-build OFF/ON paired netplay entry, repeating same-role
+runs. Pass the file line via common -Env; net_pair does not read this file.
+Use DIAG=1 in BOTH arms; change only PRED_HEADROOM. Keep other experiments,
+including SIM_SAFE_WAIT, equal. Require both ON peers' literal activation and
+pred_headroom=1, plus increasing headroom waits/completions, meaningful elapsed
+wait and frontier movement on the burdened peer. Zero actions leaves it untested.
+Retain full paired runtime/transport logs, effective parameters and stdout/stderr.
+Compare absolute replay work/depth, combined stall/sync time, FPS and frame tails
+on BOTH peers. Fewer rollbacks on one side or a smaller ratio alone is no win.
+Input packet age includes resends and cannot establish unique first arrivals.
+The extra wait is frame-bounded, not wall-time-bounded; a live but stalled peer
+can keep it waiting. Safety and pacing therefore need the actual paired run.
+
+Other source findings do not establish the cause: the simulator's existing
+SIM_SAFE_WAIT switch avoids an unlocked deque-reference hazard; synchronous
+logging and hash-slot waits can delay input production. Do not silently combine
+those experiments with headroom. Paired chronology is needed to distinguish
+initial lead from workload amplification. No source audit substitutes for it.
+
+Ran: tests_catalogs executed the actual tools/check_online_catalogs.ps1, exit 0;
+both 23-tool catalogs and three root inputs present, Host/Join dependencies
+present. This proves inventory only. Compilation, launcher/game startup,
+selftest and real paired runtime-entry checks remain UNRUN here under AGENTS.md.
+No runtime behavior change from this continuation needs claiming as tested.
+
+Agents: pair_evidence, input_arrivals, timesync_sign, timesync_filter,
+wait_order, prediction_budget, vblank_pacing, startup_roles, transport_poll,
+resend_order, input_sampling, peer_feedback, resim_cost, state_ring,
+mismatch_detection, coalescing, clock_domains, simulation_bias,
+diag_contention, frontier_refresh, switch_route, build_identity,
+tests_catalogs, experiment_gate. Separate final reviewer:
+final_diff_review_continuation. Root alone edits this record; area agents
+are read-only. No Git command, build, game, forbidden helper, patch edit,
+deletion, server, push or release ran this continuation.
+
 ## Current: prediction-wait headroom after the real EARLY_DEADLINE comparison
 
 Latest owner-supplied verify: draft 9e442d7e74, build bbf39286af338c8e,
