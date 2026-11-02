@@ -92,6 +92,7 @@
 // TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
 // TEKKEN4_NET_SUBFRAME_SYNC=1  correct filtered leads of 0.25..<1 frame with fractional waits (default off).
 // TEKKEN4_NET_FULL_SYNC=1  give up the measured lead from 1 frame, capped at four, without whole-frame rounding (default off).
+// TEKKEN4_NET_ATOMIC_INPUT=1  recheck a missing remote input and select its prediction under one lock (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
 // TEKKEN4_STATE_PROBE=1    read-only live-boundary discovery log (requires a rollback mode; docs/DIRECTFIGHT_T4.md).
@@ -1153,6 +1154,10 @@ namespace tekken4_rollback
         bool fastSync = false;
         bool subframeSync = false;
         bool fullSync = false;
+        bool atomicInput = false;
+        // Input-selection race observations; host-only, split by live/replay execution, never restored.
+        uint64_t inputMisses[2]{}, inputRecovered[2]{}, inputAdvanced[2]{}, inputAheadFrontier[2]{},
+                 inputFutureFallbacks[2]{};
         // Whole-lead duration experiment; host-only opportunities/actions in both arms, never restored.
         uint64_t fullSyncEvals = 0, fullSyncActions = 0, fullSyncChanged = 0, fullSyncLastFrame = 0;
         double fullSyncRequestedMs = 0, fullSyncLegacyMs = 0, fullSyncActualMs = 0, fullSyncLastAdv = 0;
@@ -1523,10 +1528,37 @@ namespace tekken4_rollback
         bool predicted = false;
         if (!t4net::remote(static_cast<uint32_t>(g), &remote))
         {
-            predicted = true;
-            const uint32_t rc = t4net::remoteContig();
-            if (rc == 0 || !t4net::remote(rc - 1u, &remote))
-                remote = t4net::PadInput{};
+            const size_t pass = g_np.resim ? 1u : 0u;
+            ++g_np.inputMisses[pass];
+            uint32_t rc = 0;
+            if (g_np.atomicInput)
+            {
+                predicted = !t4net::remoteOrPredict(static_cast<uint32_t>(g), &remote, &rc);
+                if (!predicted)
+                    ++g_np.inputRecovered[pass];
+            }
+            else
+            {
+                predicted = true;
+                rc = t4net::remoteContig();
+                if (rc == 0 || !t4net::remote(rc - 1u, &remote))
+                    remote = t4net::PadInput{};
+                else if (static_cast<uint64_t>(rc - 1u) > g)
+                    ++g_np.inputFutureFallbacks[pass];
+            }
+            if (static_cast<uint64_t>(rc) > g)
+            {
+                ++g_np.inputAdvanced[pass];
+                if (static_cast<uint64_t>(rc - 1u) > g)
+                    ++g_np.inputAheadFrontier[pass];
+                // Both transport calls have released their locks. This is decision time, not first arrival.
+                if (g_np.diag)
+                    std::fprintf(g_log, "NETATOMICINPUT_EVENT steady_ms=%.3f slot=%d g=%" PRIu64
+                                        " replay=%d atomic_input=%d rc=%u confirmed=%d\n",
+                                 std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                 g_np.slot, g, g_np.resim ? 1 : 0, g_np.atomicInput ? 1 : 0, rc, predicted ? 0 : 1);
+            }
         }
         const uint32_t i = static_cast<uint32_t>(g % kHist);
         g_np.used[i] = remote;
@@ -1930,10 +1962,19 @@ namespace tekken4_rollback
                      g_np.subframeLastFrame, g_np.subframeLastAdv);
         std::fprintf(g_log, "; NETFULLSYNC full_sync=%d time_sync=%d eligible_actions=%" PRIu64
                             " actions=%" PRIu64 " changed_actions=%" PRIu64 " requested_ms=%.3f legacy_ms=%.3f"
-                            " actual_ms=%.3f last_eligible_f=%" PRIu64 " last_eligible_adv=%.6f\n",
+                            " actual_ms=%.3f last_eligible_f=%" PRIu64 " last_eligible_adv=%.6f",
                      g_np.fullSync ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.fullSyncEvals, g_np.fullSyncActions,
                      g_np.fullSyncChanged, g_np.fullSyncRequestedMs, g_np.fullSyncLegacyMs, g_np.fullSyncActualMs,
                      g_np.fullSyncLastFrame, g_np.fullSyncLastAdv);
+        std::fprintf(g_log, "; NETATOMICINPUT atomic_input=%d misses_live=%" PRIu64 " misses_replay=%" PRIu64
+                            " recovered_live=%" PRIu64 " recovered_replay=%" PRIu64
+                            " advanced_live=%" PRIu64 " advanced_replay=%" PRIu64
+                            " ahead_frontier_live=%" PRIu64 " ahead_frontier_replay=%" PRIu64
+                            " future_fallbacks_live=%" PRIu64 " future_fallbacks_replay=%" PRIu64 "\n",
+                     g_np.atomicInput ? 1 : 0, g_np.inputMisses[0], g_np.inputMisses[1],
+                     g_np.inputRecovered[0], g_np.inputRecovered[1], g_np.inputAdvanced[0], g_np.inputAdvanced[1],
+                     g_np.inputAheadFrontier[0], g_np.inputAheadFrontier[1],
+                     g_np.inputFutureFallbacks[0], g_np.inputFutureFallbacks[1]);
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
                          g_frame, g_np.catchupRebases, g_np.catchupDebtMs);
@@ -2037,6 +2078,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_SUBFRAME_SYNC=1: fractional waits for filtered leads 0.25..<1 frame\n");
         if (g_np.fullSync)
             std::fprintf(g_log, "NET TEKKEN4_NET_FULL_SYNC=1: continuous measured lead from 1 frame, cap 4; settling hold rounds up\n");
+        if (g_np.atomicInput)
+            std::fprintf(g_log, "NET TEKKEN4_NET_ATOMIC_INPUT=1: locked exact-input recheck and held prediction\n");
     }
 
     void npBootRendezvous(uint64_t f)
@@ -2581,6 +2624,8 @@ namespace tekken4_rollback
             g_np.subframeSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_FULL_SYNC"))
             g_np.fullSync = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_ATOMIC_INPUT"))
+            g_np.atomicInput = std::strcmp(v, "1") == 0;
         g_np.leadWindow = g_np.fastSync ? 8 : NetplayState::kLeadWin;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCKDELAY"); v && *v && std::strcmp(v, "auto") != 0)
             g_np.lockDelaySetting = std::max(0, std::min(kMaxLockDelay, std::atoi(v)));

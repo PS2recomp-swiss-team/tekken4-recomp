@@ -112,6 +112,9 @@ namespace t4net
     bool local(uint32_t frame, PadInput *out);
     uint32_t localMax();      // local inputs known for frames < this
     bool remote(uint32_t frame, PadInput *out);
+    // Recheck exact input and choose a held prediction under one lock. Always fills out/contig;
+    // true means exact confirmed input, false means the last confirmed input at/before frame (or neutral).
+    bool remoteOrPredict(uint32_t frame, PadInput *out, uint32_t *contig);
     uint32_t remoteContig();  // the peer's inputs are known for every frame < this
     uint32_t peerAck();       // the peer has our inputs for frames < this
     // Waits until the peer's input for `frame` is here, the session is lost, or ms passed (UINT32_MAX = no limit

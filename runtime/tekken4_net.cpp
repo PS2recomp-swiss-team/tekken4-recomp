@@ -1446,6 +1446,27 @@ namespace t4net
         return true;
     }
 
+    bool remoteOrPredict(uint32_t frame, PadInput *out, uint32_t *contig)
+    {
+        State &s = S();
+        std::lock_guard<std::mutex> lk(s.mu);
+        *contig = s.remoteContig;
+        *out = PadInput{};
+        if (frame < s.remoteContig && s.remote.inTag[frame % kRing] == frame + 1)
+        {
+            *out = s.remote.in[frame % kRing];
+            return true;
+        }
+        // Reception cannot advance between the exact lookup and this fallback. Never borrow a future input.
+        if (s.remoteContig > 0 && s.remoteContig <= frame)
+        {
+            const uint32_t last = s.remoteContig - 1u;
+            if (s.remote.inTag[last % kRing] == last + 1)
+                *out = s.remote.in[last % kRing];
+        }
+        return false;
+    }
+
     uint32_t remoteContig()
     {
         State &s = S();

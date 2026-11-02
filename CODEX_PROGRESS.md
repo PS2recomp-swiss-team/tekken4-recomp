@@ -1,5 +1,125 @@
 # T4 beta progress, 2026-11-02
 
+## Current: test the remote-input selection race
+
+Latest supplied verify finished 2026-11-02T23:38:53. FULL_SYNC really acted:
+ON host/join changed_actions=1/59. Combined OFF -> ON rollbacks 1263 -> 1279
+(+1.3%), replay frames 4223 -> 4349 (+3.0%), stall+sync waits 6635 -> 7455 ms
+(+12.4%). Join/host rollback ratio stayed about 3.0. The correction-duration
+hypothesis is weakened; FULL_SYNC stays default-off and is not repeated.
+Latest excerpt gives no build ID. The previous supplied ID f682731375e32a72
+already superseded the old 943fc4631acf2c13 concern, but neither an ID nor
+these summaries proves which executable bytes ran in the latest comparison.
+
+Done: 24 independent area agents read AGENTS.md and source/evidence. Safe
+inventory found eight .log files, all scanner/catalog output, and no rb_frames
+or host/join runtime pair chronology. No outside-tree location was opened.
+We could not read the requested last-verify pair logs because they are absent.
+Unique input first-arrival times, advantage sequence and first-wait order
+remain unknown. Join accumulated the waits; that does not establish the
+initiating cause. Rebase gaps again nearly equal excess join waits:
+OFF 6623 vs 6635 ms; ON 7419 vs 7421 ms. No fixed role or time-sync sign bug
+was found. Prior controller, publication, early, startup, flush and headroom
+experiments are not repeated.
+
+One new source hypothesis: npDecideInputs separately locks remote(g),
+remoteContig(), then remote(rc-1). If reception advances between the first
+two calls, exact g is now available but the fallback may take a later frame's
+input and mark g predicted. A later mismatch can then cause avoidable replay.
+The race exists in the source; its frequency and role in the imbalance are
+UNKNOWN. Its window is small. It may explain little or none of this workload.
+An advanced frontier or recovered classification does not prove pad bytes
+differed, and cannot by itself establish a performance benefit.
+
+Root changed runtime/tekken4_net.cpp, runtime/tekken4_net.h and
+runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_ATOMIC_INPUT=1. After the existing initial exact-input miss, ON
+rechecks exact g and selects a held prediction under one transport mutex.
+It returns confirmed only when g is below the contiguous frontier and its
+ring tag matches. Otherwise it holds rc-1 only when 0 < rc <= g and the tag
+matches, or returns neutral. It never chooses a future frame. OFF retains
+the original input-selection calls and predicted classification. Added
+counters/logging affect execution time in both arms; zero overhead is not
+claimed. No input sampling, wire, guest snapshot, time-sync or wait policy
+was changed. All new counters are host-only and survive guest restores.
+
+Both arms append NETATOMICINPUT to the same retained NETSUMMARY line:
+atomic_input; misses_live/replay (initial exact lookup failures);
+recovered_live/replay (ON locked recheck found exact input);
+advanced_live/replay (frontier after initial miss is now > g);
+ahead_frontier_live/replay (frontier-1 > g, a future fallback target);
+future_fallbacks_live/replay (OFF actually selected that future target).
+Live/replay count execution decisions, including repeated executions, not
+unique input arrivals. ON future_fallbacks must stay zero. A recovery at
+rc=g+1 only changes confirmation classification versus the old coherent
+fallback; it need not change input bytes. With DIAG=1, advanced cases emit
+NETATOMICINPUT_EVENT with common steady timestamp, slot, g, replay, switch,
+rc and confirmed. Events occur after locks release; they are decision times,
+not first-arrival timestamps. No pad contents or network addresses are logged.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_ATOMIC_INPUT=1
+
+Open / owner-only real-entry test: stage/build these exact three runtime
+files, refresh identity, and run actual paired Mode::Net games OFF/ON through
+the external verify wrapper. It must forward VERIFY_ENV.txt via -Env;
+net_pair does not read the file itself. Keep these common settings in BOTH
+arms, not only the ON-only file:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+Keep RBSTART=600, TIMESYNC=1, normal 20-sample filtering, RB_MODE unset/net,
+RTT 150/jitter 5/loss 3 and 6000 frames. All other experiments equal/off,
+especially FULL_SYNC, SUBFRAME_SYNC and FAST_SYNC. Retain full paired
+rb_frames and transport logs, effective params, stdout/stderr, exact reviewed
+and staged runtime SHA-256 hashes, launched executable SHA-256 and build ID.
+The build ID hashes staged inputs, not the executable. Same simulator seeds
+do not guarantee identical per-frame conditions when datagram counts differ.
+
+Require OFF atomic_input=0 and recovered_live/replay=0; ON literal activation,
+atomic_input=1, recovered_live+recovered_replay > 0 with matching confirmed=1
+events, and future_fallbacks_live/replay=0. In ordinary retained histories,
+ON advanced counts should equal recovered counts. Inspect ahead_frontier and
+OFF future_fallback counts separately from classification-only recoveries.
+Zero recovered actions means the changed race path was not exercised; tiny
+counts strongly weaken it as the main explanation. Even many recoveries
+without lower absolute aggregate replay/depth and acceptable combined waits,
+FPS and frame tails do not establish benefit. Do not accept a nicer ratio
+produced by worsening the other side. Require zero hash mismatches/NETDESYNC,
+repeat same-role runs, then swap roles and use two physical PCs. Keep this
+candidate default-off until actual proof; release acceptance stays open.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+Inventory only. No existing test_* entry exercises Mode::Net; SELFTEST
+bypasses npBoundary and cannot test this race. No mock/model/source assertion
+is counted as runtime proof. Source byte checks found LF-only runtime files,
+exact env bytes and retained history. Compilation, literal activation, race
+frequency, replay safety and performance remain UNRUN here: AGENTS.md forbids
+builds, games and tools/net_* execution. No changed runtime entry ran. This
+candidate has NOT met the real-entry test requirement; only the owner's
+actual paired game verify can close it. No passing runtime test is claimed.
+
+Original bytes of the five edited files are retained under
+logs/runtime-atomic-input/originals. Root alone edits; all area agents are
+read-only. No Git command, outside-tree read, deletion, patch change, build,
+game, forbidden helper, server, push or release was used.
+
+Area agents: pair_logs, verify_metrics, timesync_estimate, timesync_filter,
+prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+experiment_gate found no source-design blocker, while requiring real action
+counts and explicitly rejecting an established causal or performance claim.
+Separate final reviewer: final_diff_review_atomic_input completed the five-file
+diff against retained originals with no blocking source issue. It checked OFF
+selection equivalence, ON atomic exact/tag/frontier and fallback bounds,
+live/replay counters, format arguments, literal Mode::Net routing, summary
+retention, exact environment bytes, LF-only runtime and unchanged history
+suffix. This is source review only; no changed runtime entry was executed.
+
+# T4 beta progress, 2026-11-02
+
 ## Current: test continuous correction of whole-frame lead
 
 Latest supplied verify finished 2026-11-02T23:20:40, build in 180 seconds,
