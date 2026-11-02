@@ -1,5 +1,76 @@
 # T4 beta progress, 2026-11-02
 
+## Current blocker and supplied verification 09fb6191e9
+
+Release remains **NO-GO**. Actual App startup and portable first-run remain
+the most valuable open item. Sixteen agents checked independent release
+areas; the complete candidate, private Python/Tk, dependencies, reviewed
+locks/notices and portable marker are still absent. App initialization also
+discovers locations outside this permitted tree. No production or test code
+changed: no local App fix could receive the required real-entry proof.
+
+Done:
+
+- Actual [starter test](tools/test_launcher_entry.ps1): test exit 0; real
+  `Tekken4.cmd` exit 1 for missing private Python. Empty stderr, three input
+  hashes unchanged. **The App never started.** Evidence:
+  `logs/launcher-09fb-52e20bc58280454bbb4a81555edfb12e/summary.json`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): both exit 0, empty
+  stderr; two 23-tool catalogs, three root inputs and three real checker
+  subprocess cases passed. Normal readiness remains 2 / BLOCKED. Fourteen
+  tracked input hashes unchanged. Evidence:
+  `logs/tests-catalogs-09fb-a5ea4763d5884825aed02f22b8bb6638/summary.json`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md),
+  [decision sheet](docs/BETA_GO_NO_GO.md) and [status](docs/status.md) with
+  supplied draft `09fb6191e9`, finished `2026-11-02T12:45:15`: clean
+  226-second build `943fc4631acf2c13`; OFF selftest 6000 wall / 5106
+  logical frames, 202 good restores, zero bad, 447 comparisons with zero
+  mismatches and 101/101 wrong-input divergences. OFF same-PC pair: 6000
+  live/logical frames, 199 hashes each, zero mismatches/NETDESYNC,
+  FPS 47.7/47.8, stalls 0/138 (0/6526 ms), displayed-frame p99
+  175.1/120.7 ms, delay 3. Supplied, not reproduced here. Versus
+  `628d969cdd`, both FPS values fell, both p99 values rose, and join stalls
+  and stall time rose. No cause or usable pacing is established.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Pad navigation remains absent;
+fullscreen inheritance and offline spawn-failure cleanup are unexecuted
+source observations. Failed scanner termination, interruption inside one
+write and unobserved descendants remain unproved. Another ordinary fixture
+or source audit would not close these gates. Existing long aggregates and
+the whole-tree beta checker were not rerun.
+
+Owner-only next step: provide the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices, then follow
+[actual launcher acceptance](docs/RELEASE_PATH_B.md) in the authorized
+environment: responsive App/process identity, exit/reopen/settings, licence
+cancel/accept and portable build/play/return. Python alone is insufficient.
+GUI, Python suites, packagers, build, game and network helpers stayed **UNRUN
+here**. A same-PC pair does not replace two PCs.
+
+Area agents: `launcher_entry_09fb`, `tests_catalogs_09fb`,
+`supplied_verify_09fb`, `portable_candidate_09fb`, `python_tk_09fb`,
+`settings_process_09fb`, `controller_ui_09fb`, `offline_flow_09fb`,
+`licence_inputs_09fb`, `source_privacy_09fb`, `player_payload_09fb`,
+`corresponding_source_09fb`, `effective_profile_09fb`, `two_pc_pacing_09fb`,
+`scanner_gaps_09fb`, `integrated_launcher_09fb`. All read AGENTS.md; only
+starter and tests/catalog agents ran entries. Root owns all four document
+changes; editing ownership was exclusive. Originals and a 351-file baseline
+are retained under `logs/release-09fb-6a0519e72efe495f82ff8cb2f39f441e/`.
+Combined readiness evidence belongs in `combined-entry-checked/` there; its
+summary records the actual result and input hashes. The initial checker
+capture in `combined-entry/` returned BLOCKED, but its wrapper treated the
+baseline array as one nested record and failed its difference check. A first
+correction failed validation before checker execution. Neither supports a
+hash claim. The corrected run uses the saved 351 records explicitly.
+Separate reviewer
+`final_diff_review_09fb` owns `final-review/` there; consult its report for
+the final diff review and independent entry outcome. Neither check can
+establish App acceptance. No Git command, deletion, outside-tree read,
+build, game, forbidden helper, server, push or release ran here.
+
 ## Current blocker and supplied verification 628d969cdd
 
 Release remains **NO-GO**. Actual App startup and portable first-run are
