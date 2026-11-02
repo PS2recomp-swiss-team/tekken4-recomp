@@ -1,26 +1,27 @@
 # Status
 
-_Last updated: 2026-11-02 (launcher still unrun; supplied draft 363433d330; NO-GO)_
+_Last updated: 2026-11-02 (launcher still unrun; supplied draft 5b921f859f; NO-GO)_
 
 ## Resume here
 
-- **Current launcher gate recheck:**
-  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) resumes the actual App/portable
-  gate. The [clean-PC checklist](RELEASE_PATH_B.md) now requires a visible
-  responsive App through the exact package's actual `Tekken4.cmd`, observed
-  process exit, restart, retained settings, licence cancel/accept and offline
-  play/return. These owner observations remain UNRUN; standalone and integrated
-  launcher results stay separate. Real starter refusal, both 23-tool catalogs
-  and three readiness cases passed here; normal readiness remains 2 / BLOCKED.
-  No production or test code changed. Source checks cannot prove App startup.
-  Latest supplied draft `363433d330`: clean 165-second build
-  `943fc4631acf2c13`, finished `2026-11-02T08:02:46`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/79
-  (0/2843 ms), displayed-frame p99 119.6/100.0 ms. This was not reproduced
-  here and proves neither the exact package, enabled GUI profile nor two PCs.
-  Private Python and reviewed portable inputs are absent; App ISO discovery
-  also leaves this copy. Full source/player/privacy/licence review, Python
-  suites, exact build/game and two-PC acceptance remain owner gates.
+- **Current release gate:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records eight independent area
+  reviews. Actual App/portable acceptance remains blocked: private Python,
+  reviewed input lock and portable toolchain marker are absent; App discovery
+  also leaves this copy. The [owner checklist](RELEASE_PATH_B.md) requires a
+  responsive actual App through the exact package's `Tekken4.cmd`, normal
+  exit/reopen, settings retention, licence cancel/accept and build/play/return.
+  Actual starter refusal, both 23-tool catalogs and three readiness cases
+  passed here; normal readiness remains 2 / BLOCKED. No production or test
+  code changed. The App never started; no new source test proves it.
+  Latest supplied draft `5b921f859f`: clean 165-second build
+  `943fc4631acf2c13`, finished `2026-11-02T08:17:22`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.0/52.0 FPS, stalls 0/69
+  (0/2195 ms), displayed-frame p99 105.5/99.7 ms. Not reproduced here;
+  complete-package, enabled GUI profile and two-PC proof remain absent.
+  Owner next: supply the exact reviewed complete candidate, corresponding
+  source and locked inputs/notices, then run that checklist. Full content,
+  privacy/licence, Python suites and exact build/game acceptance remain open.
 
 - **Earlier launcher acceptance gate and evidence completion:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal

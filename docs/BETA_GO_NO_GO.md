@@ -9,17 +9,17 @@ player's own Tekken 4 USA v1.00 ISO (SLUS-20328). No lobby, ranked mode or
 matchmaking. Release as a beta pre-release. No build or game was run in this
 source-only copy, and no two-PC pass was supplied.
 
-Latest supplied owner verification finished `2026-11-02T08:02:46`: draft
-`363433d330`, merge base `8b15202341` (branch base `7992837fc3`), onto
+Latest supplied owner verification finished `2026-11-02T08:17:22`: draft
+`5b921f859f`, merge base `8b15202341` (branch base `7992837fc3`), onto
 `us-slus20328` at `c17fd979ca`; clean merge, build OK in 165 seconds,
 build ID `943fc4631acf2c13`, experimental switches OFF. The self-test reported
-6600 wall / 5572 logical frames, 232 good restores, zero bad restores and
-zero mismatches in 514 resim frame comparisons; all 116 wrong-input checks
+6000 wall / 5106 logical frames, 202 good restores, zero bad restores and
+zero mismatches in 447 resim frame comparisons; all 101 wrong-input checks
 diverged. The simulated 150 ms RTT, 5 ms jitter, 3% loss pair on one PC
 reached live/logical 6000 on both peers, with 199 hash comparisons and zero
-mismatches each, and no NETDESYNC lines. Run-average FPS was 52.1/52.2
-(host/join); displayed-frame p99 was 119.6/100.0 ms. Host/join stalls were
-0/79 (0/2843 ms), and restore-and-resim maximum was 144.82/53.82 ms.
+mismatches each, and no NETDESYNC lines. Run-average FPS was 52.0/52.0
+(host/join); displayed-frame p99 was 105.5/99.7 ms. Host/join stalls were
+0/69 (0/2195 ms), and restore-and-resim maximum was 169.39/56.35 ms.
 See [switch evidence](ONLINE_SWITCH_EVIDENCE.md) for the detailed supplied
 summary. These results support the covered state checks; they do not
 establish playable internet Versus, a 15-minute two-PC pass, or acceptance
@@ -36,7 +36,7 @@ evidence for the exact launcher profile before approving it for release.
 
 - Exact candidate version, reviewed source revision, build IDs on both PCs,
   input locks, zip SHA-256 and matching source export. Rebuild changed source;
-  the supplied `363433d330` results do not validate this working tree.
+  the supplied `5b921f859f` results do not validate this working tree.
 - Resolved VU1 generator provenance/licence and dependency notices/source
   offers; reviewed Microsoft terms and pinned payload lock. No Microsoft
   sysroot in the zip. See [RELEASE_PATH_B.md](RELEASE_PATH_B.md).
