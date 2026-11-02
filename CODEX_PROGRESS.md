@@ -1,5 +1,80 @@
 # T4 beta progress, 2026-11-02
 
+## Current blocker and supplied verification 71de043320
+
+Release remains **NO-GO**. The most valuable open item is actual App startup
+and portable first-run. Sixteen independent area agents found no permitted
+local fix that could receive real App proof. Private Python/Tk, dependencies,
+reviewed locks/notices and the portable marker are absent. App initialization
+also discovers locations outside this permitted tree. Repeating source audits
+does not advance that acceptance gate; no production or test code changed.
+
+Done this session:
+
+- Actual [starter test](tools/test_launcher_entry.ps1): test exit 0, real
+  `Tekken4.cmd` exit 1 for missing private Python. Empty stderr, three hashes
+  unchanged. **The App never started.** Evidence:
+  `logs/launcher-71de-9349a19e114b4805bdeafc9d7a246004/`.
+- Actual [catalogs](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): both 23-tool catalogs,
+  three root inputs and three subprocess cases passed. Normal readiness is
+  still 2 / BLOCKED. Empty stderr; 14 hashes unchanged. Evidence:
+  `logs/tests-catalogs-71de-d322e94e0f214250ae99f3236d0f70f6/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `71de043320`,
+  finished `2026-11-02T11:34:35`: clean 188-second build
+  `943fc4631acf2c13`; OFF selftest 202 good restores, zero bad, 447 resim
+  comparisons with zero mismatches, 101/101 wrong-input divergences. OFF
+  same-PC pair: 6000 frames, 199 hashes each, zero mismatches/NETDESYNC,
+  FPS 47.5/47.6, stalls 0/130 (0/5584 ms), displayed-frame p99
+  167.1/122.8 ms, delay 3. Supplied, not reproduced here. Relative to
+  `e93f58a43b`, FPS fell and both p99 values rose; join stalls fell but
+  stall time rose, and delay changed from 2 to 3. No cause or usable pacing
+  is established. Real readiness checked both documents / 18 links:
+  exit 2 / BLOCKED, empty stderr, 14 hashes unchanged. Evidence:
+  `logs/supplied-71de-0ce441fae5ea40f28f87fcee28eea766/summary-clean.json`.
+  The first capture had module-progress stderr; only the clean rerun is used.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Pad navigation remains absent.
+Fullscreen inheritance and offline spawn-failure cleanup remain unexecuted
+source observations. Scanner termination failure, interruption inside one
+write and unobserved descendants remain unproved; another ordinary fixture
+would not establish those conditions. Unchanged long aggregates and the
+whole-tree beta checker were not rerun.
+
+Owner-only next step: supply the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices, then follow
+[actual launcher acceptance](docs/RELEASE_PATH_B.md) in the authorized
+environment: responsive App/process identity, normal exit/reopen/settings,
+licence cancel/accept, portable build/play/return. Python alone is insufficient.
+GUI, Python suites, packagers, build, game and network helpers stayed **UNRUN
+here**. A same-PC pair does not replace two PCs.
+
+Area agents: `launcher_entry_71de`, `tests_catalogs_71de`,
+`supplied_verify_71de`, `portable_candidate_71de`, `python_tk_71de`,
+`settings_process_71de`, `controller_ui_71de`, `offline_flow_71de`,
+`licence_inputs_71de`, `source_privacy_71de`, `player_payload_71de`,
+`corresponding_source_71de`, `effective_profile_71de`, `two_pc_pacing_71de`,
+`scanner_gaps_71de`, `integrated_launcher_71de`.
+Root owns this record and `docs/status.md`; editing ownership was exclusive.
+Combined actual readiness checked all four changed documents / 239 local
+links, 12 required inputs and seven parses, then ran catalogs and starter
+refusal: exit 2 / BLOCKED, empty stderr, all 350 source hashes unchanged
+during the run. Exactly four documents differ from their saved originals.
+Evidence: `logs/release-71de-6f858b2485ab4fe8ae0efcdfecc4fb17/combined-entry/`.
+An initial baseline-array setup failed before checker execution; it supplies
+no test result. Separate reviewer `final_diff_review_71de` found no blocking
+issue in the four document changes: no added/deleted source files, prior
+progress history preserved. Its independent actual readiness repeated 239
+links: exit 2 / BLOCKED, empty stderr, all 350 hashes unchanged during the run.
+Evidence is `final-review/` under the same root evidence folder. A limited
+check of changed text found no machine paths, mailboxes or IPv4 addresses;
+this is not a complete privacy scan and review does not close acceptance.
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification e93f58a43b
 
 Release remains **NO-GO**. Actual App startup and portable first-run remain
