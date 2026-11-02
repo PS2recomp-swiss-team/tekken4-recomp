@@ -137,6 +137,12 @@ a failed or missing check; do not replace a published asset or reuse a version.
    commands below are separate paths and were not run here; their presence is
    not evidence of the new cleanup behaviour.
 
+   The PowerShell entry gives its worker 120 seconds by default, configurable
+   with `-TimeoutSeconds` from 1 through 600. A timeout refuses without a
+   completed scan claim. Any partial staging remains unapproved; use a fresh
+   output directory for the next export. The worker budget excludes wrapper
+   preflight and operating-system cleanup.
+
    ```text
    python -B tools/make_public_repo.py --out release-output/player
    python -B tools/publish_source.py --ref vX.Y.Z --out release-output/source

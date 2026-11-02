@@ -50,23 +50,23 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `d56a1ab337`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 164 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T03:22:35`.
+Draft `23d21774fe`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 167 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T03:59:55`.
 This supersedes the earlier supplied verification summaries.
 
 - Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
   restores, zero bad restores, 447 resim comparisons with zero mismatches;
   all 101 deliberate wrong-input passes diverged. Save average/maximum was
-  0.19/4.42 ms; restore average/maximum was 0.27/0.42 ms.
+  0.20/4.45 ms; restore average/maximum was 0.27/0.39 ms.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 298/974, resim frames 559/3798, maximum depth 6/9;
-  prediction stalls 0/78 (0/2907 ms), time sync 0/89 (0/4400 ms).
-  Run-average FPS 52.2/52.2; final FPS windows 60.0/60.0 do not erase the
-  remaining pacing gaps. Displayed-boundary p99 was 112.9/98.8 ms.
-  Rebases were 154/111 (14943/7665 ms).
+- Host/join rollbacks 329/943, resim frames 692/3520, maximum depth 5/9;
+  prediction stalls 0/77 (0/2698 ms), time sync 1/91 (17/4333 ms).
+  Run-average FPS 52.1/52.1; final FPS windows 59.8/60.0 do not erase the
+  remaining pacing gaps. Displayed-boundary p99 was 110.3/99.4 ms.
+  Rebases were 149/118 (15072/8082 ms).
   Coalesced packets were zero on both endpoints.
 
 This is supplied evidence, not a run performed here. Full effective parameter

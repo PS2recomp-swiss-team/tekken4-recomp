@@ -1,211 +1,129 @@
-<#
+﻿<#
 .SYNOPSIS
 Stage or scan a public source tree. Never publish or change the input tree.
 .DESCRIPTION
-PowerShell 5.1 entry point. Images are omitted, patch mail headers are cleaned,
-and all selected content must pass the public scanner before anything is written.
-Use -Include with reviewed relative files/directories when the full working tree
-contains private maintainer records. A passing scan does not settle licences.
+PowerShell 5.1 supervised entry point. The worker has a 120-second deadline by
+default, including startup, operation and output collection. Wrapper preflight
+and OS cleanup are outside that deadline. A timeout discards worker output;
+any partial staging is retained, unapproved. Nothing is published.
 #>
 [CmdletBinding()]
 param(
     [string]$Source,
     [string]$Out,
     [string[]]$Include,
-    [string]$ScanOnly
+    [string]$ScanOnly,
+    [string]$TimeoutSeconds = '120'
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $workspace = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('\', '/')
-$maximumFileSize = 32MB
+$prefix = $workspace + [IO.Path]::DirectorySeparatorChar
+$failure = 'Public tree input or operation failed.'
+$proc = $null
+$started = $false
+$unrun = 'UNRUN: Python packagers and release payload checks; launcher GUI; build; game; two-PC play.'
+$retained = 'Any staging output is unapproved and retained for owner inspection. Nothing published.'
+$marker = 'PUBLIC_TREE_WORKER_COMPLETED'
 
-function Get-LocalPath([string]$Value) {
-    if ([string]::IsNullOrWhiteSpace($Value)) { throw 'A path is required.' }
-    $absolute = [IO.Path]::GetFullPath($Value).TrimEnd('\', '/')
-    if (-not ($absolute.Equals($workspace, [StringComparison]::OrdinalIgnoreCase) -or
-            $absolute.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))) {
-        throw 'Paths must stay inside this working copy.'
+function Assert-LocalWorker([string]$Path) {
+    if (-not $Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Outside working copy.' }
+    $current = $workspace
+    foreach ($part in @('') + $Path.Substring($prefix.Length).Split([IO.Path]::DirectorySeparatorChar)) {
+        if ($part) { $current = Join-Path $current $part }
+        $item = Get-Item -LiteralPath $current -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Worker reparse point.' }
     }
-    return $absolute
-}
-
-function Assert-NoLocalLink([string]$Value) {
-    $current = $Value
-    while ($current.Length -ge $workspace.Length) {
-        if ([IO.File]::Exists($current) -or [IO.Directory]::Exists($current)) {
-            if (([IO.File]::GetAttributes($current) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw 'Links and reparse points are not public tree inputs or outputs.'
-            }
-        }
-        if ($current.Equals($workspace, [StringComparison]::OrdinalIgnoreCase)) { break }
-        $current = [IO.Path]::GetDirectoryName($current)
-    }
-}
-
-function Get-RelativeName([string]$Base, [string]$Value) {
-    if (-not $Value.StartsWith($Base + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'An input escaped its source directory.'
-    }
-    return $Value.Substring($Base.Length + 1).Replace('\', '/')
-}
-
-function Assert-PublicName([string]$Name) {
-    if ([string]::IsNullOrEmpty($Name) -or $Name.Contains('\') -or $Name.StartsWith('/')) { throw 'Unsafe relative source path.' }
-    foreach ($part in $Name.Split('/')) {
-        if ($part -in @('', '.', '..') -or $part -match '[:\x00-\x1f]' -or $part.TrimEnd(' ', '.') -cne $part -or
-                $part -match '^(?i:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)') {
-            throw 'Unsafe relative source path.'
-        }
-    }
-}
-
-function Test-OmittedPath([string]$Name, [bool]$Directory) {
-    $parts = $Name.ToLowerInvariant().Split('/')
-    $omittedDirectories = @('.git', '.agents', '.codex', '.aws', 'logs', 'log', 'dist', 'build', 'out', 'external',
-        'node_modules', 'generated', 'ghidra', 'lobby', '__pycache__', '.pytest_cache')
-    $count = $parts.Length
-    if (-not $Directory) { $count-- }
-    for ($i = 0; $i -lt $count; $i++) { if ($parts[$i] -in $omittedDirectories) { return $true } }
-    if ($parts.Length -ge 2 -and (($parts[0] -eq 'docs' -and $parts[1] -eq 'img') -or
-            ($parts[0] -eq 'config' -and $parts[1] -eq 'output'))) { return $true }
-    return (-not $Directory -and ($parts[-1] -in @('claude.md', '.mcp.json', 'codex_progress.md') -or
-        $parts[-1] -match '(?i)(?:\.py[co]$|\.log(?:\.|$)|^(?:log|debug)\.txt$)'))
-}
-
-function Get-DiffOffset([byte[]]$Data) {
-    $text = [Text.Encoding]::GetEncoding(28591).GetString($Data)
-    $match = [regex]::Match($text, '(?m)^diff --git ')
-    if (-not $match.Success) { throw 'A patch has no diff boundary.' }
-    return $match.Index
-}
-
-function Assert-EqualPatchDiff([byte[]]$Original, [byte[]]$Clean) {
-    $originalOffset = Get-DiffOffset $Original
-    $cleanOffset = Get-DiffOffset $Clean
-    if ($Original.Length - $originalOffset -ne $Clean.Length - $cleanOffset) { throw 'Patch diff bytes changed.' }
-    for ($i = 0; $i -lt $Original.Length - $originalOffset; $i++) {
-        if ($Original[$originalOffset + $i] -ne $Clean[$cleanOffset + $i]) { throw 'Patch diff bytes changed.' }
-    }
+    if ($item.PSIsContainer) { throw 'Worker is not a file.' }
 }
 
 try {
-    . (Join-Path $PSScriptRoot 'public_patch_headers.ps1')
-    . (Join-Path $PSScriptRoot 'public_tree_scan.ps1')
-    if ($ScanOnly) {
-        if ($PSBoundParameters.ContainsKey('Source') -or $PSBoundParameters.ContainsKey('Out') -or
-                $PSBoundParameters.ContainsKey('Include')) { throw '-ScanOnly cannot be combined with export arguments.' }
-        $scanRoot = Get-LocalPath $ScanOnly
-        Assert-NoLocalLink $scanRoot
-        if (-not [IO.Directory]::Exists($scanRoot)) { throw 'Scan input must be an existing directory.' }
-        $findings = @(Get-PublicTreeFindings $scanRoot)
-        if ($findings.Count) {
-            foreach ($finding in $findings) { Write-Host ('REFUSED: {0}: {1}' -f $finding.Path, $finding.Reason) }
-            throw 'Public tree scan refused the staged content.'
+    $seconds = 0
+    if (-not [int]::TryParse($TimeoutSeconds, [ref]$seconds) -or $seconds -lt 1 -or $seconds -gt 600) {
+        $failure = '-TimeoutSeconds must be an integer from 1 through 600.'
+        throw 'Invalid deadline.'
+    }
+    $worker = Join-Path $PSScriptRoot 'public_tree_worker.ps1'
+    Assert-LocalWorker $worker
+    $shell = Join-Path $PSHOME 'powershell.exe'
+    $shellItem = Get-Item -LiteralPath $shell -Force
+    if ($shellItem.PSIsContainer -or ($shellItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Unavailable shell.'
+    }
+    # Preserve bound argument names and Include arrays without source interpolation.
+    # Base64 also keeps PowerShell's Unicode quote delimiters out of child code.
+    $arguments = @{}
+    foreach ($name in @('Source', 'Out', 'Include', 'ScanOnly')) {
+        if ($PSBoundParameters.ContainsKey($name)) { $arguments[$name] = $PSBoundParameters[$name] }
+    }
+    $workerData = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
+    $argumentData = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes((ConvertTo-Json -InputObject $arguments -Compress -Depth 4)))
+    $command = "`$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = New-Object Text.UTF8Encoding(`$false); `$worker = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('$workerData')); `$values = ConvertFrom-Json ([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('$argumentData'))); `$parameters = @{}; foreach (`$property in `$values.PSObject.Properties) { if (`$property.Name -eq 'Include') { `$parameters[`$property.Name] = [string[]]`$property.Value } else { `$parameters[`$property.Name] = `$property.Value } }; & `$worker @parameters; `$code = `$LASTEXITCODE; Write-Output '$marker'; exit `$code"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $shell
+    $info.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + $encoded
+    # Match the original entry's native relative-path resolution.
+    $info.WorkingDirectory = [IO.Path]::GetFullPath('.')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+    $proc = New-Object Diagnostics.Process
+    $proc.StartInfo = $info
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    if (-not $proc.Start()) { throw 'Worker did not start.' }
+    $started = $true
+    $stdout = $proc.StandardOutput.ReadToEndAsync()
+    $stderr = $proc.StandardError.ReadToEndAsync()
+    $remaining = [Math]::Max(0, $seconds * 1000 - [int]$clock.ElapsedMilliseconds)
+    $completed = $proc.WaitForExit($remaining)
+    if ($completed) {
+        $remaining = [Math]::Max(0, $seconds * 1000 - [int]$clock.ElapsedMilliseconds)
+        $completed = [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), $remaining)
+    }
+    $completed = $completed -and ($clock.ElapsedMilliseconds -le $seconds * 1000)
+    if (-not $completed) {
+        $failure = 'Public tree operation exceeded its process deadline; worker termination was not confirmed.'
+        if (-not $proc.HasExited) { $proc.Kill() }
+        if ($proc.WaitForExit(5000)) { $failure = 'Public tree operation exceeded its process deadline.' }
+        throw 'Worker deadline.'
+    }
+    $output = $stdout.GetAwaiter().GetResult()
+    $errors = $stderr.GetAwaiter().GetResult()
+    if ($proc.ExitCode -notin @(0, 1) -or -not $output.EndsWith($marker + [Environment]::NewLine)) {
+        throw 'Worker completion was not confirmed.'
+    }
+    $output = $output.Substring(0, $output.Length - $marker.Length - [Environment]::NewLine.Length).TrimEnd("`r", "`n")
+    if ($proc.ExitCode -eq 0) {
+        if ($errors.Trim() -or -not ($output.Contains('Public tree scan passed. Owner content and licence review is still required. Nothing published.') -or
+                $output.Contains('Postwrite public scan passed. Owner content and licence review is still required. Nothing published.'))) {
+            throw 'Worker success output incomplete.'
         }
-        Write-Host 'Public tree scan passed. Owner content and licence review is still required. Nothing published.'
+        Write-Output $output
+        Write-Output $unrun
         exit 0
     }
-    if (-not $Out) { throw 'Export requires -Out with a new or empty staging directory.' }
-    if (-not $Source) { $Source = $workspace }
-    $sourceRoot = Get-LocalPath $Source
-    $outputRoot = Get-LocalPath $Out
-    Assert-NoLocalLink $sourceRoot
-    Assert-NoLocalLink $outputRoot
-    if (-not [IO.Directory]::Exists($sourceRoot)) { throw 'Source must be an existing directory.' }
-    if ($outputRoot.Equals($sourceRoot, [StringComparison]::OrdinalIgnoreCase) -or
-            $sourceRoot.StartsWith($outputRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Output must not contain or replace the source.'
-    }
-    if ($outputRoot.StartsWith($sourceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        $outputRelative = Get-RelativeName $sourceRoot $outputRoot
-        if ($outputRelative.Split('/')[0] -ne 'logs') { throw 'Output inside source is allowed only under excluded logs.' }
-    }
-    if ($outputRoot -match '(?i)(?:^|[\\/])\.git(?:[\\/]|$)') { throw 'Output cannot be Git metadata.' }
-    if ([IO.File]::Exists($outputRoot) -or ([IO.Directory]::Exists($outputRoot) -and
-            @(Get-ChildItem -LiteralPath $outputRoot -Force).Count)) { throw 'Output must be a new or empty directory.' }
-
-    $pending = New-Object 'Collections.Generic.Stack[string]'
-    if ($Include) {
-        foreach ($name in $Include) {
-            Assert-PublicName $name
-            $path = Get-LocalPath (Join-Path $sourceRoot $name.Replace('/', [IO.Path]::DirectorySeparatorChar))
-            if (-not $path.StartsWith($sourceRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-                throw 'Include paths must be relative to source.'
-            }
-            $pending.Push($path)
-        }
-    } else { $pending.Push($sourceRoot) }
-    $selected = New-Object 'Collections.Generic.List[object]'
-    $seenFiles = @{}
-    $seenNames = @{}
-    $imageCount = 0
-    $patchCount = 0
-    $refusals = New-Object 'Collections.Generic.List[string]'
-    while ($pending.Count) {
-        $path = $pending.Pop()
-        $name = ''
-        if (-not $path.Equals($sourceRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            $name = Get-RelativeName $sourceRoot $path
-            Assert-PublicName $name
-        }
-        $directory = [IO.Directory]::Exists($path)
-        if ($name -and (Test-OmittedPath $name $directory)) { continue }
-        Assert-NoLocalLink $path
-        if ($directory) {
-            foreach ($child in @(Get-ChildItem -LiteralPath $path -Force)) { $pending.Push($child.FullName) }
-            continue
-        }
-        if (-not [IO.File]::Exists($path)) { throw 'A selected input is missing or is not a regular file.' }
-        if ($seenFiles.ContainsKey($name)) { continue }
-        $seenFiles[$name] = $true
-        $prefix = ''
-        foreach ($part in $name.Split('/')) {
-            if ($prefix) { $prefix += '/' }
-            $prefix += $part
-            if ($seenNames.ContainsKey($prefix) -and $seenNames[$prefix] -cne $prefix) { throw 'Case-colliding source paths.' }
-            $seenNames[$prefix] = $prefix
-        }
-        if (Test-PublicImageName $name) { $imageCount++; continue }
-        if (([IO.FileInfo]$path).Length -gt $maximumFileSize) { throw 'A selected input is oversized; manual review required.' }
-        [byte[]]$data = [IO.File]::ReadAllBytes($path)
-        $original = $null
-        if ([IO.Path]::GetExtension($name) -ieq '.patch') {
-            $original = $data
-            [byte[]]$data = ConvertTo-PublicPatch $data
-            Assert-EqualPatchDiff $original $data
-            $patchCount++
-        }
-        foreach ($reason in @(Get-PublicFileFindings $name $data)) { $refusals.Add(('{0}: {1}' -f $name, $reason)) }
-        $selected.Add([pscustomobject]@{ Name = $name; Data = $data; OriginalPatch = $original })
-    }
-    if (-not ($selected | Where-Object { $_.Name -ceq 'LICENSE' })) { throw 'The selected tree must retain root LICENSE.' }
-    if ($refusals.Count) {
-        foreach ($finding in $refusals) { Write-Host ('REFUSED: ' + $finding) }
-        throw 'Public export refused before staging. Review the selected source content.'
-    }
-    [void][IO.Directory]::CreateDirectory($outputRoot)
-    Assert-NoLocalLink $outputRoot
-    foreach ($entry in $selected) {
-        $target = Join-Path $outputRoot $entry.Name.Replace('/', [IO.Path]::DirectorySeparatorChar)
-        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
-        Assert-NoLocalLink $target
-        $stream = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try { $stream.Write($entry.Data, 0, $entry.Data.Length) } finally { $stream.Dispose() }
-    }
-    $findings = @(Get-PublicTreeFindings $outputRoot)
-    if ($findings.Count) { throw 'Postwrite scan failed. Staging retained for owner inspection; do not publish it.' }
-    foreach ($entry in $selected) {
-        if ($null -ne $entry.OriginalPatch) {
-            Assert-EqualPatchDiff $entry.OriginalPatch ([IO.File]::ReadAllBytes((Join-Path $outputRoot $entry.Name)))
-        }
-    }
-    Write-Host ('Staged {0} files; omitted {1} image files; cleaned {2} patches with byte-identical diff parts.' -f $selected.Count, $imageCount, $patchCount)
-    Write-Host 'Postwrite public scan passed. Owner content and licence review is still required. Nothing published.'
-    exit 0
-} catch {
-    if ($_.Exception -is [Management.Automation.RuntimeException] -or $_.Exception -is [ArgumentException]) {
-        Write-Error ('Public tree refused: ' + $_.Exception.Message) -ErrorAction Continue
-    } else { Write-Error 'Public tree refused: filesystem or scanner operation failed. Nothing published.' -ErrorAction Continue }
+    # Only completed, handled refusals may supply findings. Worker exceptions
+    # produce static stdout messages; arbitrary stderr is never forwarded.
+    if ($errors.Trim() -or -not $output.Contains('REFUSED: ')) { throw 'Worker refusal output incomplete.' }
+    Write-Output $output
+    Write-Output $retained
+    Write-Output $unrun
     exit 1
+} catch {
+    Write-Output ('REFUSED: ' + $failure)
+    Write-Output $retained
+    Write-Output $unrun
+    exit 1
+} finally {
+    if ($proc) {
+        if ($started -and -not $proc.HasExited) {
+            try { $proc.Kill(); $null = $proc.WaitForExit(5000) } catch { }
+        }
+        $proc.Dispose()
+    }
 }

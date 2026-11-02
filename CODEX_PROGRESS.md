@@ -1,6 +1,128 @@
 # T4 beta progress, 2026-11-02
 
-## ZIP process deadline follow-up, current session
+## Public-tree process deadline follow-up, current session
+
+Release remains **NO-GO**. The actual launcher is the main release gate;
+its refusal-only recheck still finds private Python missing. The selected
+actionable source-only item is the public-tree export/scan process deadline
+left open below. No launcher, runtime, switch or server behavior changed.
+
+The first frozen candidate failed the existing real-entry category suite:
+the supervisor lost the sanitized text-limit message in serialized stderr.
+Both aggregate and independent review reproduced it. The worker now emits
+static sanitized refusal messages on stdout. The same unchanged failing
+fixture reports the expected refusal through the corrected actual entry.
+The results below apply to the corrected hashes; earlier runs are preliminary.
+
+Original source, test and document bytes are saved without Git under
+`logs/tree-deadline-session-7bc98726c4a04703b98966a5416cb65d/original/`;
+`baseline.json` records their hashes. Root owns this record and `docs/status.md`.
+
+Done:
+
+- The actual [public-tree entry](tools/publish_public_tree.ps1) supervises an
+  internal worker for export and scan. Default deadline: 120 seconds;
+  `-TimeoutSeconds` accepts integers 1-600. Worker startup, operation and output
+  collection share the deadline. Preflight and OS termination are outside it;
+  this is not a hard wall-time bound for the entire command.
+- Timeout exits 1 / REFUSED, discards worker output and warns that any staging
+  remains unapproved and retained. Nothing is deleted or published. A static
+  completion marker and expected completion text guard success. Completed
+  refusals retain category findings and the existing sanitized regex failure
+  message; arbitrary exception stderr is not forwarded.
+- Arguments travel as Base64 Unicode JSON, preserving `Include` arrays. Root
+  review caught native relative-path resolution changing when the child used
+  the project root as its directory. The child now preserves the caller's
+  native directory. The final compatibility suite proves nested-directory
+  export and scan; no pre-fix runtime reproduction of that regression is claimed.
+- New [deadline tests](tools/test_public_tree_deadline.ps1) passed 5,135
+  assertions through 13 actual entry processes. The same unchanged 1,001-file
+  tree passed before and after two genuine one-second scan refusals. Export
+  also refused at one second, with no output directory created. The valid 600
+  bound passed; six invalid values including empty refused. Input bytes and
+  inventory, plus five source hashes, stayed unchanged. Exclusive reopening
+  does not establish independent process absence. Evidence:
+  `logs/public-tree-deadline-520d01320017482ab8cfea21c71fb5fc/`.
+- New [compatibility tests](tools/test_public_tree_deadline_compat.ps1) passed
+  78 assertions through eight actual entry processes, including all four smart
+  quotes, ASCII shell punctuation, real Include arrays, patch diff and ordinary
+  byte preservation, completed category refusal and invalid combined arguments.
+  Evidence: `logs/public-tree-deadline-compat-d096a8e594c544da96b1d65eca9e207d/`.
+- Independent retained-input export and scan both exited 0 with empty stderr,
+  in 5.969 and 3.127 seconds. All 80 staged file hashes matched the original
+  entry's baseline output: 2,025,621 bytes, 79 unchanged patch diff ranges and
+  46 display attributions. All 84 input/code snapshots stayed unchanged during
+  the final run. This LICENSE/patch test subset is not complete corresponding
+  source or a player candidate. Evidence:
+  `logs/tree-retained-audit-c6b61250ab0d4e0baae2b191f5864a1c/corrected-frozen/`.
+- Actual `test_launcher_entry.ps1` exited 0 only because real `Tekken4.cmd`
+  exited 1 for missing private Python. Actual readiness exited 2 / BLOCKED
+  after catalog and starter-refusal entries. GUI never started. Six source
+  hashes stayed unchanged; both stderr streams were empty. Evidence:
+  `logs/launcher-gate-recheck-3e6c9583580047a6942e174b2365a3f7/`.
+- Separate reviewer `final_diff_review_tree` independently passed the frozen
+  new suites with the same 5,135 / 13 and 78 / 8 assertions / real processes,
+  plus the existing category suite with 120 / 20. It reran the original failed
+  fixture with the expected safe message and unchanged input hash.
+  All 126 tool-script files and all 79 patch names/hashes stayed unchanged.
+  It checked the saved originals and retained-input evidence; no code blocker
+  was found. Evidence:
+  `logs/tree-deadline-review-943cf98761554493900726944680b310/corrected/`.
+- Corrected frozen [aggregate](tools/check_public_publish.ps1) and its hash
+  harness exited 0: 15 PowerShell files parsed; seven suites passed 5,691
+  checks/assertions. Both actual catalogs passed with 23 present unique tools
+  each and three root files. All 112 PowerShell/Python tool hashes and all 79
+  patch names/hashes stayed unchanged. The initial failed aggregate is retained
+  one directory above the corrected evidence:
+  `logs/tree-deadline-session-7bc98726c4a04703b98966a5416cb65d/catalog-agent/corrected/`.
+  The full ZIP aggregate was not rerun; its entry is byte-identical to baseline.
+  Shared tree/ZIP text suites ran in the changed tree aggregate.
+- Root's actual document checker covered all five changed documents: 104
+  local links resolved and PowerShell parsing completed. Overall exit 1
+  remains on retained image-name fixtures and a corrupt ZIP; the whole-tree
+  check did not complete. Nothing was removed or weakened to manufacture a
+  pass. Evidence:
+  `logs/tree-deadline-session-7bc98726c4a04703b98966a5416cb65d/root-doc-check-final.txt`.
+
+Frozen supervisor SHA-256:
+`e29af96d181eced776b3cd0161530d755a67031ce8dfb0b52e73ba164ca92623`;
+worker `ea2b24e04024e3622678d33edfdeed1acb13ab8a5c3421807b37a1d54d97bb61`.
+The worker's scan/export body matches the saved original before its catch,
+apart from plain stdout replacing Write-Host. The catch now emits only static
+safe messages. An internal-worker comment was added. Earlier encoded-harness
+attempts, the first failed aggregate and the suite that correctly failed on
+a concurrent code-hash change are preliminary, not final acceptance.
+
+Eight area agents: `tree_deadline_entry`, `tree_deadline_tests`,
+`tree_deadline_compat`, `tree_tests_catalogs`, `tree_deadline_docs`,
+`tree_retained_audit`, `launcher_gate_recheck`, `latest_owner_evidence`.
+Separate read-only reviewer: `final_diff_review_tree`. All read AGENTS.md and
+this record. File ownership is exclusive.
+
+Open / owner-only:
+
+- Write-phase interruption, worker-start failure, termination-error and outer
+  test-watchdog failure branches were not forced. Independent process inventory
+  remains unavailable; no no-orphan claim is made. Whole-tree source checking
+  remains red on retained fixtures; nothing was deleted or weakened.
+- Actual launcher GUI and portable first-run, Python suites and payload checks,
+  complete source/player/privacy/licence review, exact build/game, enabled GUI
+  switches and two physical PCs remain unproved here. Builds, games and network
+  helpers are forbidden in this copy. No source scanner test can close those gates.
+
+Latest owner-supplied verification, not reproduced here: draft `23d21774fe`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 167-second build `943fc4631acf2c13`, finished `2026-11-02T03:59:55`.
+Selftest: 6000 wall / 5106 logical, 202 successful restores, zero bad,
+447 comparisons with zero mismatches, 101/101 wrong-input divergences.
+OFF same-PC pair: 6000 frames, 199 hashes each, zero mismatches/NETDESYNC;
+host/join FPS 52.1/52.1, stalls 0/77 (0/2698 ms), displayed-frame p99
+110.3/99.4 ms. It proves neither this edited tree, enabled GUI profile nor two
+physical PCs. See [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md).
+
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier ZIP process deadline follow-up
 
 Release remains **NO-GO**. The actual launcher remains the more important
 release gate, but an independent recheck confirms private Python is absent.

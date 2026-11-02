@@ -1,10 +1,34 @@
 # Status
 
-_Last updated: 2026-11-02 (ZIP process deadline follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (public-tree process deadline follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current ZIP process deadline follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+- **Current public-tree process deadline follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records supervised export and scan,
+  with a default 120-second worker deadline and `-TimeoutSeconds` from 1-600.
+  Timeout refuses and retains unapproved partial staging; it is not a completed
+  scan. Preflight and OS cleanup are outside the worker budget. See
+  [export scope](PUBLIC_SOURCE_EXPORT.md). The existing category suite caught
+  a lost sanitized error message; the same unchanged fixture now refuses with
+  the expected message. The independent corrected review passed 5,135 / 13
+  deadline assertions / entry processes, 78 / 8 compatibility and 120 / 20
+  category regressions. All 126 tool-script hashes and all 79 patch names/hashes
+  stayed unchanged. The corrected aggregate passed seven suites with 5,691
+  checks/assertions; its 112 PowerShell/Python tool hashes and 79 patch
+  names/hashes stayed unchanged. The 80-file test subset matched the original
+  export byte-for-byte; this is not complete corresponding source. Whole-tree
+  source checking remains red on retained fixtures and a corrupt ZIP; nothing
+  was removed or weakened. The actual launcher refusal test ran again: missing
+  private Python, GUI never started; readiness exits 2 / BLOCKED.
+  Latest supplied draft `23d21774fe`, clean 167-second build
+  `943fc4631acf2c13`, finished `2026-11-02T03:59:55`: OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, host/join 52.1/52.1 FPS,
+  stalls 0/77 (0/2698 ms), displayed-frame p99 110.3/99.4 ms. This is supplied
+  evidence, not a run of this edited tree. GUI profile and two-PC proof remain
+  open. See [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier ZIP process deadline follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
   records the supervised scanner and real-entry tests. The default worker
   deadline is 120 seconds; `-TimeoutSeconds` accepts 1-600. A timeout refuses
   without a completed scan claim. The independent reviewer passed both new

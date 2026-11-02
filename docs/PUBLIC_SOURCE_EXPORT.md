@@ -11,6 +11,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish_public_tree.ps
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish_public_tree.ps1 -ScanOnly logs/public-source-review
 ```
 
+The entry supervises an internal worker for both export and scan-only. The
+default worker deadline is 120 seconds; `-TimeoutSeconds` accepts integers from
+1 through 600. Worker startup, the operation and output collection share this
+budget. Wrapper preflight and operating-system termination are outside it, so
+this is not a hard wall-time bound for the entire command.
+
+On timeout the entry exits 1, reports refusal and discards worker output. Any
+partly written staging remains for inspection and is not approved for use.
+Do not publish it or reuse that output directory; choose a fresh output for
+the next export. A timeout is not a completed content scan. If worker
+termination cannot be confirmed, the refusal says so.
+
 The export removes mail addresses and transport headers from patch preambles
 and removes `Co-Authored-By` lines there. Every byte starting with the first
 `diff --git` line stays unchanged. The tool checks that equality against the
@@ -29,10 +41,10 @@ The shared [text scanner](../tools/public_tree_scan.ps1) gives each of its
 full-content regex operations a two-second .NET regex timeout. Match collections
 do not have one shared deadline. A timeout or regex failure stops the scan
 with a sanitized error; it never becomes a pass.
-Difficult but otherwise valid text can be refused for manual review. This is
-not a whole-process deadline: separate patch-header processing, path checks,
-I/O and the sum of regex work still need time. The same guard applies to the
-[ZIP scan](PUBLIC_ZIP_SCAN.md).
+Difficult but otherwise valid text can be refused for manual review. This
+per-regex limit is separate from the supervised worker deadline above.
+Patch-header processing, path checks, I/O and the sum of regex work share the
+worker budget. The same regex guard applies to the [ZIP scan](PUBLIC_ZIP_SCAN.md).
 
 Historical documents can cause the full-tree export to fail. Review which
 documents belong in the public source. `-Include` accepts paths relative to
@@ -61,6 +73,10 @@ exercise [long words](../tools/test_public_text_words.ps1),
 [content categories and timeout refusal](../tools/test_public_text_categories.ps1)
 through the actual tree and ZIP commands. Clean controls must pass before
 refusals count. A process killed by a test deadline is a failed test.
+The [tree deadline tests](../tools/test_public_tree_deadline.ps1) and
+[compatibility tests](../tools/test_public_tree_deadline_compat.ps1) use the
+actual export/scan entry. An entry's own deadline refusal is distinct from a
+test watchdog killing an entry that failed to return.
 Image and binary signature checks use memory fixtures; they do not add game
 data or screenshots.
 See [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for the commands actually run,
