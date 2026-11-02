@@ -1,5 +1,65 @@
 # T4 beta progress, 2026-11-02
 
+## Catchup follow-up: latest verify stopped before testing
+
+The latest supplied verify refused an existing output name. It supplies no new
+build, selftest or pair result. Use a fresh unused `-Name`; preserve the earlier
+output. The verify wrapper itself is absent here, so its refusal path was not
+executed or inspected. No outside-tree logs were opened.
+
+Done:
+
+- Sixteen area agents rechecked independent runtime paths and the test route.
+  No raw paired host/join logs were found in the retained verify folders.
+  Arrival timing, measured advantage and wait ordering remain unobserved.
+- The existing default-off runtime change below remains the single experiment.
+  Its source hash still matches the previous inspection. No additional runtime
+  change or switch was added without a completed OFF/ON result. The hypothesis
+  remains that full deadline rebases remove the slow sender's catchup headroom;
+  the ahead peer predicts further, rolls back more and waits. Source review
+  found no fixed host/join branch in time sync, prediction waits or resends.
+- Confirmed that the rollback selftest does not execute netplay pacing.
+  Selftest success alone cannot validate this switch. `retained_debt_ms` can
+  count overlapping allowances and is not measured recovery. Stall counts can
+  include immediately satisfied waits; inspect wait durations and frontiers.
+- Actual catalog checker: exit 0, empty stderr, two 23-tool catalogs and three
+  root inputs. Evidence: `logs/runtime-catchup-followup/tests-catalogs/`.
+  This does not execute or validate runtime behavior.
+
+Open / owner-only:
+
+- Stage the changed `runtime/tekken4_rollback_overrides.cpp` into the real runner,
+  use a fresh verify name, and require a build ID different from
+  `943fc4631acf2c13`. Keep that new ID identical across OFF/ON. The ID hashes
+  staged source, not executable bytes; activation evidence is also necessary.
+  The real verify and build environment are outside this copy.
+- Keep root `VERIFY_ENV.txt` exactly:
+  `TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1`.
+  Pass it through common `-Env` to both peers; inherited settings are cleared.
+  Check that per-peer environment overrides do not replace these assignments.
+  Keep `-TimingDiag` on in both arms so only catchup differs. Keep other
+  experiments, including `TEKKEN4_NET_REFRESH_RC`, identical in both arms.
+- Run actual selftest and OFF/ON pairs. Require both ON peers to log the literal
+  catchup activation and nonzero `NETREBASE_CATCHUP` rebases. Retain complete
+  paired runtime and transport logs. Compare sender gaps, confirmed frontiers,
+  sustained lead, wait durations, rollback totals/depth/cost and frame pacing.
+  A smaller ratio or mechanically smaller rebase time alone is insufficient.
+  Repeat and swap roles; two-PC and sound-on acceptance remain open.
+- Compilation, selftest, actual pair, per-input arrival timing and causal proof
+  are still **UNRUN here**. AGENTS.md forbids the required builds, game and
+  network helpers. No new runtime correctness or improvement is claimed.
+
+Area agents this follow-up: `pair_evidence`, `rebase_logic`, `sync_waits`,
+`advantage_math`, `arrival_frontiers`, `vblank_pacing`, `transport_ingestion`,
+`prediction_stalls`, `startup_roles`, `rollback_resim`, `resend_ordering`,
+`verify_switch_route`, `tests_catalogs_now`, `diagnostic_proof`, `build_identity`,
+`clock_accounting`. All were read-only except `tests_catalogs_now`, which owned
+only its new evidence directory. Root owns this progress update. Separate
+reviewer `final_diff_review_followup` owns
+`logs/runtime-catchup-followup/final-review.txt`.
+No Git command, deletion, patch edit, build, game, forbidden helper, server,
+push or release ran here.
+
 ## Runtime experiment: bounded catchup after pacing rebases
 
 Current priority is the owner's one-sided rollback investigation. The older
