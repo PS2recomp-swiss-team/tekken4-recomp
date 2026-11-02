@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02 (App still unrun; supplied draft 75cdf51c7c; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft 2c83c6a764; NO-GO)_
 
 ## Resume here
 
@@ -14,11 +14,11 @@ _Last updated: 2026-11-02 (App still unrun; supplied draft 75cdf51c7c; NO-GO)_
   cancel/accept and build/play/return. Actual starter refusal, both 23-tool
   catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
   No production or test code changed. The App never started.
-  Latest supplied draft `75cdf51c7c`: clean 195-second build
-  `943fc4631acf2c13`, finished `2026-11-02T12:58:17`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 47.7/47.7 FPS, stalls 0/143
-  (0/5951 ms), displayed-frame p99 168.7/117.7 ms, actual delay 3.
-  Restore-and-resim maximum rose to 254.37/77.48 ms.
+  Latest supplied draft `2c83c6a764`: clean 237-second build
+  `943fc4631acf2c13`, finished `2026-11-02T13:12:04`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 47.9/47.9 FPS, stalls 0/127
+  (0/5411 ms), displayed-frame p99 163.0/120.0 ms, actual delay 3.
+  Restore-and-resim maximum was 253.25/83.45 ms.
   Cause and usable pacing
   remain unproved. Supplied, not reproduced here; no App, enabled
   GUI-profile or two-PC acceptance.
