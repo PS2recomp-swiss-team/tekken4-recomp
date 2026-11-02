@@ -1,5 +1,97 @@
 # T4 beta progress, 2026-11-02
 
+## Release gate and supplied verification 323f76204d
+
+Release remains **NO-GO**. The most valuable open item is the exact complete
+package's actual App startup and portable first-run. Sixteen independent
+areas found no safely executable local fix that closes it. Private Python,
+reviewed input locks and the portable toolchain marker are absent; App
+construction starts ISO discovery outside this permitted tree. No production
+or test code changed. More scanner passes cannot establish App acceptance.
+
+Done:
+
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1): test exit 0
+  only for real `Tekken4.cmd` exit 1, missing private Python. Empty stderr;
+  four source hashes unchanged. The App never started. Evidence:
+  `logs/launcher-323-1117b3ab150c4f70a77f86e15db60458/`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1): both 23-tool
+  catalogs and three root files passed. Actual
+  [readiness tests](tools/test_online_readiness.ps1): three checker subprocess
+  cases passed; normal readiness stayed 2 / BLOCKED. Empty stderr; ten source
+  hashes unchanged. Evidence:
+  `logs/tests-catalogs-323-12d201ca23474456b6ba79b2d321bcf2/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `323f76204d`:
+  clean 165-second build `943fc4631acf2c13`, finished `2026-11-02T08:45:55`.
+  OFF selftest: 202 good restores, zero bad, 447 comparisons with zero
+  mismatches, all 101 wrong-input passes diverged. OFF same-PC pair: 6000
+  frames and 199 hashes each, zero mismatches/NETDESYNC, 43.6/43.6 FPS,
+  stalls 209/0 (4757/0 ms), displayed-frame p99 129.8/126.7 ms.
+  Supplied, not reproduced here. Run-average FPS fell from the preceding
+  supplied 52.3/52.3 and p99 rose; the summaries do not establish why or
+  identify a code regression. Clean sampled hashes do not prove usable pacing.
+  Actual readiness checked both documents / 18 links: exit 2 / BLOCKED,
+  empty stderr, eight source hashes unchanged. Originals and strict evidence:
+  `logs/supplied-323-52c281bb665845b28aac5ddbd033b0c7/strict-rerun/`.
+  The parent's initial capture failed exit forwarding and is explicitly invalid.
+- Independent portable, Python/Tk, settings/process, controller, offline flow,
+  licence, privacy, payload, corresponding-source, effective-profile, two-PC,
+  scanner-gap and shared-launcher reviews found no justified executable fix.
+  Existing [owner acceptance](docs/RELEASE_PATH_B.md) already requires the
+  responsive actual App, process identity, close/reopen, retained settings,
+  licence cancel/accept and build/play/return. Launcher pad navigation remains
+  unimplemented; in-game controller testing cannot establish it. Old incomplete
+  ZIP member-name inspection proves neither content safety nor App acceptance.
+
+Open: actual App/portable acceptance, complete source/player content and
+privacy/licence review, Python suites, enabled GUI Host/Join profile and two
+physical PCs. Fullscreen inheritance and offline spawn-failure log cleanup
+remain source observations, not reproduced fixes. Scanner limits remain failed
+termination, interruption within one write and unobserved descendants. Retained
+fixture findings and incomplete archives remain failures. Unchanged long
+aggregates and the whole-tree beta checker were not rerun.
+
+Owner-only next step: supply the exact reviewed complete candidate, ZIP hash,
+matching corresponding source and reviewed locks/notices; run its actual
+`Tekken4.cmd` in the authorized validation environment. Observe a responsive
+App and normal exit/reopen/settings, then prove portable first-run and
+build/play/return. Supplying only Python is insufficient. Exact build/game,
+shared-launcher integration, enabled GUI profile, sound-on usable pacing and
+two physical PCs still need real proof. GUI, Python suites, packagers, build,
+game and network helpers stayed **UNRUN here**.
+
+Sixteen area agents: `launcher_entry_323`, `tests_catalogs_323`,
+`portable_candidate_323`, `python_tk_runtime_323`, `settings_core_323`,
+`ui_controller_323`, `offline_play_return_323`, `licence_inputs_323`,
+`source_privacy_323`, `player_payload_323`, `corresponding_source_323`,
+`effective_profile_323`, `supplied_verify_323`, `two_pc_acceptance_323`,
+`scanner_entry_gaps_323`, `integrated_launcher_323`.
+Separate final reviewer: `final_diff_review_323`. File ownership was exclusive.
+Root owns this record and `docs/status.md`; root originals/hashes and the
+347-file scoped source inventory are in
+`logs/release-323-1a77d0ef1c9749fd9f4fed11045049ad/`.
+Root's actual readiness entry checked all four changed documents / 173 local
+links, 12 required source files and seven PowerShell parses, then catalogs
+and real starter refusal: exit 2 / BLOCKED, empty stderr, all 347 scoped
+source hashes unchanged. Evidence: `final-entry/result.json` and `stdout.txt`
+in the root session folder above. Two preliminary root captures failed
+argument parsing or inventory serialization; both are retained as invalid.
+They are not passing proof. The final capture validates only source/refusal
+behavior and supplies no App acceptance.
+
+Separate reviewer `final_diff_review_323` found no blocking issue in the four
+changed documents. All four saved-original hashes matched; historical tails
+were preserved exactly. Independent enumeration found 347 unchanged source
+names and only expected progress/status edits since the post-evidence snapshot.
+Its actual readiness entry checked four documents / 173 links, 12 required
+files and seven parses, then catalogs and real starter refusal: exit 2 /
+BLOCKED, empty stderr, all 347 source hashes unchanged. Evidence:
+`logs/final-review-323-621c3e9befef4ef5adc81088dfe81f10/`.
+
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification c3dc860555
 
 Release remains **NO-GO**. The most valuable open item is actual App startup

@@ -50,26 +50,31 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `c3dc860555`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 208 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T08:32:52`.
+Draft `323f76204d`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 165 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T08:45:55`.
 This supersedes the earlier supplied verification summaries.
 
 - Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
   restores, zero bad restores, 447 resim comparisons with zero mismatches;
   all 101 deliberate wrong-input passes diverged. Save average/maximum was
-  0.20/4.51 ms; restore average/maximum was 0.27/0.38 ms.
+  0.21/4.56 ms; restore average/maximum was 0.29/0.41 ms.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 303/931, resim frames 619/3693, maximum depth 6/9;
-  prediction stalls 0/84 (0/2556 ms), time sync 1/91 (17/4483 ms).
-  Run-average FPS 52.3/52.3; final FPS windows 60.0/60.0 do not erase the
-  remaining pacing gaps. Displayed-boundary p99 was 107.9/97.7 ms.
-  Restore-and-resim p50 was 9.52/18.39 ms, p90 16.58/42.34 ms and maximum
-  220.93/59.87 ms.
-  Rebases were 152/113 (14651/7654 ms).
+- Host/join rollbacks 920/214, resim frames 4849/332, maximum depth 9/3;
+  prediction stalls 209/0 (4757/0 ms), time sync 72/1 (4433/17 ms).
+  Run-average FPS 43.6/43.6; final FPS windows 59.5/59.9 do not erase the
+  remaining pacing gaps. Displayed-boundary p99 was 129.8/126.7 ms.
+  Restore-and-resim p50 was 32.95/8.91 ms, p90 54.14/12.20 ms and maximum
+  131.32/116.99 ms.
+  Rebases were 341/442 (28392/37583 ms).
   Coalesced packets were zero on both endpoints.
+
+Run-average FPS fell from the preceding supplied 52.3/52.3 to 43.6/43.6,
+and displayed-frame p99 rose from 107.9/97.7 to 129.8/126.7 ms. This is an
+observed pacing regression between reports; the summaries do not establish
+its cause or a controlled comparison. Clean state checks do not resolve it.
 
 This is supplied evidence, not a run performed here. Full effective parameter
 records and raw logs were not supplied in this prompt. "Switches OFF" must not
