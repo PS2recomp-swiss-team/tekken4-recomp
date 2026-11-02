@@ -1,5 +1,118 @@
 # T4 beta progress, 2026-11-02
 
+## Current: test startup producer phase after the real flush comparison
+
+Latest supplied verify: draft 7f51c79087, clean merge, 196-second build,
+build ID ad61f024a887170a, finished 2026-11-02T22:43:07. The unchanged-ID
+concern is superseded. SELFTEST OFF/ON: 202 good restores, 447 replay
+comparisons with zero mismatches, 101/101 wrong-input divergences. Those
+modes bypass npBoundary; they do not test the new experiment below.
+
+DEFER_RESIM_FLUSH really activated: deferred boundaries equal replay frames
+on both ON peers, with zero replay flushes. Aggregate rollbacks 1390 -> 1207
+(-13.2%), replay 5387 -> 4492 (-16.6%), but combined stall+sync time 8282 ->
+9440 ms (+14.0%). Join/host rollback ratio 2.57 -> 3.99. OFF replay flushes
+cost only 92.958 ms combined; join 63.509 ms across 4368 frames. Total explicit
+flush cost rose 287.077 -> 386.105 ms, moving into live flushes. This strongly
+weakens flushing as the main cause. Delay also changed 2 -> 3, so the replay
+reduction cannot be attributed to flushing. No previous switch becomes a default.
+
+Evidence: 24 read-only area agents inspected separate areas. Safe inventory
+found exactly eight .log files, all ZIP scanner/checker output. Chronological
+host/join runtime logs are absent; no outside-tree location was opened. Unique
+input arrival times, initial frame advantage and first wait order remain unknown.
+Join's prediction/time-sync waits fit an ahead producer. Host-minus-join rebase
+time differs by 8208 ms OFF / 9390 ms ON, nearly matching extra join stall+sync
+8248 / 9406 ms: deadline accounting, not a separately proven pacing defect.
+No sign, counting or fixed steady-state role error was established.
+
+One new hypothesis: asymmetric handshake/delay-negotiation completion and
+independent boot deadline shifts seed a producer phase offset; replay/producer
+gaps then sustain it. Host leaves delay publication before join receives it.
+Boot waits shift each local schedule separately; there is no common release
+clock. This source mechanism is real, but its causal role is NOT established
+by the summaries. Prior gain/filter/rebase/early/headroom experiments are not
+repeated. A proposed sparse-input experiment was rejected: redundant contiguous
+packet prefixes cannot normally leave later accepted inputs behind a hole.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_BOOT_RENDEZVOUS=1. At the first live frame strictly beyond
+rbStart + (lockDelay - delay), after current input publication and after boot
+prefill has drained, wait once for remote input through f + delay. Both peers
+have published that target before waiting; no future local sample is required.
+The transport keeps receiving/resending and the existing peer-loss return
+ends the wait. Its measured duration shifts scheduler deadlines AND liveT.
+The host-only once flag is set before waiting and is not restored; replay and
+same-frame returns cannot repeat it. OFF observes the same boundary without
+calling waitRemote or shifting deadlines. Both arms add one event and summary
+fields; this small logging cost is not claimed to be zero.
+
+This is a phase perturbation, not a synchronized start or a claimed fix. With
+equal one-way transit and an entry gap smaller than transit, it can reverse
+the gap. Independent lockDelay choices can give different trigger frames;
+record both. Peer loss does not count as successful receipt. An observed role
+swap alone is phase-sensitivity evidence, not a performance improvement.
+
+Both arms append NETBOOT to the NETSUMMARY line retained by the pair script:
+rendezvous, observed, calls, f, target, local_max, rc_before/after, ready,
+wait_ms. One NETBOOT_EVENT records steady_ms/end_steady_ms and slot alongside
+those frontiers. It timestamps this wait, NOT unique packet/input arrivals.
+ON also logs literal activation. These counters/times are outside snapshots.
+
+VERIFY_ENV.txt contains exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_BOOT_RENDEZVOUS=1
+
+Owner-only real-entry test: stage/build these exact runtime bytes, refresh
+identity, and run the actual same-build paired netplay OFF/ON through the
+external verify wrapper. net_pair does not read this file; the wrapper must
+forward its content through -Env. In BOTH arms pass common controls
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1.
+Keep RBSTART=600, RB_MODE unset/net, and all other experiments equal/off,
+including DEFER_RESIM_FLUSH and SEND_FIRST. The file varies only RENDEZVOUS;
+common settings cannot merely be inherited because net_pair clears them.
+With those controls expect f=605, target=608, local_max >= 609 on BOTH peers.
+Require OFF rendezvous=0, observed=1, calls=0, wait_ms=0; ON literal activation,
+rendezvous=1, observed=1, calls=1, ready=1, rc_after > target. Require meaningful
+wait/changed phase before interpreting the experiment; already-ready/negligible
+waits or different trigger frames weaken it. Retain full rb_frames/transport
+logs, params, stdout/stderr, new build identity and binary hash. The text ID
+alone does not attest that the executable contains these staged bytes.
+
+Align same-PC steady timestamps, compare lead/frontiers and wait dominance
+before/after f=605 over the following 100+ frames, then final absolute aggregate
+replay/depth, combined waits, FPS and frame tails. If phase changes but the
+same side quickly regains sustained lead and replay burden, the seed-only
+hypothesis weakens. Require zero hash mismatches/desync and complete logs.
+Repeat same-role pairs because changed packet counts alter simulator RNG
+consumption even with fixed seeds; then repeat on two physical PCs.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1 once,
+exit 0, both 23-tool catalogs, three root inputs and Host/Join dependencies
+present. Inventory only. No new source assertion/model/mock is counted as
+runtime proof. Compilation, actual switch activation, peer-loss behavior,
+replay safety and performance remain UNRUN: AGENTS.md forbids builds, games
+and tools/net_* execution here. The required real-entry test is owner-only;
+release acceptance remains open. No test that runs npBoundary ran here.
+
+Original bytes of all three edited files are under
+logs/runtime-boot-rendezvous/originals. Root alone edits; all area agents are
+read-only. No Git command, outside-tree read, deletion, patch edit, build,
+game, forbidden helper, server, push or release was used.
+
+Area agents: pair_logs, verify_metrics, timesync_sign, timesync_filter,
+prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+Separate final reviewer: final_diff_review_boot found no blocking source
+issue. It independently checked publication/wait dependency, first-live/once
+and replay guards, scheduler/liveT shift, peer-loss readiness, format types,
+exact environment bytes and retained progress history. A no-lockstep start
+can still fire the wait; the prescribed RBSTART=600 boot avoids that edge.
+Root also checked LF-only runtime bytes, exact environment line and retained
+progress suffix. These checks are source/integrity checks, not runtime proof.
+
 ## Current: defer ordinary replay-boundary log flushes
 
 Latest supplied verify: draft 86c36dd1df, clean merge, build in 263 s,

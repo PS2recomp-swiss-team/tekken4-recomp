@@ -88,6 +88,7 @@
 // TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
 // TEKKEN4_NET_DIAG=1      one-second host timing/lead/deadline samples (default off).
 // TEKKEN4_NET_DEFER_RESIM_FLUSH=1  defer ordinary boundary log flushes until replay returns live (default off).
+// TEKKEN4_NET_BOOT_RENDEZVOUS=1  wait once for the peer's same-frame publication after boot prefill (default off).
 // TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
@@ -1151,6 +1152,12 @@ namespace tekken4_rollback
         bool predHeadroom = false;
         bool sendFirst = false;
         bool deferResimFlush = false;
+        bool bootRendezvous = false, rendezvousObserved = false;
+        // Host-only phase experiment; never repeat the observation/wait during replay.
+        uint64_t rendezvousFrame = 0, rendezvousTarget = 0, rendezvousLocalMax = 0,
+                 rendezvousBefore = 0, rendezvousAfter = 0, rendezvousCalls = 0;
+        bool rendezvousReady = false;
+        double rendezvousMs = 0;
         // Host-only ordinary hook-end flush measurements, in both switch arms; explicit flushes are excluded.
         uint64_t deferredFlushes = 0, boundaryFlushes[2]{}; // live / replay about to execute
         double boundaryFlushMs[2]{}, boundaryFlushMaxMs[2]{};
@@ -1840,10 +1847,16 @@ namespace tekken4_rollback
                      cs.verifyMismatchPages ? (" VERIFY MISMATCH PAGES " + std::to_string(cs.verifyMismatchPages)).c_str() : "");
         std::fprintf(g_log, "; NETFLUSH f=%" PRIu64 " defer_resim_flush=%d deferred_boundaries=%" PRIu64
                             " live_flushes=%" PRIu64 " live_ms=%.3f live_max_ms=%.3f"
-                            " replay_flushes=%" PRIu64 " replay_ms=%.3f replay_max_ms=%.3f\n",
+                            " replay_flushes=%" PRIu64 " replay_ms=%.3f replay_max_ms=%.3f",
                      g_frame, g_np.deferResimFlush ? 1 : 0, g_np.deferredFlushes,
                      g_np.boundaryFlushes[0], g_np.boundaryFlushMs[0], g_np.boundaryFlushMaxMs[0],
                      g_np.boundaryFlushes[1], g_np.boundaryFlushMs[1], g_np.boundaryFlushMaxMs[1]);
+        std::fprintf(g_log, "; NETBOOT rendezvous=%d observed=%d calls=%" PRIu64 " f=%" PRIu64
+                            " target=%" PRIu64 " local_max=%" PRIu64 " rc_before=%" PRIu64 " rc_after=%" PRIu64
+                            " ready=%d wait_ms=%.3f\n",
+                     g_np.bootRendezvous ? 1 : 0, g_np.rendezvousObserved ? 1 : 0, g_np.rendezvousCalls,
+                     g_np.rendezvousFrame, g_np.rendezvousTarget, g_np.rendezvousLocalMax,
+                     g_np.rendezvousBefore, g_np.rendezvousAfter, g_np.rendezvousReady ? 1 : 0, g_np.rendezvousMs);
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
                          g_frame, g_np.catchupRebases, g_np.catchupDebtMs);
@@ -1941,6 +1954,45 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_SEND_FIRST=1: first-live input sampled and sent before capture/hash collection\n");
         if (g_np.deferResimFlush)
             std::fprintf(g_log, "NET TEKKEN4_NET_DEFER_RESIM_FLUSH=1: ordinary log flushes deferred while replay remains active\n");
+        if (g_np.bootRendezvous)
+            std::fprintf(g_log, "NET TEKKEN4_NET_BOOT_RENDEZVOUS=1: one same-frame input wait after boot prefill; phase experiment, not a shared release clock\n");
+    }
+
+    void npBootRendezvous(uint64_t f)
+    {
+        const uint64_t prefill = static_cast<uint64_t>(g_np.lockDelay - g_np.delay);
+        if (g_np.rendezvousObserved || f <= g_np.rbStart || f - g_np.rbStart <= prefill)
+            return;
+        // Last boot sample: rbStart - 1 + lockDelay. Here f + delay is newly produced on both peers.
+        // Current publication has already happened. The lagging peer can reach f using our sent history;
+        // neither side asks for a future sample before it can publish its own. This can reverse phase,
+        // rather than align it: each peer releases when the other's packet arrives, not at a common clock.
+        g_np.rendezvousObserved = true;
+        g_np.rendezvousFrame = f;
+        g_np.rendezvousTarget = f + static_cast<uint64_t>(g_np.delay);
+        g_np.rendezvousLocalMax = t4net::localMax();
+        g_np.rendezvousBefore = t4net::remoteContig();
+        g_np.rendezvousAfter = g_np.rendezvousBefore;
+        const auto begin = std::chrono::steady_clock::now();
+        auto end = begin;
+        if (g_np.bootRendezvous && !t4net::peerLost())
+        {
+            ++g_np.rendezvousCalls;
+            g_np.rendezvousAfter = t4net::waitRemote(static_cast<uint32_t>(g_np.rendezvousTarget), UINT32_MAX);
+            end = std::chrono::steady_clock::now();
+            const auto elapsed = end - begin;
+            g_np.rendezvousMs = std::chrono::duration<double, std::milli>(elapsed).count();
+            npShift(elapsed);
+            g_np.liveT += elapsed; // npShift moves scheduler deadlines only; retain the current early margin too.
+        }
+        g_np.rendezvousReady = g_np.rendezvousAfter > g_np.rendezvousTarget && !t4net::peerLost();
+        std::fprintf(g_log, "NETBOOT_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d rendezvous=%d f=%" PRIu64
+                            " target=%" PRIu64 " local_max=%" PRIu64 " rc_before=%" PRIu64 " rc_after=%" PRIu64
+                            " ready=%d wait_ms=%.3f\n",
+                     std::chrono::duration<double, std::milli>(begin.time_since_epoch()).count(),
+                     std::chrono::duration<double, std::milli>(end.time_since_epoch()).count(), g_np.slot,
+                     g_np.bootRendezvous ? 1 : 0, f, g_np.rendezvousTarget, g_np.rendezvousLocalMax,
+                     g_np.rendezvousBefore, g_np.rendezvousAfter, g_np.rendezvousReady ? 1 : 0, g_np.rendezvousMs);
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -2076,6 +2128,8 @@ namespace tekken4_rollback
                 npSendLocal(f);
         }
 
+        if (firstLive)
+            npBootRendezvous(f);
         uint64_t rc = t4net::remoteContig();
         if (g_np.liveDone != f)
         {
@@ -2425,6 +2479,8 @@ namespace tekken4_rollback
             g_np.sendFirst = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_DEFER_RESIM_FLUSH"))
             g_np.deferResimFlush = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_BOOT_RENDEZVOUS"))
+            g_np.bootRendezvous = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_RBSTART"))
             g_np.rbStart = parseNumber(v);
         if (const char *v = std::getenv("TEKKEN4_NET_END"))
