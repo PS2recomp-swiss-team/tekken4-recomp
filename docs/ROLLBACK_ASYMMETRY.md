@@ -4,8 +4,28 @@
 
 The supplied verify reports were read from the explicitly requested
 `C:\OpenRecomp-work\reports\t4-verify` directory. No other checkout was opened.
-The latest report is `away312043`, build `943fc4631acf2c13`, started
-2026-10-31T20:43:20. It does not prove a cure:
+All 17 summary reports were checked. The latest is `all4.txt`, draft
+`ce8072b92f`, build `943fc4631acf2c13`, started 2026-11-02T01:24:37 and
+finished 01:39:52. Its switches-OFF pair reached live/logical 6000 on both
+peers, with 199 hash comparisons per peer, zero mismatches and no NETDESYNC.
+Host/join rollbacks were 311/931, resim frames 588/3740, maximum depth 7/9,
+prediction stalls 0/78 (0/2905 ms), and time-sync corrections 1/93.
+Run-average FPS was 52.2 on both; final windows near 60 do not erase the stalls.
+This run proves persistence of the problem, not a cause or cure.
+
+The five latest reports all use that same build, switches OFF, negotiated
+delay 3, RTT target 150 ms, jitter 5 ms, loss 3% and 6000 frames on one PC:
+
+| Run | Rollbacks H/J | Prediction stalls H/J | Stall time H/J, ms |
+|---|---|---|---|
+| `all1` | 256/969 | 0/96 | 0/3697 |
+| `all2` | 202/939 | 0/122 | 0/3169 |
+| `all3` | 317/936 | 0/73 | 0/2411 |
+| `work1` | 294/951 | 0/81 | 0/2456 |
+| `all4` | 311/931 | 0/78 | 0/2905 |
+
+An older comparison, `away312043` (2026-10-31T20:43:20), also fails to prove
+a cure:
 
 | Configuration | Rollbacks H/J | Resim frames H/J | Prediction stalls H/J | Stall time H/J, ms |
 |---|---|---|---|---|
@@ -16,8 +36,8 @@ Both configurations reached live/logical 6000, with 199 hash comparisons and
 zero mismatches at each endpoint. That supports the compared state, not pacing.
 `sun0005-final` also retained join stalls with DIAG OFF and ON (97/116 stalls,
 4270/3775 ms). The earlier zero-stall coalesce result did not reproduce in
-`away312043`. None of the supplied reports contains the actual NETDIAG records.
-There is no exact supplied run that proves the one-sided problem fixed.
+`away312043`. None of the 17 reports supplies raw NETDIAG records. There is no exact
+supplied run that proves the one-sided problem fixed.
 
 Source review found no new demonstrated cause. The existing default-off
 `TEKKEN4_NET_REFRESH_RC` corrects stale confirmation after time-sync sleep;
@@ -55,20 +75,25 @@ early exits and desync counts without a reliable failing result.
 These are verification gaps, not evidence of a runtime cause; no verifier code
 was changed without exercising its real entry point.
 
-No build, launcher, game, network script or real verification was run here.
-Existing mocked launcher and catalog tests could not start because Python was
-unavailable on PATH; they would not prove real launch or rollback behavior.
+No build, GUI launcher, game, network script or real verification was run here.
+Source-only entry checks did run: `tools/test_online_readiness.ps1` passed its
+three subprocess cases, `tools/check_online_catalogs.ps1` passed, and
+`tools/test_launcher_entry.ps1` passed the real `Tekken4.cmd` missing-Python
+refusal. They prove those source checks and refusal, not a GUI/game launch.
+Python launcher/catalog suites could not start because Python was unavailable
+on PATH. No runtime behavior was changed or exercised.
 
 The VU1 generator origin and unresolved licence are recorded in
-[THIRD_PARTY.md](THIRD_PARTY.md#vu1-generator-trace): GoW `main` at `b76921c`,
+[THIRD_PARTY.md](THIRD_PARTY.md#vu1-generator-trace) and
+[VU1_PROVENANCE.md](VU1_PROVENANCE.md): GoW `main` at `b76921c`,
 not the separately described GPL-3.0 runtime branch. No written grant resolving
 the generator licence was found in this repository.
 
-Area agents: `reports`, `net_timing`, `rollback_state`, `diag_trace`,
-`verify_entry`, `tests_catalogs`, `vu1_provenance`, `transport_audit`.
-All were read-only. Separate reviewer `final_diff_review` checked the final
-documentation change; its batch-count wording correction was applied. Runtime
-proof remains pending the external verify result.
+Current area agents: `verify_reports`, `diag_switch`, `frame_pacing`,
+`transport_inputs`, `rollback_state`, `vu1_provenance`, `tests_catalogs`.
+Only `vu1_provenance` wrote a file; the others audited source/reports or ran
+source-only checks. Separate agent `final_diff_review` reviews the final diff.
+Runtime proof remains pending the external verify result.
 
 ## Maintainer's 2026-10-31 results and Sunday decision
 

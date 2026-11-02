@@ -3,6 +3,18 @@
 _Last updated: 2026-11-02 (package 5 source checks; online acceptance blocked)_
 
 ## Resume here
+- **Latest asymmetry evidence (2026-11-02, documentation only):** all 17 requested
+  verify summaries were read. Latest `all4`, draft `ce8072b92f`, build
+  `943fc4631acf2c13`, finished 01:39:52: switches OFF, rollbacks H/J 311/931,
+  prediction stalls 0/78 (0/2905 ms), 199 hashes per side and zero mismatches.
+  No report contains raw NETDIAG; no exact run proves a cause or cure. No new
+  runtime change was made under the real-entry proof rule. Existing guarded
+  corrections remain unproved as a cure. See `docs/ROLLBACK_ASYMMETRY.md` for
+  the repeated results and required external evidence. Source readiness,
+  catalogs and real starter-refusal checks passed; Python suites, GUI, build,
+  selftest and game pair stayed unrun. `docs/VU1_PROVENANCE.md` records the
+  generator's GoW main/b76921c origin and unresolved licence; the existing
+  source-archive provenance record remains `docs/THIRD_PARTY.md`.
 - **Package 5 follow-up (2026-11-02, source copy only):** current decisions
   supersede historical separate-login proposals in `SERVER_HANDOFF_T4.md` and
   `docs/LOBBY.md`. Account/kicked, coexistence, rank-text and switch evidence

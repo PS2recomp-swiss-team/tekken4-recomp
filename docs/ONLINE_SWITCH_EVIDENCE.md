@@ -50,9 +50,9 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `42c131551e`, merge base `8b15202341` (branch base `7992837fc3`), onto
-`c17fd979ca`; clean merge; build OK in 163 seconds, build ID
-`943fc4631acf2c13`. Finished `2026-11-02T01:18:22`.
+Run `all4`, draft `ce8072b92f`, merge base `8b15202341` (branch base
+`7992837fc3`), onto `c17fd979ca`; clean merge; build OK in 205 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T01:39:52`.
 
 - Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
   restores, zero bad restores, 447 resim comparisons with zero mismatches;
@@ -60,10 +60,10 @@ Draft `42c131551e`, merge base `8b15202341` (branch base `7992837fc3`), onto
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 317/936, resim frames 642/3680, maximum depth 7/9;
-  prediction stalls 0/73 (0/2411 ms). Run-average FPS 52.2/52.2; final FPS
-  windows 59.9/60.0 do not erase the remaining pacing gaps. Displayed-boundary
-  p99 was 106.9/98.4 ms. Coalesced packets were zero on both endpoints.
+- Host/join rollbacks 311/931, resim frames 588/3740, maximum depth 7/9;
+  prediction stalls 0/78 (0/2905 ms). Run-average FPS 52.2/52.2; final FPS
+  windows 59.9/59.9 do not erase the remaining pacing gaps. Displayed-boundary
+  p99 was 116.7/99.3 ms. Coalesced packets were zero on both endpoints.
 
 This is supplied evidence, not a run performed here. Full effective parameter
 records and raw logs were not supplied in this prompt. "Switches OFF" must not
@@ -92,5 +92,9 @@ Repeat after swapping roles, then use two physical PCs with sound and human
 play, rematch and disconnect recovery. Shared-server login/match/relay tests
 also need the private launcher/server sources and owner coordination.
 
-No Python, GUI, helper, preflight UDP exchange, build, selftest, pair or game was
-run here. Source/link checks cannot close these runtime requirements.
+Source-only entry checks passed: `tools/test_online_readiness.ps1` (three
+subprocess cases), `tools/check_online_catalogs.ps1`, and
+`tools/test_launcher_entry.ps1`. The last ran real `Tekken4.cmd`, which refused
+missing private Python as expected. No Python suite, GUI, network helper,
+preflight UDP exchange, build, selftest, pair or game ran here. These source
+checks and the starter refusal cannot close the runtime requirements.
