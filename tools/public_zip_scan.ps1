@@ -82,6 +82,7 @@ function Invoke-PublicZipScan {
         if ($central + $centralSize -ne $end) { throw 'Unsupported or malformed ZIP directory.' }
         $cursor = $central
         $regions = New-Object 'Collections.Generic.List[object]'
+        $deflateMembers = New-Object 'Collections.Generic.List[object]'
         $memberCrcs = New-Object 'Collections.Generic.List[uint32]'
         $declaredBytes = [long]0
         for ($index = 0; $index -lt $entries; $index++) {
@@ -126,6 +127,13 @@ function Invoke-PublicZipScan {
             $regionEnd = $local + 30 + $nameLength + $compressedSize
             if ($regionEnd -gt $central) { throw 'ZIP compressed member exceeds local bounds.' }
             $regions.Add([pscustomobject]@{Start=$local;End=$regionEnd})
+            if ($method -eq 8) {
+                $deflateMembers.Add([pscustomobject]@{
+                    Offset=[int]($local + 30 + $nameLength)
+                    Length=[int]$compressedSize
+                    ExpectedLength=$uncompressedSize
+                })
+            }
             $cursor += 46 + $nameLength + $extraLength + $commentLength
             if ($cursor -gt $end) { throw 'Malformed ZIP directory bounds.' }
         }
@@ -136,6 +144,13 @@ function Invoke-PublicZipScan {
             $covered = $region.End
         }
         if ($covered -ne $central) { throw 'ZIP local members do not cover the archive prefix.' }
+
+        # .NET can return zero bytes for a truncated empty DEFLATE stream.
+        # Check complete raw streams before trusting its output length/CRC.
+        foreach ($compressedMember in $deflateMembers) {
+            Assert-PublicZipDeflate -Data $data -Offset $compressedMember.Offset `
+                -Length $compressedMember.Length -ExpectedLength $compressedMember.ExpectedLength
+        }
 
         $memory = New-Object IO.MemoryStream(,$data)
         $archive = New-Object IO.Compression.ZipArchive($memory, [IO.Compression.ZipArchiveMode]::Read, $true)

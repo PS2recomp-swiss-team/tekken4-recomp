@@ -79,6 +79,39 @@ It does not prove that every hidden compressed representation was inspected.
 The command output and before/after hashes are retained under
 `logs/public-zip-crc-audit-69c2e5ac5d3a4520979ec0544815e9a2/`.
 
+## DEFLATE validation follow-up
+
+Reran all four inputs through the actual command with the completed raw
+DEFLATE validator. The helper SHA-256 was
+`049b5972869e0d67e90aac14cc2a90c11123de58fdbbe4665d786c239a803656`
+before and after every subprocess. Every archive hash stayed unchanged and
+the scanner's reported identity matched the recorded input hash.
+
+| Input | Exit | Entries / files / bytes read | Elapsed seconds |
+|---|---:|---:|---:|
+| Sunday `042256-264836` | 1 | 123 / 123 / 4,187,421 | 42.351 |
+| Sunday `205433-879960` | 1 | 124 / 124 / 4,207,076 | 41.485 |
+| Sunday `205628-895451` | 1 | 124 / 124 / 4,207,280 | 39.920 |
+| Portable sanitized subset | 0 | 80 / 80 / 2,025,621 | 18.483 |
+
+All three Sunday archives again reported only the same 46 email, 46 coauthor
+mail and 46 author-mailbox categories. The portable subset passed. These are
+observed wall times with other test processes running, including PowerShell
+startup. They are materially slower than the earlier CRC-only checks above;
+they are not an isolated benchmark or a performance guarantee.
+
+The exact retained truncated-empty DEFLATE reproducer now exits **1 /
+REFUSED** through the same command, in 0.541 seconds. Its SHA-256 stayed
+`331d43c8da4a4e064ea2fec821a09c274957f3dc48352fef9ba4f478de0576ae`.
+The earlier scanner accepted these same bytes; no archive was repaired to
+obtain the refusal. This closes that observed false pass, not the separate
+player acceptance or rights gates.
+
+Final command output and hash/timing records are the `final-*` files under
+`logs/public-zip-deflate-audit-970f5bfc8abd4293ba7d92f95eaba629/`.
+Earlier files there are preliminary runs; some preceded the final helper.
+No member was extracted, modified or executed.
+
 ## Sanitized source subset experiment
 
 The real `publish_public_tree.ps1` entry also staged `LICENSE` and all

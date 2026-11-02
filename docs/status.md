@@ -1,17 +1,34 @@
 # Status
 
-_Last updated: 2026-11-02 (ZIP integrity follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (DEFLATE completion follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current ZIP integrity follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+- **Current DEFLATE completion follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records the unchanged truncated-empty stream that previously passed and now
+  refuses through the actual scanner. Complete empty controls pass. New valid
+  and malformed-stream suites ran through the actual scanner. The separate
+  reviewer's frozen aggregate passed 804 assertions / 96 scanner processes;
+  all 79 patch names/hashes stayed unchanged. Final retained archives kept
+  expected results and hashes, but scans took about 40-42 seconds versus about
+  4 seconds previously under different concurrent load. There is no work/time
+  budget; this resource limit remains open. See [audit](PUBLIC_ZIP_AUDIT.md).
+  Latest owner-supplied draft `8f27d7f6be`, clean 161-second build
+  `943fc4631acf2c13`, finished `2026-11-02T02:17:42`, reports a switches-OFF
+  same-PC pair: 199 hashes per side, zero mismatches/NETDESYNC, host/join
+  run-average 52.0/52.0 FPS, stalls 0/88 (0/3052 ms), displayed-frame p99
+  109.4/102.0 ms. It does not prove this edited tree, the enabled GUI profile
+  or two-PC play. Release remains **NO-GO**. See
+  [ONLINE_SWITCH_EVIDENCE.md](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier ZIP integrity follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
   records an actual false pass for matching but incorrect ZIP CRC fields and
   the unchanged-fixture after-fix refusal. The reader now checks actual member
   CRCs and stored lengths; known-vector and corruption tests invoke the real
   scanner command. The aggregate passed 421 assertions / 59 scanner processes;
-  retained archives kept their expected results and unchanged hashes. A known
-  truncated-empty-DEFLATE false pass remains open. Separate final review
-  found no blocker in the scoped CRC changes. These checks do not prove a
+  retained archives kept their expected results and unchanged hashes. At that
+  stage, the truncated-empty-DEFLATE false pass remained open; see above.
+  Separate final review found no blocker in the scoped CRC changes. These checks do not prove a
   complete source/player candidate, launcher, build or game.
   Latest owner-supplied verification is draft `9cdebb4f93`, clean 167-second
   build `943fc4631acf2c13`, finished `2026-11-02T02:06:00`: switches OFF,

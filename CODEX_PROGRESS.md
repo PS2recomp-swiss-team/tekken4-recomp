@@ -1,6 +1,92 @@
 # T4 beta progress, 2026-11-02
 
-## ZIP integrity follow-up, current session
+## DEFLATE completion follow-up, current session
+
+Release remains **NO-GO**. The selected source-only open item was the observed
+truncated empty-DEFLATE false pass. No launcher, runtime, switch or server
+behavior changed.
+
+Done:
+
+- Before the fix, the actual `scan_public_zip.ps1` accepted the retained
+  truncated stream. It now exits 1 / REFUSED on the same unchanged input:
+  SHA-256 `331d43c8da4a4e064ea2fec821a09c274957f3dc48352fef9ba4f478de0576ae`.
+  Complete empty controls still pass. Root independently reran the refusal.
+- Added [raw DEFLATE validation](tools/public_zip_deflate.ps1), wired through
+  the real scanner's checked dependencies and bounded member regions. Stored,
+  fixed and dynamic blocks must complete; Huffman trees, repeats, reserved
+  symbols, output length and backreference history are checked. Only unused
+  bits of the final byte may remain. Later .NET reads and CRC checks still run.
+  No compilation, extraction, archive repair or member execution occurs.
+- Added [valid stream tests](tools/test_public_zip_deflate_valid.ps1) and
+  [malformed stream tests](tools/test_public_zip_deflate_invalid.ps1): actual
+  scanner subprocesses, clean controls, unchanged hashes/inventory and output
+  redaction. Final helper passed 123 assertions / 11 valid-suite processes,
+  260 / 26 malformed-suite processes and 132 / 11 existing integrity processes.
+  Root independently ran both final new suites: exit 0, 383 assertions through
+  37 actual scanner subprocesses. Clean controls passed; malformed cases refused.
+- The final reviewer caught malformed-distance fixtures whose zero declared
+  length could cause an earlier refusal. The test agent gave them plausible
+  declared lengths and reran the suite; no assertion was weakened.
+- Both actual catalogs ran: 23 unique present tools each and three root files.
+  The aggregate now parses 13 required files and invokes all six scanner
+  suites plus the catalog entry. The separate reviewer ran the frozen aggregate:
+  exit 0, 804 assertions through 96 scanner processes (60/10, 171/33, 58/5,
+  132/11, 123/11, 260/26); all 79 patch names and hashes stayed unchanged.
+- The final helper SHA-256 is
+  `049b5972869e0d67e90aac14cc2a90c11123de58fdbbe4665d786c239a803656`.
+  A hot-loop optimization landed during initial aggregate/audit runs. Those
+  mixed-version runs are not final proof. The separate frozen aggregate and
+  five retained-input scans completed with this helper hash unchanged before
+  and after execution. No implementation edits followed the frozen checks.
+- The final actual archive audit read all three Sunday inputs: expected exit 1,
+  123/124/124 files and only the same 138 mail-category records per archive.
+  The sanitized portable subset passed: exit 0, 80 files, 2,025,621 bytes.
+  All input hashes stayed unchanged. Final concurrent-load wall times were
+  42.351/41.485/39.920 seconds for Sunday inputs and 18.483 for the subset,
+  materially slower than the earlier 4.2/2.6-second CRC-only reader. See
+  [PUBLIC_ZIP_AUDIT.md](docs/PUBLIC_ZIP_AUDIT.md). This remains a test subset,
+  not complete corresponding source or a player candidate.
+- Updated [scanner scope](docs/PUBLIC_ZIP_SCAN.md) and
+  [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md).
+  Root's final real document check covered all five changed documents:
+  70 local links resolved and 69 PowerShell files parsed, then exit 1 on
+  retained image-name and corrupt-ZIP fixtures. No fixture was removed
+  or checker relaxed to manufacture a pass.
+
+Open / owner-only:
+
+- The scanner is materially slower. It has byte/memory bounds, not a wall-time
+  or work-budget bound; many-block adversarial inputs may take substantial
+  time. This performance/resource limitation remains open. Whole-tree source
+  checking also remains red on retained image-name/unsafe/corrupt fixtures.
+- Exact complete source/player/privacy/licence review, Python suites/payload
+  checks, actual launcher GUI/portable first-run, build/game, enabled GUI
+  switches and two physical PCs remain open. Those routes are unrun here;
+  builds, game and network helpers are forbidden in this copy.
+
+Latest owner-supplied verification, not reproduced here: draft `8f27d7f6be`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 161-second build `943fc4631acf2c13`, finished `2026-11-02T02:17:42`.
+Selftest: 6000 wall / 5106 logical frames, 202 successful restores, zero bad,
+447 resim comparisons with zero mismatches, 101/101 wrong-input divergences.
+Switches-OFF same-PC pair: 6000 frames, 199 hashes per side, zero mismatches
+and NETDESYNC lines; host/join run-average FPS 52.0/52.0, stalls 0/88
+(0/3052 ms), displayed-frame p99 109.4/102.0 ms. This supersedes the older
+supplied reports below; it proves neither this edited tree, the enabled GUI
+profile nor two-PC play.
+
+Eight area agents have exclusive files: `deflate_validator`, `zip_integration`,
+`deflate_valid_tests`, `deflate_invalid_tests`, `tests_catalogs`, `deflate_docs`,
+`retained_archive_audit`, `verify_evidence`. Separate `final_diff_review_deflate`
+reviewed the finished code against original bytes saved under
+`logs/deflate-session-9e5a0645172b4663abda18faada7015c/` and reran real entries.
+Final code and document review completed; no blocking issue was found.
+All read AGENTS.md. Root owns this record, `docs/status.md` and the scanner
+entry dependency list. No Git command, build, game, network helper, server,
+push or release ran here.
+
+## Earlier ZIP integrity follow-up
 
 Release remains **NO-GO**. The selected open source-only item was actual ZIP
 member CRC verification. Matching header fields alone did not check the bytes

@@ -41,7 +41,7 @@ try {
     }
     if ([IO.Path]::GetExtension($archivePath) -ine '.zip') { throw 'Not a ZIP filename.' }
     Assert-LocalRegularFile $archivePath
-    foreach ($name in @('public_patch_headers.ps1', 'public_tree_scan.ps1', 'public_zip_scan.ps1')) {
+    foreach ($name in @('public_patch_headers.ps1', 'public_tree_scan.ps1', 'public_zip_deflate.ps1', 'public_zip_scan.ps1')) {
         $dependency = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot $name))
         Assert-LocalRegularFile $dependency
         . $dependency

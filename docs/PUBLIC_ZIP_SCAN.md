@@ -30,15 +30,23 @@ without gaps or overlaps. Stored members must declare equal compressed and
 uncompressed lengths. The scanner recomputes CRC-32 from the uncompressed
 bytes it reads and compares it with the matching header CRCs, including empty
 files and directories. A mismatch causes refusal. CRC detects corruption; it
-does not authenticate a producer or prove that every compressed byte was
-consumed. This is not proof that every possible hidden byte has been found.
-SHA-256 identifies the archive bytes read.
+does not authenticate a producer. SHA-256 identifies the archive bytes read.
 
-A real-entry audit found a remaining limitation: the .NET reader returns
-empty content for a truncated deflated member declaring zero length and CRC
-zero. Such an archive can still pass alongside another clean file. CRC checks
-the returned bytes; it does not prove a complete DEFLATE stream. Full stream
-validation remains open.
+Deflated members also pass a bounded
+[raw DEFLATE check](../tools/public_zip_deflate.ps1) before the .NET reader
+returns their content. It checks stored, fixed-Huffman and dynamic-Huffman
+blocks, including code tables, length/distance history, the declared output
+length and completion of the final block. The compressed extent must end in
+that block's last byte; unused bits in that byte are allowed. Truncated
+streams, trailing bytes and concatenated streams are refused. This check
+does not extract content or replace the later .NET read and CRC comparison.
+It is not proof that every possible hidden byte has been found.
+
+The PowerShell format check adds CPU time. Byte and memory bounds do not
+provide a wall-time or work-budget limit; archives with many blocks can be
+expensive to check. See the measured retained-input timings in
+[PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md). A slow scan is not evidence of a
+completed scan or a pass.
 
 Member paths must use `/`. Some Windows ZIP convenience methods write `\`
 instead; those archives are refused. Use a packager that writes portable
@@ -62,6 +70,9 @@ The [CRC vectors](../tools/test_public_zip_crc.ps1) check clean stored and
 deflated text, empty members and known CRC values. The
 [integrity cases](../tools/test_public_zip_integrity.ps1) check corrupt
 content and matching but incorrect header CRCs after a clean control passes.
+The [valid DEFLATE cases](../tools/test_public_zip_deflate_valid.ps1) and
+[invalid DEFLATE cases](../tools/test_public_zip_deflate_invalid.ps1) exercise
+compressed-format checks through the same actual scanner entry.
 No game data, keys, screenshots or real credentials are needed for them.
 Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
 remains open.
