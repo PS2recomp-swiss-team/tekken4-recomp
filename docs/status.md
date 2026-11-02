@@ -1,30 +1,29 @@
 # Status
 
-_Last updated: 2026-11-02 (App still unrun; supplied draft f74cffb3f8; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft c7f83cf8a0; NO-GO)_
 
 ## Resume here
 
 - **Current release gate:**
-  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records sixteen independent areas
-  and a separate final diff reviewer. Actual App/portable acceptance remains
-  blocked: private Python, reviewed locks and portable toolchain marker are
-  absent; App discovery also leaves this permitted tree. The existing
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records sixteen area agents and a
+  separate final diff reviewer. Actual App/portable acceptance remains blocked:
+  private Python, reviewed locks and portable toolchain marker are absent;
+  App discovery also leaves this permitted tree. The existing
   [owner checklist](RELEASE_PATH_B.md) requires exact candidate identity,
-  responsive actual App, process identity, exit/reopen/settings, licence
+  responsive actual App/process identity, exit/reopen/settings, licence
   cancel/accept and build/play/return. Actual starter refusal, both 23-tool
   catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
   No production or test code changed. The App never started.
-  Latest supplied draft `f74cffb3f8`: clean 251-second build
-  `943fc4631acf2c13`, finished `2026-11-02T09:03:54`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 47.6/47.6 FPS, stalls 0/144
-  (0/6256 ms), displayed-frame p99 162.5/123.3 ms. FPS rose against the
-  preceding supplied report; host p99 rose while join p99 fell. Cause and
-  usable pacing remain unproved. Supplied, not reproduced here; no App,
-  enabled GUI-profile or two-PC acceptance. Owner next: provide the reviewed
-  complete candidate, matching complete source and locks/notices, then run
-  the existing checklist in the authorized environment. Full content/privacy/
-  licence, Python suites and exact build/game acceptance remain open.
-
+  Latest supplied draft `c7f83cf8a0`: clean 189-second build
+  `943fc4631acf2c13`, finished `2026-11-02T09:21:01`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 48.2/48.2 FPS, stalls 0/146
+  (0/6403 ms), displayed-frame p99 162.8/117.3 ms. Negotiated delay changed
+  from 2 to 3. Cause and usable pacing remain unproved. Supplied, not
+  reproduced here; no App, enabled GUI-profile or two-PC acceptance.
+  Owner next: provide the reviewed complete candidate, matching complete
+  source and locks/notices, then run the existing checklist in the authorized
+  environment. Full content/privacy/licence, Python suites and exact
+  build/game acceptance remain open. No new executable local fix was found.
 - **Earlier launcher acceptance gate and evidence completion:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal
   and readiness result: private Python is absent, GUI never started, readiness

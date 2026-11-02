@@ -1,5 +1,85 @@
 # T4 beta progress, 2026-11-02
 
+## Release gate and supplied verification c7f83cf8a0
+
+Release remains **NO-GO**. The most valuable open item is still actual App
+startup and portable first-run through the exact complete candidate. Sixteen
+area agents found no new justified fix that can be run here. Private Python,
+reviewed input locks and the portable toolchain marker are absent; App
+initialization searches outside this permitted tree. No production or test
+code changed. Repeating source checks cannot establish App acceptance.
+
+Done:
+
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1): exit 0 only
+  for real `Tekken4.cmd` exit 1, missing private Python. Empty stderr; starter
+  and test hashes unchanged. The App never started. Evidence:
+  `logs/launcher-c7-681437fb07bc4f9aa16d4dd3b95ab0b2/`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1): both 23-tool
+  catalogs and three root files passed. Actual
+  [readiness tests](tools/test_online_readiness.ps1): three real checker
+  subprocess cases passed; normal readiness stayed 2 / BLOCKED. Empty stderr;
+  ten source hashes unchanged. Evidence:
+  `logs/tests-catalogs-c7-93c13aabd00647ba9fb04c9cb64fd1f7/`.
+- Recorded the latest supplied draft `c7f83cf8a0` in the
+  [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and
+  [decision sheet](docs/BETA_GO_NO_GO.md): clean 189-second build
+  `943fc4631acf2c13`, finished `2026-11-02T09:21:01`. OFF selftest: 202 good
+  restores, zero bad, 447 resim comparisons with zero mismatches, all 101
+  wrong-input passes diverged. OFF same-PC pair: 6000 live/logical frames and
+  199 hashes each, zero mismatches/NETDESYNC, 48.2/48.2 FPS, stalls 0/146
+  (0/6403 ms), displayed-frame p99 162.8/117.3 ms. Supplied, not reproduced
+  here. Negotiated delay changed from 2 to 3; these summaries do not establish
+  a cause for pacing changes or prove usable pacing.
+- Independent portable, Python/Tk, settings/process, controller, offline,
+  licence, privacy, player-payload, corresponding-source, effective-profile,
+  two-PC, scanner-gap and integrated-launcher reviews found no executable
+  local acceptance fix. Existing [owner checks](docs/RELEASE_PATH_B.md)
+  already require responsive actual App/process identity, exit/reopen/settings,
+  licence cancel/accept and build/play/return. Launcher-pad navigation remains
+  unimplemented; in-game controls cannot prove it. The three old incomplete
+  ZIPs are not complete candidates. No duplicate scanner suite was added.
+
+Open: actual App/portable acceptance, complete source/player content and
+privacy/licence review, Python suites, enabled GUI Host/Join profile and two
+physical PCs. Fullscreen inheritance and offline spawn-failure log cleanup
+remain source observations, not reproduced fixes. Scanner limits still include
+failed termination, interruption inside one write and unobserved descendants.
+Retained fixture findings and incomplete archives remain failures. Unchanged
+long aggregates and the whole-tree beta checker were not rerun.
+
+Owner-only next step: provide the exact reviewed complete candidate, ZIP hash,
+matching complete source and reviewed locks/notices; run its actual
+`Tekken4.cmd` using the existing checklist in the authorized validation
+environment. Observe responsive App, normal exit/reopen/settings and licence
+cancel/accept, then portable first-run/build/play/return. Python alone is
+insufficient. Exact build/game, shared-launcher integration, enabled GUI
+profile, sound-on usable pacing and two physical PCs still need real proof.
+GUI, Python suites, packagers, build, game and network helpers stayed **UNRUN
+here**. The supplied same-PC run does not replace two PCs.
+
+Sixteen area agents: `launcher_entry_c7`, `tests_catalogs_c7`,
+`supplied_verify_c7`, `portable_candidate_c7`, `python_tk_c7`,
+`settings_process_c7`, `controller_ui_c7`, `offline_flow_c7`,
+`licence_inputs_c7`, `source_privacy_c7`, `player_payload_c7`,
+`corresponding_source_c7`, `effective_profile_c7`, `two_pc_pacing_c7`,
+`scanner_gaps_c7`, `integrated_launcher_c7`.
+Separate final reviewer: `final_diff_review_c7`. File ownership was exclusive.
+Root owns this record and `docs/status.md`. Original bytes and the 347-file
+scoped inventory are in
+`logs/release-c7-a4376efcd7d04aa0b7ee23b34ac3dedd/`.
+Actual readiness verification for all four changed documents is captured in
+that folder's `strict-final/`; independent review is in `final-review/`.
+The initial `final-entry/` ran the checker (exit 2, empty stderr) but its
+inventory array handling was invalid; that capture is retained as failed
+evidence. The supplied-document agent also retained an initial invalid exit
+capture, followed by its strict rerun at
+`logs/supplied-c7-a1ddd9dfd0ec4b2aa341476c0a5db89f/strict-rerun/`.
+Readiness remains BLOCKED; neither check establishes App acceptance.
+
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification f74cffb3f8
 
 Release remains **NO-GO**. The most valuable open item is the exact complete
