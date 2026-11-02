@@ -94,6 +94,14 @@ contexts can still name old machines; those are records, not player inputs. The 
 
 ## Clean-PC acceptance checklist (owner runs later)
 
+Keep a text record for the exact candidate: version, reviewed source revision,
+zip SHA-256, input-lock hashes, matching source export and build IDs. Use PC labels,
+Windows version, private Python/Tcl/Tk versions, UTC times and relative evidence
+locations; omit personal paths, addresses, game data and screenshots. Record each
+observation as PASS, FAIL or UNRUN with evidence. Keep standalone App and integrated
+new-launcher results separate. A starter exit, `--selftest`, the packager's small Tk
+probe or mocked core tests cannot establish that the actual App opened and responded.
+
 1. Resolve the VU1 generator's licence/provenance: its current header says the copied upstream main branch had no
    licence. Use the local evidence and owner questions in [THIRD_PARTY.md](THIRD_PARTY.md).
    Review every dependency's notices and the exact FFmpeg LGPL build/source offer, including bundled libraries.
@@ -102,8 +110,12 @@ contexts can still name old machines; those are records, not player inputs. The 
    and `SHA256SUMS`. Feed renamed disc files, ELF, BIOS, generated C++, compiled game code, nested archives and Microsoft
    sysroots into negative scanner tests in a disposable test folder outside this clean source copy.
 3. On Windows 10/11 x64 with no Python, Git, CMake, Ninja, VS or SDK installed, extract to a writable path containing
-   spaces and non-ASCII characters. Start `Tekken4.cmd`, select a supported US ISO, reject the licence prompt, and prove
-   no Microsoft payload was fetched. Accept next time; verify payload sizes/hashes, cabinet/MSI extraction without admin,
+   spaces and non-ASCII characters. Start that package's actual `Tekken4.cmd`. Verify the App is visible and responsive
+   by switching tabs. Record the actual launcher process ID and start time; close normally and verify that process
+   exits. Start the same entry again and repeat the response check. The starter launches Python asynchronously;
+   its exit alone cannot pass this step. Change an available setting, close and reopen, and verify it was retained.
+   Select a supported US ISO, press BUILD GAME and cancel the Microsoft licence prompt. Prove no build or Microsoft
+   fetch started. Retry and explicitly accept; verify payload sizes/hashes, cabinet/MSI extraction without admin,
    retries after interrupted downloads, retained terms and the installed sysroot receipt. Check proxies and TLS failures.
 4. Build once from a clean bundle in one invocation. Verify recompiler, generated functions, native VU1 blocks,
    resource compilation/linking/manifest embedding, FFmpeg DLL staging, CRT dependencies and the runtime executable.
@@ -114,6 +126,8 @@ contexts can still name old machines; those are records, not player inputs. The 
    across two identical portable builds on different paths and differ when compiler inputs change.
 6. Play through boot, character selection and fights on all stages; measure frame timing against MSVC, listen to sound,
    test controllers/settings/saves, and compare graphics and native VU1 behaviour. Test the advertised CPU baseline.
+   Use Play offline then PLAY in the actual App with sound on. After exiting the game, verify the launcher responds,
+   close and reopen it, and check settings retention again. Record these observations separately from build success.
 7. Test the exact new launcher with offline play and two physical PCs over the advertised direct-IP/VPN route,
    with sound on and matching build IDs. Use cold boot for every online match, test both host/join roles,
    and retain both logs. Compare COALESCE ON/OFF as described in [ROLLBACK_ASYMMETRY.md](ROLLBACK_ASYMMETRY.md).

@@ -1,6 +1,77 @@
 # T4 beta progress, 2026-11-02
 
-## Launcher acceptance gate and evidence completion, current session
+## Concrete launcher acceptance handoff, current session
+
+Release remains **NO-GO**. Actual complete-package App startup and portable
+first-run are still the most valuable open item. This copy lacks private
+Python and reviewed portable inputs. App startup also discovers ISO files
+outside this copy, so it must run in the owner's authorized validation
+environment. No production or test code was changed without execution proof.
+
+Done:
+
+- Made the existing [clean-PC checklist](docs/RELEASE_PATH_B.md) explicit:
+  identify the exact candidate, observe a visible responsive App through its
+  actual `Tekken4.cmd`, identify its process, close normally and reopen, then
+  verify settings retention. Licence cancel/accept and offline play/return
+  have separate observations. Standalone and integrated-launcher results
+  remain separate. This procedure is **UNRUN**, not a new passing test.
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1) exited 0
+  solely for real `Tekken4.cmd` exit 1, missing private Python. Stderr was
+  empty and three checked source hashes stayed unchanged. GUI never started.
+  Evidence: `logs/launcher-entry-release-a2614f1b6d6e44d497eb42a5eadc8267/`.
+- Actual [catalog check](tools/check_online_catalogs.ps1) passed both
+  23-tool catalogs and three source root files. Actual
+  [readiness tests](tools/test_online_readiness.ps1) passed three checker
+  subprocess cases; normal readiness remained 2 / BLOCKED. Both stderr
+  streams were empty and ten checked source hashes stayed unchanged.
+  Evidence: `logs/release-tests-catalogs-11ee7aed570149988e5186e5f40714b9/`.
+- Actual [readiness entry](tools/check_online_readiness.ps1) checked all five
+  changed documents / 156 local links, 12 required files and seven PowerShell
+  parses, then ran catalogs and actual starter refusal. Exit 2 / BLOCKED,
+  empty stderr and nine checked source hashes unchanged. Evidence:
+  `logs/release-owner-handoff-1e2248f447684977a0ad69e52b2bdc6a/document-entry-encoded/`.
+  Two earlier root capture invocations mishandled PowerShell exit forwarding
+  or quoting; they remain preliminary failures. No source fix was needed.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `a3a7ec6862`:
+  clean 165-second build `943fc4631acf2c13`, finished `2026-11-02T07:45:38`;
+  OFF selftest 202 good restores, zero bad, 447 comparisons with zero
+  mismatches and all 101 wrong-input passes diverged. OFF same-PC pair:
+  6,000 frames, 199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS,
+  stalls 0/94 (0/3439 ms), displayed-frame p99 118.8/99.0 ms. Supplied,
+  not reproduced here; no exact package, GUI profile or two-PC proof.
+
+Open: complete source/player content, privacy and licence review, Python
+suites and existing scanner coverage gaps. Retained fixture findings and
+incomplete archives remain failures. Unchanged tree/ZIP aggregates and the
+whole-tree beta checker were not rerun; they cannot close App acceptance.
+Separate reviewer `final_diff_review_handoff` found no blocker in the five
+document changes. Its actual readiness entry checked five documents / 157
+links, 12 required files and seven parses, then catalogs and starter refusal:
+exit 2 / BLOCKED, empty stderr, all 235 checked hashes unchanged. All five
+saved originals matched their recorded hashes; the scoped 347-file inventory
+had unchanged names and only the three expected root documents differed
+from the post-evidence snapshot. Evidence:
+`logs/final-diff-review-handoff-42ce352ed3b74de3aa418a6e3e3004a2/`.
+
+Only the owner can supply the exact reviewed complete candidate and run the
+expanded App/portable checklist, the exact build/game, integrated launcher,
+enabled GUI Host/Join profile and two physical PCs. A detached starter exit,
+launcher `--selftest`, small Tk probe or mocked core suite proves no App.
+No GUI, Python suite, build, game or network helper ran here.
+
+Eight area agents: `launcher_entry_proof`, `portable_first_run`,
+`tests_and_catalogs`, `latest_verify_evidence`, `effective_switch_profile`,
+`release_licence_inputs`, `launcher_coverage_gap`, `candidate_scope_handoff`.
+Separate final reviewer: `final_diff_review_handoff`. File ownership
+was exclusive. Root owns this record, `docs/status.md` and the checklist.
+Original root bytes/hashes: `logs/release-owner-handoff-1e2248f447684977a0ad69e52b2bdc6a/`;
+evidence-doc originals: `logs/latest-verify-a3a-c3479aae1433405591c60d292e7eb060/`.
+No Git command, deletion, build, game, forbidden helper, server, push or
+release ran here.
+
+## Earlier launcher acceptance gate and evidence completion
 
 Release remains **NO-GO**. The most valuable open item is the exact complete
 package's actual launcher App and portable first-run. This copy cannot prove

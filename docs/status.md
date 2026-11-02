@@ -1,10 +1,28 @@
 # Status
 
-_Last updated: 2026-11-02 (launcher acceptance gate; release remains NO-GO)_
+_Last updated: 2026-11-02 (concrete launcher handoff; release remains NO-GO)_
 
 ## Resume here
 
-- **Current launcher acceptance gate and evidence completion:**
+- **Current concrete launcher acceptance handoff:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) resumes the actual App/portable
+  gate. The [clean-PC checklist](RELEASE_PATH_B.md) now requires a visible
+  responsive App through the exact package's actual `Tekken4.cmd`, observed
+  process exit, restart, retained settings, licence cancel/accept and offline
+  play/return. These owner observations remain UNRUN; standalone and integrated
+  launcher results stay separate. Real starter refusal, both 23-tool catalogs
+  and three readiness cases passed here; normal readiness remains 2 / BLOCKED.
+  No production or test code changed. Source checks cannot prove App startup.
+  Latest supplied draft `a3a7ec6862`: clean 165-second build
+  `943fc4631acf2c13`, finished `2026-11-02T07:45:38`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/94
+  (0/3439 ms), displayed-frame p99 118.8/99.0 ms. This was not reproduced
+  here and proves neither the exact package, enabled GUI profile nor two PCs.
+  Private Python and reviewed portable inputs are absent; App ISO discovery
+  also leaves this copy. Full source/player/privacy/licence review, Python
+  suites, exact build/game and two-PC acceptance remain owner gates.
+
+- **Earlier launcher acceptance gate and evidence completion:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal
   and readiness result: private Python is absent, GUI never started, readiness
   remains 2 / BLOCKED. No production or test code changed. Source inspection
