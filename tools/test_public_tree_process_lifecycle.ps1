@@ -1,6 +1,8 @@
 # Observe the actual tree entry's worker independently through process counters.
 [CmdletBinding()]
-param()
+param(
+    [switch]$ExerciseOuterWatchdog
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -13,6 +15,9 @@ $checks = 0
 $runs = 0
 $failure = 'Setup or process observation failed; raw diagnostics withheld.'
 $category = New-Object Diagnostics.PerformanceCounterCategory('Process')
+$outerWatchdogTriggered = $false
+$watchdogSupervisor = $null
+$watchdogWorker = $null
 
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { $script:failure=$Message; throw 'Lifecycle assertion failed.' }
@@ -144,18 +149,25 @@ function Invoke-Entry([string]$Label, [bool]$Export, [bool]$Timeout) {
     $proc.StartInfo = $info
     $workerIdentity = $null
     $supervisorIdentity = $null
+    $forcedWatch = $null
     $watch = [Diagnostics.Stopwatch]::StartNew()
     try {
         Assert-True ($proc.Start()) 'Actual tree supervisor did not start.'
         $script:runs++
         $supervisorIdentity = Get-Identity $proc.Id
         Assert-True ($null -ne $supervisorIdentity) 'Actual supervisor identity was not captured.'
+        if ($ExerciseOuterWatchdog) { $script:watchdogSupervisor = $supervisorIdentity }
         [pscustomobject]@{ SupervisorId=$supervisorIdentity.Id; SupervisorStart=$supervisorIdentity.Start } |
             ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:work ($Label + '-started.json')) -Encoding UTF8
         $stdout = $proc.StandardOutput.ReadToEndAsync()
         $stderr = $proc.StandardError.ReadToEndAsync()
         while (-not $proc.WaitForExit(50)) {
-            if ($watch.Elapsed.TotalSeconds -ge 150) {
+            $outerExpired = $watch.Elapsed.TotalSeconds -ge 150
+            if ($ExerciseOuterWatchdog -and $forcedWatch -and $forcedWatch.ElapsedMilliseconds -ge 1) {
+                $outerExpired = $true
+            }
+            if ($outerExpired) {
+                if ($ExerciseOuterWatchdog) { $script:outerWatchdogTriggered = $true }
                 $script:failure='Outer test watchdog expired; no scanner result accepted.'
                 throw 'Lifecycle watchdog failed.'
             }
@@ -173,6 +185,12 @@ function Invoke-Entry([string]$Label, [bool]$Export, [bool]$Timeout) {
                     $workerIdentity=$identity
                     [pscustomobject]@{ WorkerId=$workerIdentity.Id; WorkerStart=$workerIdentity.Start; Parent=$proc.Id } |
                         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:work ($Label + '-observed.json')) -Encoding UTF8
+                    if ($ExerciseOuterWatchdog) {
+                        $script:watchdogWorker = $workerIdentity
+                        # Only the test budget changes. The real entry retains
+                        # its 120-second scan deadline and unchanged worker.
+                        $forcedWatch = [Diagnostics.Stopwatch]::StartNew()
+                    }
                 }
             }
         }
@@ -241,6 +259,11 @@ try {
     $codeSnapshot=Get-CodeSnapshot
     [IO.File]::WriteAllText((Join-Path $work 'source-snapshot.txt'), $sourceSnapshot)
     [IO.File]::WriteAllText((Join-Path $work 'code-snapshot.txt'), $codeSnapshot)
+    if ($ExerciseOuterWatchdog) {
+        Invoke-Entry 'outer-watchdog' $false $false
+        $failure = 'Requested outer watchdog did not fire; no coverage accepted.'
+        throw 'Outer watchdog coverage failed.'
+    }
     Invoke-Entry 'scan-before' $false $false
     Invoke-Entry 'export-before' $true $false
     Invoke-Entry 'scan-timeout-1' $false $true
@@ -256,6 +279,42 @@ try {
     Write-Output ('Evidence: logs/' + [IO.Path]::GetFileName($work))
     exit 0
 } catch {
+    if ($ExerciseOuterWatchdog) {
+        $cleanupConfirmed = $false
+        $inputsUnchanged = $false
+        try {
+            # Invoke-Entry's finally has already stopped and disposed its
+            # processes. Observe absence independently after that cleanup.
+            Assert-True $outerWatchdogTriggered 'Requested outer watchdog branch was not reached.'
+            Assert-True ($null -ne $watchdogSupervisor -and $null -ne $watchdogWorker) 'Forced watchdog did not capture both process identities.'
+            Assert-IndependentAbsence $watchdogSupervisor $watchdogWorker
+            $cleanupConfirmed = $true
+            $sourceAfter = Get-TreeSnapshot $source
+            $codeAfter = Get-CodeSnapshot
+            [IO.File]::WriteAllText((Join-Path $work 'source-after.txt'), $sourceAfter)
+            [IO.File]::WriteAllText((Join-Path $work 'code-after.txt'), $codeAfter)
+            Assert-True ($sourceAfter -ceq $sourceSnapshot) 'Forced watchdog changed source inventory or bytes.'
+            Assert-True ($codeAfter -ceq $codeSnapshot) 'Forced watchdog changed lifecycle implementation or helpers.'
+            $inputsUnchanged = $true
+        } catch {
+            # Assert-True supplies a static diagnostic without exception data.
+            if ($cleanupConfirmed -and -not $inputsUnchanged) {
+                $failure = 'Forced outer watchdog input comparison failed; no coverage accepted.'
+            } elseif (-not $cleanupConfirmed) {
+                $failure = 'Forced outer watchdog cleanup or observation failed; no coverage accepted.'
+            }
+        } finally {
+            $supervisorId = $null; $supervisorStart = $null
+            $workerId = $null; $workerStart = $null
+            if ($watchdogSupervisor) { $supervisorId=$watchdogSupervisor.Id; $supervisorStart=$watchdogSupervisor.Start }
+            if ($watchdogWorker) { $workerId=$watchdogWorker.Id; $workerStart=$watchdogWorker.Start }
+            [pscustomobject]@{ Triggered=$outerWatchdogTriggered; CleanupConfirmed=$cleanupConfirmed;
+                InputsUnchanged=$inputsUnchanged; RealEntries=$runs; SupervisorId=$supervisorId;
+                SupervisorStart=$supervisorStart; WorkerId=$workerId; WorkerStart=$workerStart;
+                WorkerParent=$supervisorId; TriggerBudgetMilliseconds=1; StandardBudgetSeconds=150 } |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work 'outer-watchdog.json') -Encoding UTF8
+        }
+    }
     Write-Output (('FAIL: actual tree process lifecycle after {0} assertions / {1} real entries; ' -f $checks, $runs) + $failure)
     Write-Output ('Evidence retained: logs/' + [IO.Path]::GetFileName($work))
     exit 1

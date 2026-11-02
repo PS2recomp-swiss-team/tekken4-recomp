@@ -1,5 +1,83 @@
 # T4 beta progress, 2026-11-02
 
+## Forced tree-test watchdog through the real publisher
+
+Release remains **NO-GO**. Actual App startup and portable first-run are still
+the most valuable release item, but the complete candidate/private Python
+and permitted validation environment remain absent. The supplied verification
+`294b927b6f` below is already recorded accurately. No repeated starter refusal
+was run or counted as App evidence. Work instead advanced an executable open
+item: failure of the tree lifecycle test's outer watchdog.
+
+Done:
+
+- Added [the watchdog regression](tools/test_public_tree_outer_watchdog.ps1)
+  and registered it in both lists of the real public-tree aggregate. It runs
+  clean actual publisher scans before and after one expected failing lifecycle
+  child. [The lifecycle test](tools/test_public_tree_process_lifecycle.ps1)
+  now offers `-ExerciseOuterWatchdog`: after independently observing the real
+  scanner worker it starts a one-millisecond test budget, then reaches the
+  existing watchdog throw/cleanup branch. Its ordinary 150-second budget and
+  eight cases remain. No production publisher or launcher code changed.
+- Standalone parent entry: exit 0, 141 assertions, two clean controls and one
+  actual publisher scan inside the child. The child exited 1 with the precise
+  watchdog failure and no pass claim. Two independent parent samples found
+  the recorded supervisor/worker identities absent; source/helper bytes were
+  unchanged. Evidence:
+  `logs/tree-outer-watchdog-bab90cc58fc0404b97a25b9966ef81ff/summary.json`.
+  A separate forced child also exited 1 with trigger, cleanup and unchanged
+  input flags true under
+  `logs/tree-process-lifecycle-80d472fc0b794ca3ab312d65259bad80/`.
+- The first parent run caught a generic-list conversion bug in the new test
+  harness; it was fixed before the passing run. Its failed evidence remains
+  under `logs/tree-outer-watchdog-1ffd4f7547f9459fbd4e3549424df439/`.
+  It is not publisher-defect or unobserved-descendant cleanup evidence.
+
+- Full actual [public-tree checker](tools/check_public_publish.ps1): exit 0,
+  empty stderr, 15 suites and 23 PowerShell parses. Both 23-tool catalogs were
+  checked, all 79 source patch names/hashes matched, and seven entry/helper/test
+  hashes stayed unchanged during the run. The normal lifecycle suite passed
+  eight real entries; the new regression also passed through the aggregate.
+  Evidence: `logs/release-outer-watchdog/aggregate-summary.json` and
+  `aggregate.stdout.txt` there. The run took 514 seconds.
+- Separate reviewer `final_diff_review` found no blocking code issue and
+  independently ran the new parent entry: exit 0, empty stderr, unchanged seven
+  code inputs, two clean controls, expected child exit 1 and two independent
+  absence samples. Its evidence/report are under
+  `logs/release-outer-watchdog/final-review/`. Local-link inspection passed for
+  both changed documents (266 links); external URLs and anchors were not checked.
+  The whole-tree beta checker and ZIP aggregate were not rerun.
+
+Open locally: failed OS termination, interruption inside one file write,
+unobserved descendants, output-collection watchdog and other suites' watchdogs
+remain unproved. Source-only observations about additional URI schemes and
+private-key directory names need actual scanner-entry reproduction before a
+fix; they are not demonstrated defects. Do not repeat another App refusal or
+general source audit as acceptance.
+
+Owner-only: supply the exact reviewed complete candidate, ZIP hash, matching
+source and reviewed locks/notices; run actual App/portable acceptance in the
+authorized environment. Python suites, full source/player content and licence
+review, enabled GUI Host/Join profile, two physical PCs and sound-on usable
+pacing remain open. GUI, Python release tools, packagers, build, game, network
+helpers and server stayed **UNRUN here**. A same-PC pair is not two-PC proof.
+
+Area agents: `app_route`, `candidate_inputs`, `scanner_termination`,
+`scanner_write`, `outer_watchdog`, `descendant_processes`, `tests_catalogs`,
+`source_privacy`, `payload_validation`, `source_matching`, `gui_profile`,
+`licence_gate`, `readiness_semantics`, `supplied_evidence`, `entry_test_honesty`,
+`release_priority`; separate reviewer `final_diff_review`. All read AGENTS.md.
+Only `outer_watchdog` and `entry_test_honesty` edited their own test files;
+root owns aggregate/docs/progress. Originals are retained under
+`logs/release-outer-watchdog/originals/` and
+`logs/outer-watchdog-original-f00144d1067e481e8103586bc8582cbd/`.
+No file was deleted and no Git command, outside-tree read, build, game,
+forbidden helper, server, push or release ran here.
+
+Earlier entries below retain their original evidence and limits. Only the
+forced watchdog of this tree lifecycle test has new coverage; no broader
+watchdog or launcher acceptance claim supersedes those limits.
+
 ## Current blocker and supplied verification 294b927b6f
 
 Release remains **NO-GO**. Actual App startup and portable first-run are the

@@ -123,7 +123,7 @@ exceeds the Windows command-line limit and refuses without creating staging.
 A separate native process-start probe confirms that limit; small-array controls
 export the same two source files before and after the refusals. This covers an
 OS process-start failure, not every possible startup error. Termination-error
-and test-watchdog failure branches remain unforced.
+branches remain unforced; the lifecycle test watchdog is covered below.
 
 The [process lifecycle tests](../tools/test_public_tree_process_lifecycle.ps1)
 passed 550 assertions through eight actual entries. The same unchanged
@@ -140,8 +140,22 @@ skip or pass. Input bytes and inventory and five source hashes stayed
 unchanged, complete exports matched the source, and stderr was empty.
 Evidence is under `logs/tree-process-lifecycle-80865a36bdde4ff783f24526783a9398/`.
 No production code changed. This proves absence of the observed identities
-in these runs, not every possible descendant; termination-error and outer
-watchdog failure branches remain unforced.
+in these runs, not every possible descendant. These normal cases do not force
+termination errors or the outer watchdog.
+
+The separate [outer-watchdog regression](../tools/test_public_tree_outer_watchdog.ps1)
+runs the real publisher scan through the lifecycle test's
+`-ExerciseOuterWatchdog` mode. It starts a one-millisecond test budget only
+after independently observing the real worker; the publisher's own deadline
+and code stay unchanged. The child must exit 1 with the watchdog failure and
+no pass claim. Cleanup must finish, then two fresh parent samples must find
+the recorded supervisor and worker identities absent. Source and helper hashes
+must match, and real clean scan controls must pass before and after.
+The ordinary lifecycle test retains its 150-second watchdog and eight cases.
+This covers that test's forced watchdog failure and observed-process cleanup,
+not failed operating-system termination, the output-collection watchdog,
+unobserved descendants or another suite's watchdog. It does not start the
+launcher or prove release acceptance.
 
 Image and binary signature checks use memory fixtures; they do not add game
 data or screenshots.
