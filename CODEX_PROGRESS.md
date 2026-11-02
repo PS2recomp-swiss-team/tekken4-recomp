@@ -1,6 +1,100 @@
 # T4 beta progress, 2026-11-02
 
-## Public-tree preparation, latest session
+## Package 5 online follow-up, latest session
+
+Online acceptance remains **BLOCKED**. No production launcher, runtime, switch
+or server behavior changed. The shared OpenRecomp-FGC launcher, private lobby
+and T5DR launcher sources are absent from this copy. Python is unavailable;
+builds, game runs and `tools/net_*` execution are forbidden here. A passing
+source test cannot establish that online works.
+
+Done:
+
+- Put the current package-5 decisions above the historical proposals in
+  [SERVER_HANDOFF_T4.md](SERVER_HANDOFF_T4.md) and [LOBBY.md](docs/LOBBY.md):
+  lobby protocol stays 1, existing accounts carry over, T4 matches/ratings
+  stay separate, and no server change is authorized now. Package 5 follows
+  the planned 2026-11-03 reset; no reset is claimed to have happened.
+- Recorded [accounts/kicked](docs/ONLINE_ACCOUNTS.md),
+  [coexistence](docs/ONLINE_COEXISTENCE.md),
+  [client rank text](docs/ONLINE_RANKS.md) and
+  [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md), with concrete owner
+  cases through the actual launchers. Today's supplied one-login takeover
+  rule is distinct from the later target of concurrent per-game sessions.
+- Found an existing optional diagnostic session report, not a usable ranked
+  result: `winner` and `score` are null, `match_result_proven` is false, and
+  there is no proven match-end detector. No ranked result was produced here.
+- Added [check_online_readiness.ps1](tools/check_online_readiness.ps1).
+  It checks source/docs, invokes actual catalog and starter-refusal entries,
+  and exits **2 / BLOCKED** after successful source checks. Exit 1 means a
+  source/input failure; exit 0 is unavailable. It is not a payload/privacy
+  scanner and does not replace the existing beta/publication gates.
+- Added [test_launcher_entry.ps1](tools/test_launcher_entry.ps1), which checks
+  the exact starter hash and refuses private Python/reparse points before
+  invoking the real `Tekken4.cmd`. Its observed missing-Python exit 1 proves
+  only the refusal branch. The GUI never started. No interpreter or game was
+  substituted to turn that result green.
+- Added [check_online_catalogs.ps1](tools/check_online_catalogs.ps1): actual
+  source catalogs contain 23 unique present tools each and three source root
+  files; Host/Join dependencies are present. This is literal source inspection,
+  not execution of Python suites, packagers or a complete player package.
+- Added [test_online_readiness.ps1](tools/test_online_readiness.ps1), which
+  invokes the actual checker three times: blocked readiness, missing document
+  and outside-tree document refusal before child entries. All three cases ran.
+
+Latest supplied verification, not reproduced here: draft `42c131551e`, merge
+base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean merge;
+163-second build `943fc4631acf2c13`. Selftest: 202 successful restores,
+447 resim comparisons, zero mismatches, 101/101 wrong-input divergences.
+Same-PC 6000-frame pair, switches OFF, RTT target 150 ms, jitter 5 ms, loss 3%:
+199 hashes per side, zero mismatches and NETDESYNC lines, 52.2 FPS run average
+on both sides; host/join stalls 0/73 (0/2411 ms). Finished
+`2026-11-02T01:18:22`. This supersedes the older supplied reports below.
+
+The latest pair covers the reported OFF experiment configuration only.
+It proves no newly enabled experimental switch. Source inspection shows
+ordinary GUI Host/Join clears inherited overrides, then the helper enables
+COALESCE=1 and DIAG=1. That launcher profile remains unproved by the latest
+pair. Existing baseline time sync/early/lazy controls are not all disabled
+by the phrase "switches OFF"; full effective settings still need recording.
+No switch was changed without its required real-entry proof.
+
+Root verification ran the real readiness entry: 12 required files, seven
+PowerShell parses, seven documents and 47 local links checked; both catalog
+and actual starter-refusal entries ran; final exit 2 / BLOCKED. The real
+readiness test entry passed all three subprocess cases (exit 0 for the tests,
+not acceptance). The existing `check_beta_source.ps1` also ran on all eight
+changed documents: 48 local links and 53 PowerShell parses passed; overall
+exit 1 solely for the same 18 retained text-only `.png` fixture filenames
+recorded previously. Nothing was deleted or weakened to remove that failure.
+
+Open / owner-only:
+
+- Provide/review the shared-launcher and private protocol sources in their
+  authorized lanes. Settle outgoing fields/caps, saved-login policy and a
+  shared one-game-per-PC guard. Do not copy T5DR code into this GPL-3 tree.
+- Start both actual launchers and prove login/search, then match/ready/result,
+  then rooms/friends, then tournaments/spectating. Show `kicked` clearly and
+  stop automatic login in both directions. Current takeover is supplied
+  behavior, not a server test performed here. Account changes wait until after
+  the T4 release; the later per-game session model needs its own acceptance.
+- Build the exact reviewed candidate in the authorized checkout, prove the
+  selected switches through actual GUI Host and Join, and repeat on two
+  physical PCs, including direct/relay routes, rematch and disconnect recovery.
+  Source tests and the supplied same-PC pair do not prove any of those routes.
+- Prove winner, score and match end before ranked reporting. Rank names remain
+  client text only; Tekken 8 names belong to Bandai Namco. No art was added.
+- Python suites, GUI/Tk startup, Host/Join game launch, cross-launcher locking,
+  server compatibility and all real build/game checks remain UNRUN here.
+  Existing beta/publication NO-GO requirements below remain open.
+
+Agents: `protocol_contract`, `accounts_kicked`, `rollback_evidence`,
+`rank_text`, `coexistence`, `starter_entry`, `readiness_entry`,
+`catalogs_tests`. A separate `final_diff_review` is required before finishing.
+All read AGENTS.md; file ownership was exclusive. Root owns this record and
+`docs/status.md`. No Git command, server, push or release was used.
+
+## Earlier public-tree preparation
 
 Publication remains **NO-GO** for the full source/player trees. The new
 PowerShell path runs here without Python. It stages files only; it does not
@@ -67,13 +161,13 @@ Open / owner-only:
   No build, launcher GUI or game was run in this copy. No network service,
   Git write, history rewrite or release was performed.
 
-The owner's latest supplied verification identifies draft `21d1fbb4b6`, merge
+An earlier supplied verification identified draft `21d1fbb4b6`, merge
 base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean merge;
 174-second build `943fc4631acf2c13`. Selftest: 232 successful restores,
 514 compared resim frames and zero mismatches. Same-PC 6000-frame pair with
 switches off: 199 hash comparisons per side, zero mismatches and zero NETDESYNC
 lines; run-average 49.8 fps on both sides, join 122 stalls / 3169 ms. Finished
-2026-11-02T01:05:32. This supersedes the older supplied measurement below.
+2026-11-02T01:05:32. The package-5 section above records the newer report.
 It was not reproduced here and does not prove the edited tree, launcher profile
 or two-PC internet play. No personal worktree paths are copied into this record.
 

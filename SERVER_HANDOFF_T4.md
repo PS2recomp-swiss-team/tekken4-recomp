@@ -1,5 +1,46 @@
 # Server handoff: Tekken 4 online (for the T5DR coordinator)
 
+## Package 5 decisions (owner, 2026-10-31; recorded 2026-11-02)
+
+These decisions supersede the separate-login and deployment proposals below.
+Package 5 starts after the planned 2026-11-03 reset; this document does not
+claim that reset or a deployment has happened.
+
+- OpenRecomp-FGC and the existing T5DR launcher must keep working beside each
+  other against the same lobby protocol and matching game builds. Protocol
+  version stays **1** unless Main agrees otherwise. T4 players on either
+  launcher must be able to meet; T4 must never match T5DR.
+- One account, same name and password; existing T5DR accounts carry over
+  without registering again. T4 keeps its own sessions, matches and ratings,
+  not its own logins. The owner's target permits both games online at once.
+  Account work follows the T4 release; `codex/accounts` is a draft needing
+  review against these decisions. **No server change is authorized here.**
+- Today's reported same-account launcher takeover sends `kicked` with
+  "logged in from another place". The new launcher must show it and stop
+  automatic login; the old launcher's reconnect behavior still needs checking.
+  Cross-game sessions need the later account design; do not assume today's
+  takeover behavior implements them.
+- T4 ranks use Tekken 8 names as client text only, with no game changes or
+  rank artwork. Ranked results still need an authoritative game match result.
+  The existing optional `TEKKEN4_NET_RESULT` session report writes
+  `winner: null`, `score: null`, `match_result_proven: false`; it is diagnostic
+  and has no game match-end detector. See [rank/result limits](docs/ONLINE_RANKS.md).
+- Implement and prove login/search, then match/ready/result, then
+  rooms/friends, then tournaments/spectating. Each stage needs a real launcher
+  run with the existing launcher beside it.
+
+The shared launcher and private lobby source are absent from this copy.
+Exact outgoing fields and capability flags still need comparison with the
+authorized T5DR protocol source and real entry-point tests. The historical
+`hello`, ports, magics and private-copy test claims below are not a verified
+package-5 specification. A common lobby protocol does not make T4 and T5DR
+game packets interchangeable: T4's game wire and build identity remain
+game-specific. The standalone T4 launcher's Host/Join starts the direct-IP
+helper; it does not log in to a shared server. No lobby, server, launcher GUI
+or game was run for this update.
+
+## Historical handoff (2026-10-29)
+
 Historical 2026-10-29 handoff. The private `lobby/` code, logs and external checkout paths below are absent
 from this clean source copy. Follow `AGENTS.md`; these paths and deployment examples do not authorize access
 or deployment. This is a proposed lobby route, not a tested public beta service. Current release scope is in
@@ -33,7 +74,8 @@ No other message, field or rule was added or changed. The `match_start` the serv
 peer, path, rtt, key, seed, build, input_delay, ...); the T4 client maps it to the T4 game's environment itself
 (`lobby/t4lobby/t4game.py`, table in `docs/LOBBY.md`). Server settings keep T5DR's `T5L_*` environment variable names.
 The UDP and game magics live in `proto.py` only, so one code base can be configured for either game; running **one
-server process per game** (two systemd units, own ports, own database) is the simple way and is what was tested.
+server process per game** (two systemd units, own ports, own database) was the historical proposal/test setup.
+Its independent database must not become a separate T4 account store; the account decision above supersedes that interpretation.
 
 ## (2) Build identity
 
@@ -146,7 +188,11 @@ Also: the port runs 38-54 fps on the VS stages on this PC (not yet a steady 60),
   releases signed like T5DR's), separate from T5DR's channel so neither updater can install the other game.
   Owner's decision.
 
-## What the coordinator must set up
+## Historical coordinator checklist (not deployment instructions for package 5)
+
+Do not execute this checklist before the later account review. Its separate
+database, optional-account and private-copy assumptions need reconciliation
+with the current decisions above.
 
 - [ ] Pick T4's ports (proposal TCP 7791, UDP 7791-7792, local status 7790) and open them in the cloud firewall and
       host firewall (T5DR's `HOSTING.md` "Firewall rules" with the T4 numbers).

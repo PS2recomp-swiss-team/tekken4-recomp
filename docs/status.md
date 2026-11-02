@@ -1,8 +1,21 @@
 # Status
 
-_Last updated: 2026-11-02 (verify evidence review, source copy only)_
+_Last updated: 2026-11-02 (package 5 source checks; online acceptance blocked)_
 
 ## Resume here
+- **Package 5 follow-up (2026-11-02, source copy only):** current decisions
+  supersede historical separate-login proposals in `SERVER_HANDOFF_T4.md` and
+  `docs/LOBBY.md`. Account/kicked, coexistence, rank-text and switch evidence
+  records are linked from [CODEX_PROGRESS.md](../CODEX_PROGRESS.md).
+  `tools/check_online_readiness.ps1` runs actual catalog and starter-refusal
+  entries but exits 2 / BLOCKED: the real starter refuses missing private Python;
+  no GUI or game starts. Its three subprocess entry tests ran. No production
+  behavior changed. Latest supplied draft `42c131551e`, build `943fc4631acf2c13`,
+  has 199 hashes per side, zero mismatches, 52.2 FPS run average and join
+  73 stalls / 2411 ms on one PC with experiment switches OFF. This does not prove
+  the helper's COALESCE=1/DIAG=1 launcher profile or two-PC play. Shared-launcher,
+  private protocol, kicked/reconnect, shared game guard and authoritative results
+  remain owner work. Build/game/net-tool execution stayed forbidden here.
 - **Verify evidence follow-up (2026-11-02, documentation only):** `away312043`, build
   `943fc4631acf2c13`, still has join-side prediction stalls: OFF 117/5421 ms,
   COALESCE+DIAG 113/4745 ms. No supplied report includes raw NETDIAG records or
