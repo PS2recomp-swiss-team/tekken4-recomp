@@ -2,50 +2,53 @@
 
 ## Current continuation: real verify still blocked before launch
 
-The latest supplied result is the same duplicate-name refusal. No verify,
-build or game started. A fresh inventory found no paired runtime/transport
-logs in this tree; runtime-marker matches were prior source-review records.
-Input arrival times, measured advantage and which peer waited remain unknown.
-No cause of the supplied rollback imbalance is proved.
+The latest supplied result again refused an existing output name before
+launch. It supplies no new build, selftest or pair evidence. Safe inventory
+found no raw paired runtime/transport logs here. The eight .log files are ZIP
+scanner regression output. Input arrival times, measured advantage and which
+peer waited remain unknown; no cause of the rollback imbalance is proved.
 
-Done: sixteen read-only area agents checked the pending runtime experiment and
-its real-entry route. No new runtime edit or switch was added. Keep the existing
-default-off change in runtime/tekken4_rollback_overrides.cpp and root
-VERIFY_ENV.txt unchanged:
+Done: sixteen area agents checked separate runtime/evidence paths. No blocking
+source defect was found in the pending experiment. No new runtime edit, switch
+or unrelated catalog run was added. Runtime source and VERIFY_ENV.txt hashes
+are unchanged. Keep the existing default-off experiment and exact switch line:
 TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
 
-The single pending hypothesis remains lost catchup headroom after processing,
-restore/resimulation, hitches or oversleep. Nominal time-sync waits already
-shift deadlines by requested duration; prediction waits shift by measured
-duration. Catchup retains about 33 ms of live debt at the >50 ms guard. It does
-not reduce raw resimulation cost or prove recovered time. Source review found
-no fixed host/join branch in live pacing. Reordered packets can replace a newer
-peer-lead estimate, but that is an unproved alternative, not a second experiment.
-Current diagnostics timestamp packet handling, not each input's first arrival.
+The single hypothesis remains lost catchup headroom after processing,
+restore/resimulation, hitches or oversleep. The switch retains about 33 ms of
+live schedule debt at the >50 ms guard. It does not reduce resimulation cost
+or prove recovered time. Source review found no fixed host/join branch in live
+pacing. Input frontiers advance monotonically; reordered peer-lead metadata
+remains an unproved alternative. Diagnostics timestamp packet handling, not
+each input's first arrival; paired process log clocks have separate origins.
 
 Open / owner-only: stage the existing runtime patch into the actual runner,
-choose a fresh unused verify name, then build and run the same new build OFF
-and ON. The outer verify wrapper is absent here. Build IDs hash staged source,
-not executable bytes; require an ID different from 943fc4631acf2c13 AND both
-ON peers' literal activation plus nonzero NETREBASE_CATCHUP rebases. Pass the
-file through common -Env; per-peer overrides must not replace it. Keep
-TimingDiag, input scripts, simulated network settings and other switches
-identical. Retain complete paired runtime/transport logs and effective params.
-Compare sustained lead, confirmed progress, sender gaps, wait durations,
-rollback depth/cost/totals and pacing. A smaller ratio or rebase time alone is
-not success. Role swaps also change simulated network streams and input scripts.
+choose a fresh unused -Name, then build and run the same new build OFF and ON.
+The outer verify wrapper is absent here; its file ingestion cannot be checked.
+Build IDs hash staged source, not executable bytes. Require an ID different
+from 943fc4631acf2c13 AND both ON peers' literal switch activation plus nonzero
+NETREBASE_CATCHUP rebases. Pass the switch line through common -Env; per-peer
+overrides must not replace it. Keep TimingDiag on in BOTH arms, and keep input
+scripts, simulated network settings and other switches identical. Retain full
+paired runtime/transport logs and effective params. Compare sustained lead,
+confirmed progress, sender gaps, actual waits, rollback depth/cost/totals and
+pacing. A smaller ratio or rebase time alone is not success. If the branch runs
+but sustained lead and imbalance persist, the hypothesis is weakened. Role
+swaps also change simulated network streams and input scripts.
 
 Compilation, selftest, actual OFF/ON pair and runtime improvement remain UNRUN.
 AGENTS.md forbids their real build/game/network entries here. Selftest does not
-reach this pacing path. No unrelated catalog pass was repeated as runtime
-proof. Further source-only audit cycles cannot replace the missing real run.
+reach this pacing path, and no current test enters catchup. No test pass is
+claimed this continuation. Further source-only audit cycles cannot replace
+the missing real run; the next useful runtime step requires owner evidence.
 
-Area agents: pair_logs_now, rebase_branch_now, timesync_now, advantage_now,
-arrival_now, vblank_now, polling_now, prediction_now, roles_now,
-resimulation_now, resend_now, env_route_now, tests_catalogs_now2,
-build_identity_now, clock_now, falsification_now. All read-only. Root owns this
-progress update; final_diff_review_recheck owns only its review record under
-logs/runtime-catchup-recheck/. The original progress and hashes are saved there.
+Area agents: pair_logs_available, catchup_guard, timesync_deadlines,
+advantage_estimator, input_frontier, vblank_schedule, poll_delivery,
+prediction_budget, role_branches, resim_work, resend_order, verify_env_route,
+tests_catalog_coverage, build_id_provenance, clock_measurements,
+experiment_falsification. All read-only. Root owns this progress update and
+its original/hash evidence in logs/runtime-catchup-blocked/. Separate reviewer
+final_diff_review_blocked owns only final-review.txt in that directory.
 No Git command, outside-tree read, deletion, patch edit, build, game, forbidden
 helper, server, push or release ran here.
 
