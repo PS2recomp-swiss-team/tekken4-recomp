@@ -1,6 +1,100 @@
 # T4 beta progress, 2026-11-02
 
-## Windows ZIP device-name follow-up, current session
+## Scanner process lifecycle follow-up, current session
+
+Release remains **NO-GO**. The exact complete package's real launcher GUI
+and portable first-run remain the main gate. The actual starter again
+refused missing private Python; the GUI never started. Builds, games and
+network helpers remain forbidden here.
+
+Done:
+
+- Added [tree lifecycle tests](tools/test_public_tree_process_lifecycle.ps1).
+  The frozen actual entry passed 550 assertions through eight real export/scan
+  entries. The unchanged 1,001-file tree passed complete scan/export controls
+  before and after two two-second scan and two export deadline refusals.
+  Windows process counters independently linked every worker by parent PID;
+  PID and UTC creation time guard identity reuse. Two fresh post-exit samples
+  found each observed worker/supervisor identity absent and no live direct
+  PowerShell worker. Source bytes/inventory and five test/helper hashes stayed
+  unchanged; exports matched exactly and stderr was empty. Evidence:
+  `logs/tree-process-lifecycle-80865a36bdde4ff783f24526783a9398/`.
+- Added [ZIP lifecycle tests](tools/test_public_zip_process_lifecycle.ps1).
+  The frozen actual entry passed 77 assertions through four real scanners.
+  The same unchanged 1,000-member text ZIP passed before and after two genuine
+  one-second deadlines. Every worker was independently linked by parent PID,
+  PID and UTC creation time, then absent on three post-return identity checks;
+  supervisors also exited. Seven source hashes and fixture bytes/inventory
+  stayed unchanged, stderr was empty and nothing was extracted. Evidence:
+  `logs/zip-process-lifecycle-8c27a8cac0c84716bd12f5d23454a022/`.
+- Windows `Process` counters work here despite the earlier CIM denial. Missing
+  counters or an unobserved worker fail the tests. A supervisor message or
+  released file handle alone never counts as independent absence evidence.
+  No production launcher, scanner, runtime or switch behavior changed.
+- Actual starter test exited 0 solely for real `Tekken4.cmd` exit 1, missing
+  private Python. Actual readiness exited 2 / BLOCKED, with seven source
+  hashes unchanged and empty stderr. GUI never started. Evidence:
+  `logs/launcher-real-gate-79ffcad5b717494fb70f7d0d8953af3a/`.
+- Actual readiness tests passed three real checker subprocesses, exit 0,
+  empty stderr and eight unchanged source hashes. Evidence:
+  `logs/readiness-contract-current-40c18fdebe4f4bd5955dcccb5db1e7d4/`.
+- Actual retained LICENSE/patch export and scan exited 0 with empty stderr:
+  80 files, 2,025,621 bytes, 79 unchanged diff byte ranges; 84 input/helper
+  snapshots stayed unchanged before, between and after. This subset is not
+  complete corresponding source or a player candidate. Evidence:
+  `logs/retained-export-current-20261102-r1/`.
+- Actual [tree aggregate](tools/check_public_publish.ps1) exited 0 in
+  397.566 seconds with empty stderr: 21 PowerShell files parsed, 13 suites /
+  11,377 checks and assertions. Its lifecycle rerun passed 546 / eight entries;
+  interruption passed 4,480 / six, retaining 777/699 of 1,501 files. Both
+  23-tool catalogs passed with three source root files present. All 144
+  recursive tool files and 79 patch names/hashes stayed unchanged before
+  catalogs, after catalogs and after tree checks.
+  Actual [ZIP aggregate](tools/check_public_zip.ps1) then exited 0 in
+  503.322 seconds with empty stderr: 26 files parsed, 17 suites / 3,596
+  assertions, including the 77 / four-entry ZIP lifecycle rerun. All 144 tool
+  files and 79 patch names/hashes still matched after both serial aggregates.
+  Counts vary with process observations and retained partial files checked.
+  Evidence: `logs/lifecycle-catalogs-8048b512c07948b1ad32bf4517e86bfc/`.
+- Separate reviewer `final_diff_review_lifecycle` found no remaining code
+  blocker. Its independent real entries passed tree lifecycle 544 / eight,
+  ZIP 77 / four and both 23-tool catalogs with three source root files.
+  Stderr was empty and all 229 tool/patch/launcher/starter/AGENTS names and
+  hashes stayed unchanged. All six existing changed files match their saved
+  original-byte baselines after reversing only the intended edits; both new
+  tests were reviewed in full. Evidence:
+  `logs/final-diff-review-lifecycle-20261102/`.
+- The reviewer's actual document checker covered all four changed documents:
+  129 local links, 304 PowerShell parses, no missing document/link or syntax
+  findings and empty stderr. Overall exit 1 remains on 36 retained text-only
+  image-name fixtures and a corrupt ZIP; whole-tree checking did not complete.
+  Nothing was deleted or weakened to make that check pass.
+
+Eight area agents: `tree_process_lifecycle`, `zip_process_lifecycle`,
+`launcher_real_gate`, `readiness_contract`, `tests_catalogs_current`,
+`release_scope_current`, `retained_export_current`, `release_priority_current`.
+File ownership is exclusive. Root owns this record and `docs/status.md`;
+original bytes and hashes are saved without Git under
+`logs/release-lifecycle-session-b4ae9cc5b3944229aa9a03d956a4f49f/`.
+Separate reviewer: `final_diff_review_lifecycle`.
+
+Preliminary runs caught a console-host child classification error in the
+tests; review also required sanitized failure diagnostics. Only final frozen
+runs count as evidence.
+
+Open in source: termination-error/watchdog branches, interruption
+inside a single write and unobserved descendants remain unproved.
+Retained fixtures and a corrupt ZIP still obstruct the old whole-tree check.
+Complete source/player/privacy/licence review and Python suites remain open.
+Only the owner or authorized validation
+checkout can prove real private-Python/Tk App startup, portable first-run,
+exact build/game, enabled GUI switches and two physical PCs. The latest
+owner-supplied verification remains recorded in the preceding session below;
+it has not been reproduced here.
+
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier Windows ZIP device-name follow-up
 
 Release remains **NO-GO**. The main gate is still the exact complete
 package's real launcher GUI and portable first-run. Private Python is absent

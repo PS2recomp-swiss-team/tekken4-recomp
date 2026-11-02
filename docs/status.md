@@ -1,10 +1,38 @@
 # Status
 
-_Last updated: 2026-11-02 (Windows ZIP device-name follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (scanner process lifecycle follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current Windows ZIP device-name follow-up:**
+- **Current scanner process lifecycle follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records independent observations
+  through the actual tree export/scan and ZIP scanner entries. The new tests
+  require a real worker linked by parent PID and process creation time, then
+  check its identity is absent after completion or timeout. Usable Windows
+  `Process` counters are required; missing counters or missed observations
+  fail. The frozen tree suite passed 550 assertions through eight entries:
+  scan/export controls before and after two scan and two export deadlines.
+  The frozen ZIP suite passed 77 assertions through four entries, with the
+  same archive passing before and after two deadlines. Fixtures and helper
+  hashes stayed unchanged and stderr was empty.
+  Both actual aggregates passed with empty stderr: tree 13 suites / 11,377
+  checks and assertions; ZIP 17 suites / 3,596 assertions. All 144 tool files
+  and 79 patch names/hashes stayed unchanged. Separate review found no code
+  blocker and independently passed tree lifecycle 544 / eight entries,
+  ZIP 77 / four and catalogs, with 229 source names/hashes unchanged.
+  The actual document checker covered all four changed docs: 129 local
+  links and 304 PowerShell parses, no document/link/syntax findings and empty
+  stderr. Overall exit 1 remains on retained text-only image-name fixtures
+  and a corrupt ZIP; no completed whole-tree check is claimed.
+  Production behavior is unchanged. This evidence covers observed workers;
+  termination-error/watchdog branches and unobserved descendants remain open.
+  The actual starter still refuses missing private Python and the GUI never
+  started. Complete-package GUI/portable first-run, Python suites, exact
+  build/game, enabled GUI switches and two physical PCs remain owner gates.
+  Latest supplied verification remains the draft `38a164ddec` report below;
+  it was not reproduced here.
+
+- **Earlier Windows ZIP device-name follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the real-entry work on
   reserved COM/LPT superscript digits. The pre-fix regression ran 28 scanner
   subprocesses and failed 72 of 306 assertions: all 24 superscript cases

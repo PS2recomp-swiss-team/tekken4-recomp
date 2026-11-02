@@ -123,8 +123,25 @@ exceeds the Windows command-line limit and refuses without creating staging.
 A separate native process-start probe confirms that limit; small-array controls
 export the same two source files before and after the refusals. This covers an
 OS process-start failure, not every possible startup error. Termination-error
-and test-watchdog failure branches remain unforced. These tests do not prove
-absence of orphan processes.
+and test-watchdog failure branches remain unforced.
+
+The [process lifecycle tests](../tools/test_public_tree_process_lifecycle.ps1)
+passed 550 assertions through eight actual entries. The same unchanged
+1,001-file text tree completed scan and export controls before and after two
+two-second scan deadlines and two two-second export deadlines. Windows
+`Process` performance counters independently linked each direct PowerShell
+worker to its parent PID; UTC process creation times guarded identity against
+PID reuse. Two fresh post-exit samples found each observed worker and
+supervisor identity absent, with no live direct PowerShell child remaining.
+
+These tests require usable `ID Process` and `Creating Process ID` counters.
+An unavailable provider or an unobserved worker fails; neither counts as a
+skip or pass. Input bytes and inventory and five source hashes stayed
+unchanged, complete exports matched the source, and stderr was empty.
+Evidence is under `logs/tree-process-lifecycle-80865a36bdde4ff783f24526783a9398/`.
+No production code changed. This proves absence of the observed identities
+in these runs, not every possible descendant; termination-error and outer
+watchdog failure branches remain unforced.
 
 Image and binary signature checks use memory fixtures; they do not add game
 data or screenshots.

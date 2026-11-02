@@ -208,6 +208,27 @@ The CRC follow-up above checks the read bytes; producer authenticity and every
 possible hidden compressed representation remain unproved. No publication is
 authorized.
 
+## Worker lifecycle follow-up
+
+The [worker lifecycle test](../tools/test_public_zip_process_lifecycle.ps1)
+passed 77 assertions through four actual scanner entries. The same unchanged
+1,000-member text ZIP completed before and after two genuine one-second
+deadline refusals. All four workers were observed independently through the
+Windows `Process` performance counters, linked by parent PID and guarded by
+UTC process creation time. Three checks after each entry returned found its
+observed worker identity absent; the supervisor had also exited.
+
+The test requires usable `ID Process` and `Creating Process ID` counters.
+Unavailable counters or an unobserved worker fail the test; neither is a skip
+or a pass. Seven source hashes, archive bytes and fixture inventory stayed
+unchanged, stderr was empty, and nothing was extracted. Evidence is under
+`logs/zip-process-lifecycle-8c27a8cac0c84716bd12f5d23454a022/`.
+
+No production scanner changed. This covers the observed direct workers in
+these four runs; it does not prove absence of every possible descendant or
+force termination-error and test-watchdog failure branches. The launcher,
+Python release tools, build, game and two-PC gates remain unrun here.
+
 ## Still open
 
 No archive was extracted, modified or run. Python packagers and their payload
