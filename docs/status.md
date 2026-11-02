@@ -1,10 +1,32 @@
 # Status
 
-_Last updated: 2026-11-02 (source-check inventory follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (unexpected worker-exit follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current source-check inventory follow-up:**
+- **Current unexpected worker-exit follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records new real-entry
+  [tree](../tools/test_public_tree_worker_interrupt.ps1) and
+  [ZIP](../tools/test_public_zip_worker_interrupt.ps1) tests. The frozen
+  standalone tests passed 195 assertions / six entries and 155 / four.
+  Independently identified actual workers were killed; their unchanged
+  supervisors naturally refused with exit 1, empty stderr and no completion
+  claim. Unchanged controls passed before and after; source/test/helper and
+  fixture hashes stayed unchanged. Both tests are registered in their actual
+  aggregates; aggregate verification and separate final review are pending.
+  This covers premature worker death, not failed termination, watchdog failure,
+  interruption inside a write or every descendant. Production behavior is
+  unchanged. Real `Tekken4.cmd` still refuses missing private Python; GUI
+  never started. Actual readiness remains 2 / BLOCKED.
+  Latest supplied draft `47167233c6`: clean 168-second build
+  `943fc4631acf2c13`, finished `2026-11-02T06:56:13`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/79
+  (0/2886 ms), displayed-frame p99 114.1/101.1 ms. It was not reproduced
+  here and proves neither this edited tree nor the enabled GUI profile.
+  Complete-package GUI/portable first-run, Python suites, exact build/game,
+  source/player/licence review and two physical PCs remain owner gates.
+
+- **Earlier source-check inventory follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the corrupt-ZIP checker
   fix and [real-entry regression](../tools/test_beta_source_entry.ps1).
   A corrupt archive now retains a failure and an incomplete-archive count

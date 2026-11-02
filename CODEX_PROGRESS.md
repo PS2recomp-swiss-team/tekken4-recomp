@@ -1,6 +1,88 @@
 # T4 beta progress, 2026-11-02
 
-## Complete source-check inventory follow-up, current session
+## Unexpected worker-exit follow-up, current session
+
+Release remains **NO-GO**. The most valuable release gate is still the exact
+complete package's actual launcher App and portable first-run. Private Python
+is absent here; the real starter refused it again and the GUI never started.
+This session exercises the open unexpected-worker-exit path through the real
+source scanner entries. No production scanner or launcher behavior changed.
+
+Done:
+
+- Added [tree worker-interruption tests](tools/test_public_tree_worker_interrupt.ps1).
+  The frozen actual test passed 195 assertions through six real export/scan
+  entries. Parent PID and UTC creation time identify the actual worker before
+  a guarded kill; a no-op kill cannot count. Both interrupted entries naturally
+  returned exit 1 with the static refusal, no completion claim and empty stderr.
+  Scan/export controls passed before and after against the unchanged 101-file
+  source. Five source/helper/test hashes stayed unchanged after every entry;
+  two independent post-exit samples found observed supervisor/worker identities
+  absent. Evidence: `logs/tree-worker-interrupt-54f5d74ed0df4504a7c567dc442f7412/`.
+- Added [ZIP worker-interruption tests](tools/test_public_zip_worker_interrupt.ps1).
+  The frozen actual test passed 155 assertions through four real scanner
+  entries. Two independently identified workers were killed after observing
+  the unchanged input ZIP's read lock. Both supervisors naturally refused with
+  exit 1, empty stderr and no completion/partial/deadline claims. The same
+  1,000-member harmless-text ZIP passed before and after; seven source/test
+  hashes and fixture bytes/inventory stayed unchanged before, between and
+  after entries. Three independent post-exit identity checks found each observed
+  worker absent. Nothing was extracted. Evidence:
+  `logs/zip-worker-interrupt-797170ff90d0448fbab8e1f7e71403ef/`.
+- Registered both tests in their actual aggregate parse and execution lists.
+  Actual tree aggregate exited 0 in 422.619 seconds with empty stderr:
+  22 PowerShell sources parsed, 14 suites, including the new 189-assertion /
+  six-entry rerun. All 226 recursive tool/patch names and hashes stayed
+  unchanged. ZIP aggregate verification is still running serially.
+  Evidence: `logs/tests-catalogs-current-e92bd13ca4964eccb139c870b240c4b7/`.
+- Separate reviewer `final_diff_review` independently passed the actual new
+  tree test (189 assertions / six entries), ZIP test (155 / four) and both
+  23-tool catalogs, with three root files present. Stderr was empty and all
+  230 checked source names/hashes stayed unchanged. Counts vary with process
+  observations. Saved-original comparison found only the intended aggregate,
+  progress and evidence-document edits; no code blocker was found. Final
+  document review/checker is pending. Evidence:
+  `logs/final-worker-interrupt-review-744452d7018a47f2a92387d7492850e2/`.
+- Actual starter-refusal test passed only for real `Tekken4.cmd` exit 1,
+  missing private Python. Stderr was empty and five source hashes stayed
+  unchanged. Evidence: `logs/launcher-gate-current-b4862f8a14be4b6e9fdc1294d44b3f1f/`.
+  Actual readiness tests passed three subprocess cases; direct readiness
+  returned 2 / BLOCKED. Both stderr streams were empty and eight checked
+  source hashes stayed unchanged. Evidence:
+  `logs/readiness-current-ec63cd2ecc3f4a34818c8e1f04d6cfd6/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `47167233c6`:
+  clean 168-second build `943fc4631acf2c13`, finished `2026-11-02T06:56:13`;
+  OFF selftest 202 good restores, zero bad, 447 comparisons with zero
+  mismatches and all 101 wrong-input passes diverged. OFF same-PC pair:
+  6,000 frames, 199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS,
+  stalls 0/79 (0/2886 ms), displayed-frame p99 114.1/101.1 ms. This was not
+  reproduced here and does not prove this edited tree, GUI profile or two PCs.
+
+Open: failed termination and outer test-watchdog branches, interruption
+inside a single write and unobserved descendants remain unproved. Tree
+coverage proves premature worker death, not progress inside a write; ZIP
+coverage additionally observes the input lock. Retained fixtures and incomplete
+archives still fail whole-tree inspection. Complete source/player content,
+privacy and licence review and Python suites remain open. No scanner test
+establishes those approvals or actual launcher startup.
+
+Only the owner or authorized validation checkout can prove the complete
+private-Python/Tk App, portable first-run, exact build/game, enabled GUI switches
+and two physical PCs. No GUI, build, game or network helper ran in this copy.
+
+Eight area agents: `launcher_gate`, `tree_watchdog`, `zip_watchdog`,
+`process_gap_audit`, `tests_catalogs`, `latest_verify_docs`,
+`readiness_contract`, `release_priority`. Separate reviewer: `final_diff_review`.
+File ownership was exclusive. Root owns this record, `docs/status.md` and
+aggregate registration. Original bytes/hashes are saved without Git in
+`logs/release-worker-interrupt-c351a09c1e5443558bb9545d708a3b9e/`;
+evidence-doc originals are in
+`logs/latest-verify-current-73a1c1ca6415486cbaa3cd15f9e080cc/`.
+No Git command, deletion, build, game, forbidden helper, server, push or release
+ran here.
+
+## Earlier complete source-check inventory follow-up
 
 Release remains **NO-GO**. The real complete-package launcher GUI and
 portable first-run remain the main release gate. The actual starter again
