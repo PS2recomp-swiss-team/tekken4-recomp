@@ -86,6 +86,7 @@ try {
     # Filename checks only: these do not replace the Python payload/content scans.
     $forbidden = '(?i)\.(iso|elf|bin|bios|ps2|p2s|pem|key|pfx|png|jpe?g|gif|webp|bmp|tga|dds|ico|svg)$'
     $zipCount = 0
+    $incompleteZipCount = 0
     $memberCount = 0
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     foreach ($file in $files) {
@@ -94,24 +95,30 @@ try {
             Report-Failure "Forbidden source artifact/image filename: $relative"
         }
         if ($file.Extension -ne '.zip') { continue }
-        $zip = [IO.Compression.ZipFile]::OpenRead($file.FullName)
+        $zipCount++
         try {
-            $zipCount++
-            foreach ($entry in $zip.Entries) {
-                $memberCount++
-                $name = $entry.FullName.Replace('\', '/')
-                if ($name.StartsWith('/') -or $name -match '(^|/)\.\.(/|$)|:') {
-                    Report-Failure "Unsafe member path in $relative"
+            $zip = $null
+            try {
+                $zip = [IO.Compression.ZipFile]::OpenRead($file.FullName)
+                foreach ($entry in $zip.Entries) {
+                    $memberCount++
+                    $name = $entry.FullName.Replace('\', '/')
+                    if ($name.StartsWith('/') -or $name -match '(^|/)\.\.(/|$)|:') {
+                        Report-Failure "Unsafe member path in $relative"
+                    }
+                    if ($name -match $forbidden) {
+                        Report-Failure "Forbidden artifact/image filename in $relative"
+                    }
                 }
-                if ($name -match $forbidden) {
-                    Report-Failure "Forbidden artifact/image filename in $relative"
-                }
+            } finally {
+                if ($null -ne $zip) { $zip.Dispose() }
             }
-        } finally {
-            $zip.Dispose()
+        } catch {
+            $incompleteZipCount++
+            Report-Failure "Archive filename inspection failed; archive #$zipCount was not completely inspected."
         }
     }
-    Write-Output "Filename inspection: $($files.Count) files; $zipCount archives; $memberCount members (no extraction/content scan)."
+    Write-Output "Filename inspection: $($files.Count) files; $zipCount archives attempted; $memberCount members; $incompleteZipCount incomplete archives (no extraction/content scan)."
     Write-Output 'UNRUN: Python launcher/catalog/source/payload tests and scans; GUI first-run; private-Python/Tk; hidden-tools build; offline play; two-PC internet Versus.'
     Write-Output 'Beta acceptance remains NO-GO pending the required real candidate evidence.'
     if ($failures) {

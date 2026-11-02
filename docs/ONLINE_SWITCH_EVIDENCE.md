@@ -50,24 +50,24 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `38a164ddec`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 168 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T05:44:41`.
+Draft `caf985c7fd`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 167 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T06:39:31`.
 This supersedes the earlier supplied verification summaries.
 
-- Selftest, switches OFF: 5400 wall / 4650 logical frames, 170 successful
-  restores, zero bad restores, 375 resim comparisons with zero mismatches;
-  all 85 deliberate wrong-input passes diverged. Save average/maximum was
-  0.23/5.23 ms; restore average/maximum was 0.29/0.42 ms.
+- Selftest, switches OFF: 6600 wall / 5572 logical frames, 232 successful
+  restores, zero bad restores, 514 resim comparisons with zero mismatches;
+  all 116 deliberate wrong-input passes diverged. Save average/maximum was
+  0.19/4.68 ms; restore average/maximum was 0.27/0.39 ms.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 319/956, resim frames 488/3812, maximum depth 5/9;
-  prediction stalls 0/68 (0/2385 ms), time sync 0/92 (0/4350 ms).
-  Run-average FPS 52.1/52.2; final FPS windows 60.0/60.0 do not erase the
-  remaining pacing gaps. Displayed-boundary p99 was 111.5/99.7 ms.
-  Restore-and-resim maximum was 167.00/55.53 ms.
-  Rebases were 152/122 (14980/8264 ms).
+- Host/join rollbacks 307/965, resim frames 445/3794, maximum depth 5/9;
+  prediction stalls 0/79 (0/2368 ms), time sync 1/90 (17/4100 ms).
+  Run-average FPS 52.1/52.1; final FPS windows 60.0/59.8 do not erase the
+  remaining pacing gaps. Displayed-boundary p99 was 103.0/100.4 ms.
+  Restore-and-resim maximum was 170.11/59.28 ms.
+  Rebases were 166/125 (15158/8723 ms).
   Coalesced packets were zero on both endpoints.
 
 This is supplied evidence, not a run performed here. Full effective parameter

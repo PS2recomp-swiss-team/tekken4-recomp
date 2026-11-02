@@ -1,10 +1,38 @@
 # Status
 
-_Last updated: 2026-11-02 (scanner process lifecycle follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (source-check inventory follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current scanner process lifecycle follow-up:**
+- **Current source-check inventory follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the corrupt-ZIP checker
+  fix and [real-entry regression](../tools/test_beta_source_entry.ps1).
+  A corrupt archive now retains a failure and an incomplete-archive count
+  while later files/archives are inspected. The final inventory and
+  UNRUN/NO-GO statements appear; no logs or findings are excluded.
+  The actual in-place regression failed 12 assertions before the fix, then
+  passed 34 assertions through two real checker subprocesses. Each checker
+  still exited 1, with empty stderr and unchanged test/helper/fixture hashes.
+  The first green run attempted 3,280 archives, with 70 incomplete and 158
+  findings. This is completed inventory reporting, not complete archive or
+  public-source validation. Actual catalogs and readiness contract passed;
+  normal readiness remains 2 / BLOCKED. Real `Tekken4.cmd` again refused
+  missing private Python; GUI never started.
+  Latest supplied draft `caf985c7fd`: clean 167-second build
+  `943fc4631acf2c13`, finished `2026-11-02T06:39:31`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.1 FPS, stalls 0/79
+  (0/2368 ms), displayed-frame p99 103.0/100.4 ms. This was not reproduced
+  here and proves neither this edited tree nor the GUI's enabled profile.
+  Complete-package GUI/portable first-run, Python suites, exact build/game,
+  source/player/licence review and two physical PCs remain owner gates.
+  Separate final reviewer `final_diff_review_source_completion` found no
+  blocker and independently passed 34 regression assertions / two entries
+  and both catalogs. Its four-document checker covered 129 local links and
+  307 PowerShell parses without document/link/syntax findings; exit 1
+  retained 71 incomplete archives and 160 findings. Stderr was empty and
+  six changed-source hashes stayed unchanged during those entries.
+
+- **Earlier scanner process lifecycle follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records independent observations
   through the actual tree export/scan and ZIP scanner entries. The new tests
   require a real worker linked by parent PID and process creation time, then

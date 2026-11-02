@@ -1,6 +1,89 @@
 # T4 beta progress, 2026-11-02
 
-## Scanner process lifecycle follow-up, current session
+## Complete source-check inventory follow-up, current session
+
+Release remains **NO-GO**. The real complete-package launcher GUI and
+portable first-run remain the main release gate. The actual starter again
+refused missing private Python; the GUI never started. Builds, games and
+network helpers remain forbidden here.
+
+Done:
+
+- Fixed [the source checker](tools/check_beta_source.ps1): a corrupt ZIP no
+  longer aborts inspection of later files and archives. Open/read/dispose
+  failures retain exit 1, use a static numbered finding and count incomplete
+  archives separately. The final inventory and UNRUN/NO-GO statements now
+  appear after these failures. No logs, fixtures or findings are excluded.
+- Added [real-entry regressions](tools/test_beta_source_entry.ps1). The same
+  test bytes first failed 12 of 26 assertions through two actual in-place
+  checker subprocesses, then passed 34 assertions through two subprocesses.
+  Both fixed checker runs retained exit 1 and empty stderr, inspected the
+  later unsafe-member ZIP and reached the final inventory. Fixtures and both
+  test/helper hashes stayed unchanged. No checker copy or archive extraction
+  was used. Red evidence:
+  `logs/beta-source-entry-dba210d7d70d456cb2acf4e2fa2c96b1/`;
+  frozen green:
+  `logs/beta-source-entry-2a8bffe055f547b9b82eedb6deb72f5a/`.
+  The first green run inventoried 72,591 files, attempted 3,280 archives and
+  counted 253,496 members; 70 incomplete archives and 158 findings kept it
+  failed. These retained fixtures are not a reviewed public source output.
+- Actual launcher entry test passed only for real `Tekken4.cmd` exit 1,
+  missing private Python. Actual readiness exited 2 / BLOCKED; stderr was
+  empty and seven source hashes stayed unchanged. Evidence:
+  `logs/launcher-entry-gate-3e7ee85f64cd4922b8b0a23d092bc447/`.
+- Actual readiness contract suite passed its three subprocess cases, empty
+  stderr and eight unchanged source hashes. Both actual 23-tool catalogs
+  passed with three root files present and unchanged checked source hashes.
+  Evidence: `logs/readiness-contract-audit-fe0417101c8045f9ad9c5fd528b17c58/`
+  and `logs/tests-catalogs-audit-b505634e2d744bd18cb483af988d1f6a/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with the supplied `caf985c7fd`
+  verification: clean 167-second build `943fc4631acf2c13`, finished
+  `2026-11-02T06:39:31`; OFF selftest 232 good restores, 514 comparisons,
+  zero mismatches and 116 wrong-input divergences. Same-PC OFF pair: 6,000
+  frames, 199 hashes each, zero mismatches/NETDESYNC, 52.1/52.1 FPS,
+  stalls 0/79 (0/2368 ms), displayed-frame p99 103.0/100.4 ms. This was
+  not reproduced here and does not prove this edited tree or GUI profile.
+- Tree interruption and ZIP branch agents found no demonstrated production
+  defect warranting another patch. Independent tree write-failure checks
+  passed 85 assertions / eight real entries, empty stderr and unchanged
+  checked source hashes; fixture ACLs were restored. ZIP path-alias probes
+  ran eight actual entries but demonstrated no device-name bypass.
+
+- Separate reviewer `final_diff_review_source_completion` found no blocker
+  and independently passed the actual new regression (34 assertions / two
+  in-place entries) and both catalogs (23 tools each, three root files).
+  Its actual checker covered all four changed documents: 129 local links
+  and 307 PowerShell parses, no document/link/syntax findings. The final
+  inventory covered 72,616 files, 3,283 archive attempts and 253,498 members;
+  71 incomplete archives and 160 retained findings kept exit 1. All stderr
+  was empty and six changed-source hashes stayed unchanged during entries.
+  Saved-byte comparison verified the intended edits and preserved history.
+  Evidence:
+  `logs/final-diff-review-source-completion-edf20994efe246edb2a3c1d5b51df2d7/`.
+  Existing tree/ZIP aggregate suites were not rerun; their production
+  scanners did not change.
+
+Open: retained fixture findings and incomplete archives remain failures;
+filename inspection is not content/privacy/licence approval. Python suites,
+complete public source/player review, termination-error/watchdog branches,
+interruption inside a single write and unobserved descendants remain open.
+Only the owner or authorized validation checkout can prove the complete
+private-Python/Tk App startup, portable first-run, exact build/game, enabled
+GUI switches and two physical PCs. No build, game or GUI ran in this copy.
+
+Eight area agents: `launcher_entry_gate`, `release_priority_audit`,
+`tree_interruption_audit`, `zip_open_branch_audit`, `tests_catalogs_audit`,
+`latest_verify_docs`, `source_checker_regressions`, `readiness_contract_audit`.
+Separate final reviewer: `final_diff_review_source_completion`.
+File ownership was exclusive. Root owns this record, `docs/status.md` and
+`tools/check_beta_source.ps1`; baseline bytes/hashes are saved without Git in
+`logs/release-source-completion-0e1380f430604d95b08db6469d06cd2b/`.
+The evidence-doc originals are in
+`logs/latest-verify-docs-53a7c736cec64335af1127d5cd8ffafa/`.
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier scanner process lifecycle follow-up
 
 Release remains **NO-GO**. The exact complete package's real launcher GUI
 and portable first-run remain the main gate. The actual starter again
