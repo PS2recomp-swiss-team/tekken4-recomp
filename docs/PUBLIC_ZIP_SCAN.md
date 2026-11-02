@@ -19,16 +19,26 @@ The entry refuses paths outside this tree and reparse points. Archive members
 must have safe, unique paths, including consistent directory spelling and no
 file/directory conflicts. Symlinks and other nonregular entries are refused.
 The fixed limits are 10,000 entries, 32 MiB per file, 128 MiB total uncompressed
-content and a 128 MiB archive. ZIP read errors and incomplete reads cause
-refusal. Nothing is extracted, including when a member path is unsafe.
+content and a 128 MiB archive. Reported ZIP read errors and mismatched
+uncompressed lengths cause refusal. Nothing is extracted, including when
+a member path is unsafe.
 
 Only ordinary single-disk ZIPs are supported. ZIP64, comments, extra fields
 and data descriptors are refused. Local headers must match the central
 directory, and member regions must cover the bytes before that directory
-without gaps or overlaps. CRCs are not recomputed, and compressed-byte
-representations and producer identity are not authenticated. This is not
-proof that every possible hidden byte has been found. SHA-256 identifies
-the archive bytes read.
+without gaps or overlaps. Stored members must declare equal compressed and
+uncompressed lengths. The scanner recomputes CRC-32 from the uncompressed
+bytes it reads and compares it with the matching header CRCs, including empty
+files and directories. A mismatch causes refusal. CRC detects corruption; it
+does not authenticate a producer or prove that every compressed byte was
+consumed. This is not proof that every possible hidden byte has been found.
+SHA-256 identifies the archive bytes read.
+
+A real-entry audit found a remaining limitation: the .NET reader returns
+empty content for a truncated deflated member declaring zero length and CRC
+zero. Such an archive can still pass alongside another clean file. CRC checks
+the returned bytes; it does not prove a complete DEFLATE stream. Full stream
+validation remains open.
 
 Member paths must use `/`. Some Windows ZIP convenience methods write `\`
 instead; those archives are refused. Use a packager that writes portable
@@ -48,6 +58,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/check_public_zip.ps1
 
 Tests retain harmless text ZIP fixtures under unique `logs/` directories.
 They exercise the actual scan command; syntax parsing is reported separately.
+The [CRC vectors](../tools/test_public_zip_crc.ps1) check clean stored and
+deflated text, empty members and known CRC values. The
+[integrity cases](../tools/test_public_zip_integrity.ps1) check corrupt
+content and matching but incorrect header CRCs after a clean control passes.
 No game data, keys, screenshots or real credentials are needed for them.
 Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
 remains open.

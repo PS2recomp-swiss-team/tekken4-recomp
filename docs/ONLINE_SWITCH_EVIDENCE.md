@@ -50,20 +50,20 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `477105a109`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `c17fd979ca`; clean merge; build OK in 164 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T01:50:45`.
+Draft `9cdebb4f93`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `c17fd979ca`; clean merge; build OK in 167 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T02:06:00`.
 
-- Selftest, switches OFF: 6600 wall / 5572 logical frames, 232 successful
-  restores, zero bad restores, 514 resim comparisons with zero mismatches;
-  all 116 deliberate wrong-input passes diverged.
+- Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
+  restores, zero bad restores, 447 resim comparisons with zero mismatches;
+  all 101 deliberate wrong-input passes diverged.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 322/972, resim frames 513/3854, maximum depth 6/9;
-  prediction stalls 0/78 (0/2862 ms). Run-average FPS 52.3/52.3; final FPS
-  windows 60.0/59.8 do not erase the remaining pacing gaps. Displayed-boundary
-  p99 was 111.3/98.8 ms. Coalesced packets were zero on both endpoints.
+- Host/join rollbacks 345/937, resim frames 725/3545, maximum depth 6/9;
+  prediction stalls 0/71 (0/2411 ms). Run-average FPS 52.0/52.1; final FPS
+  windows 60.0/60.0 do not erase the remaining pacing gaps. Displayed-boundary
+  p99 was 107.5/100.0 ms. Coalesced packets were zero on both endpoints.
 
 This is supplied evidence, not a run performed here. Full effective parameter
 records and raw logs were not supplied in this prompt. "Switches OFF" must not

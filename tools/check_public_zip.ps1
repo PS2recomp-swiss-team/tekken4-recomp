@@ -54,6 +54,7 @@ try {
     $required = @(
         'public_patch_headers.ps1', 'public_tree_scan.ps1', 'public_zip_scan.ps1',
         'scan_public_zip.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
+        'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1',
         'check_public_zip.ps1', 'check_online_catalogs.ps1'
     )
     foreach ($name in $required) {
@@ -69,7 +70,8 @@ try {
     Write-Output "SOURCE: $($before.Count) patch names and SHA-256 hashes captured before child entries."
     $shell = Join-Path $PSHOME 'powershell.exe'
     if (-not [IO.File]::Exists($shell)) { throw 'Windows PowerShell unavailable; child entries did not run.' }
-    foreach ($entry in @('check_online_catalogs.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1')) {
+    foreach ($entry in @('check_online_catalogs.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
+            'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1')) {
         Write-Output "ENTRY: tools/$entry"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Get-CheckedPath ('tools/' + $entry))
         if ($LASTEXITCODE -ne 0) {

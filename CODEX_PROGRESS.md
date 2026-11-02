@@ -1,6 +1,92 @@
 # T4 beta progress, 2026-11-02
 
-## ZIP content scan follow-up, current session
+## ZIP integrity follow-up, current session
+
+Release remains **NO-GO**. The selected open source-only item was actual ZIP
+member CRC verification. Matching header fields alone did not check the bytes
+read. No production launcher, runtime, switch or server behavior changed.
+
+Done:
+
+- The real `scan_public_zip.ps1` accepted a harmless stored text fixture with
+  matching but incorrect local/central CRC fields before the fix. The exact
+  same retained input now exits 1 / REFUSED, unchanged SHA-256
+  `2f7ef08e9f2edfd56ff206d77701dd111ac619bbb8ace69ac311431b2611ebae`.
+- [public_zip_scan.ps1](tools/public_zip_scan.ps1) recomputes each safe member's
+  CRC from the uncompressed bytes read, including empty files/directories,
+  using a bounded in-memory .NET writer. It checks stored-member length
+  consistency. No compilation, extraction, archive repair or execution occurs.
+- Added [known-vector tests](tools/test_public_zip_crc.ps1) and
+  [corruption tests](tools/test_public_zip_integrity.ps1), all through actual
+  `scan_public_zip.ps1` subprocesses. Literal standard CRC vectors, stored and
+  deflated text, empty members, per-member reset, multiple buffers, wrong
+  CRCs, changed content and both stored-length mismatch directions ran.
+  Clean controls must pass; archive hashes, inventory and redaction are checked.
+- The area agent ran the real [aggregate](tools/check_public_zip.ps1): exit 0,
+  ten syntax parses; both actual catalogs, 23 unique present tools each and
+  three root files; 421 assertions through 59 scanner subprocesses across
+  four suites (60/10, 171/33, 58/5, 132/11). All 79 patch names and SHA-256
+  hashes stayed unchanged. Catalogs did not need developer-test entries.
+- The actual scanner reread all three retained Sunday archives: expected
+  exit 1, 123/124/124 files and 138 mail-category records each, about 4.2 s
+  per archive. The existing sanitized portable LICENSE/patch subset passed:
+  exit 0, 80 files, 2,025,621 bytes, 2.569 s. All hashes stayed unchanged.
+  This subset is not a complete corresponding-source or player candidate.
+  See [PUBLIC_ZIP_AUDIT.md](docs/PUBLIC_ZIP_AUDIT.md).
+- Root and the separate final reviewer independently reran the finished
+  aggregate: both exit 0, the same 421 assertions / 59 scanner subprocesses
+  and unchanged 79 patch hashes. Review against saved original file bytes
+  found no blocking issue in the scoped CRC/stored-length changes. It does
+  not close the known compressed-format gap below or release acceptance.
+- An independent read-only audit ran ten additional real scan subprocesses.
+  It confirmed CRC/stored-size refusals and found the remaining DEFLATE
+  limitation below. Root's final real source check covered all five changed
+  documents: 57 local links resolved and 63 PowerShell files parsed, then
+  exit 1 on retained image-name fixtures and an intentionally corrupt ZIP.
+- Updated [ONLINE_SWITCH_EVIDENCE.md](docs/ONLINE_SWITCH_EVIDENCE.md) with the
+  latest owner-supplied verification below. This documents supplied evidence,
+  not a run of this tree.
+
+Open / owner-only:
+
+- A harmless truncated empty DEFLATE stream (one byte `01`, declared length
+  and CRC zero, beside a clean member) still passes the actual scanner because
+  .NET returns no bytes without reporting truncation. CRC validates returned
+  bytes; it does not prove complete DEFLATE consumption or format validity.
+  Reproducer SHA-256:
+  `331d43c8da4a4e064ea2fec821a09c274957f3dc48352fef9ba4f478de0576ae`.
+  Evidence is under `logs/zip-integrity-audit-fbce2d67a16346bbaef8f49f083017a1/`.
+  This is an observed open limitation, not a fixed or passing safety case.
+  See [PUBLIC_ZIP_SCAN.md](docs/PUBLIC_ZIP_SCAN.md).
+- Whole-tree source checking remains red on retained text-only image-name,
+  unsafe-name and corrupt ZIP fixtures. Document-specific real checker runs
+  resolved their links and parsed PowerShell before the archive reader stopped.
+  Nothing was deleted or the checker relaxed to manufacture a pass.
+- Review the exact complete public source/player outputs and rights; run
+  Python suites/payload checks, the actual complete launcher, exact build/game
+  and two physical PCs in the authorized checkout. GUI startup, portable
+  first-run, enabled switch profile, results, private protocol and licensing
+  gates remain open. No Python, GUI, build, game or network helper ran here.
+  CRC agreement cannot close those gates or authenticate a producer.
+
+Latest owner-supplied verification, not reproduced here: draft `9cdebb4f93`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 167-second build `943fc4631acf2c13`, finished `2026-11-02T02:06:00`.
+Selftest: 6000 wall / 5106 logical frames, 202 successful restores, zero bad,
+447 resim comparisons with zero mismatches, 101/101 wrong-input divergences.
+Switches-OFF same-PC pair: 6000 frames, 199 hashes per side, zero mismatches
+and NETDESYNC lines; host/join run-average FPS 52.0/52.1, stalls 0/71
+(0/2411 ms), displayed-frame p99 107.5/100.0 ms. This supersedes the older
+supplied reports below; it proves neither this edited tree, the enabled GUI
+profile nor two-PC play.
+
+Agents with exclusive source-file ownership: `zip_crc_reader`,
+`zip_crc_vectors`, `zip_crc_corruption`, `tests_catalogs`, `zip_crc_docs`,
+`retained_zip_audit`, `verify_evidence`; `zip_integrity_audit` was a read-only
+coverage audit. Separate `final_diff_review_crc` reviewed the finished diff.
+All read AGENTS.md. Root owns this record and `docs/status.md`. No Git command,
+compilation, build, game, network helper, server, push or release ran here.
+## Earlier ZIP content scan follow-up
 
 Release remains **NO-GO**. The most useful open source-only item selected here
 is reading the retained ZIP contents through an actual scanner entry, rather

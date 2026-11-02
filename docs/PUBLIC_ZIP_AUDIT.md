@@ -54,6 +54,31 @@ The archives were left unchanged. Prepare a fresh reviewed source output with
 output again after packaging. Do not sanitize these retained inputs in place
 or treat a successful limited source scan as player-package acceptance.
 
+## CRC validation follow-up
+
+Reran the same three archives through the real command after the reader added
+CRC-32 checks against the uncompressed bytes. The command also ran against
+the existing portable sanitized subset below. No archive was rewritten or
+extracted. Every reported SHA-256 matched the before/after file hashes and
+the identities recorded on this page.
+
+| Input | Exit | Entries / files / bytes read | Elapsed seconds |
+|---|---:|---:|---:|
+| Sunday `042256-264836` | 1 | 123 / 123 / 4,187,421 | 4.247 |
+| Sunday `205433-879960` | 1 | 124 / 124 / 4,207,076 | 4.294 |
+| Sunday `205628-895451` | 1 | 124 / 124 / 4,207,280 | 4.217 |
+| Portable sanitized subset | 0 | 80 / 80 / 2,025,621 | 2.569 |
+
+These are single observed wall times, including PowerShell startup, not a
+performance guarantee. All three Sunday archives completed CRC/content reads
+and still reported only the same 138 mail-category records per archive. The
+portable subset still passed the limited source scan. A matching CRC detects
+accidental corruption; it does not authenticate a producer or establish rights.
+It does not prove that every hidden compressed representation was inspected.
+
+The command output and before/after hashes are retained under
+`logs/public-zip-crc-audit-69c2e5ac5d3a4520979ec0544815e9a2/`.
+
 ## Sanitized source subset experiment
 
 The real `publish_public_tree.ps1` entry also staged `LICENSE` and all
@@ -71,8 +96,9 @@ It is retained as `logs/public-zip-sanitized-source-portable.zip`.
 
 This proves the selected sanitized source bytes can pass the ZIP entry. It
 is a limited subset, not complete corresponding source or a player package.
-CRC validation, producer authenticity and every possible hidden compressed
-representation remain outside this scan. No publication is authorized.
+The CRC follow-up above checks the read bytes; producer authenticity and every
+possible hidden compressed representation remain unproved. No publication is
+authorized.
 
 ## Still open
 

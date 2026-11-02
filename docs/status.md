@@ -1,9 +1,25 @@
 # Status
 
-_Last updated: 2026-11-02 (ZIP content scan follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (ZIP integrity follow-up; release remains NO-GO)_
 
 ## Resume here
-- **Current ZIP follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records
+
+- **Current ZIP integrity follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records an actual false pass for matching but incorrect ZIP CRC fields and
+  the unchanged-fixture after-fix refusal. The reader now checks actual member
+  CRCs and stored lengths; known-vector and corruption tests invoke the real
+  scanner command. The aggregate passed 421 assertions / 59 scanner processes;
+  retained archives kept their expected results and unchanged hashes. A known
+  truncated-empty-DEFLATE false pass remains open. Separate final review
+  found no blocker in the scoped CRC changes. These checks do not prove a
+  complete source/player candidate, launcher, build or game.
+  Latest owner-supplied verification is draft `9cdebb4f93`, clean 167-second
+  build `943fc4631acf2c13`, finished `2026-11-02T02:06:00`: switches OFF,
+  same-PC pair, 199 hashes per side and zero mismatches/NETDESYNC; host/join
+  run-average 52.0/52.1 FPS, stalls 0/71 (0/2411 ms), displayed-frame p99
+  107.5/100.0 ms. It does not prove this tree, the GUI profile or two-PC play.
+  See [ONLINE_SWITCH_EVIDENCE.md](ONLINE_SWITCH_EVIDENCE.md).
+- **Earlier ZIP content follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records
   the real PowerShell [ZIP content entry](PUBLIC_ZIP_SCAN.md). Prior filename
   checks and missing-Python attempts did not read payload contents. Both real
   suites passed (60 and 171 assertions; 10 and 33 subprocesses). Independent

@@ -1,5 +1,31 @@
 # Bounded, read-only source ZIP content checks. Never extract members.
-# CRCs, producer identity, licences and player-package completeness are unproved.
+# Producer identity, licences and player-package completeness are unproved.
+
+function Get-PublicZipContentCrc32 {
+    param([AllowEmptyCollection()][byte[]]$Content)
+
+    # Use the existing ZIP writer's CRC implementation, without compiling code
+    # or writing a file. The seekable, single-member buffer has its CRC at 14.
+    # Content is already bounded to 32 MiB; this temporary buffer is bounded too.
+    $memory = New-Object IO.MemoryStream
+    $zip = $null
+    $stream = $null
+    try {
+        $zip = New-Object IO.Compression.ZipArchive($memory, [IO.Compression.ZipArchiveMode]::Create, $true)
+        $member = $zip.CreateEntry('crc', [IO.Compression.CompressionLevel]::NoCompression)
+        $stream = $member.Open()
+        $stream.Write($Content, 0, $Content.Length)
+        $stream.Dispose()
+        $stream = $null
+        $zip.Dispose()
+        $zip = $null
+        return [BitConverter]::ToUInt32($memory.GetBuffer(), 14)
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $zip) { $zip.Dispose() }
+        $memory.Dispose()
+    }
+}
 
 function Invoke-PublicZipScan {
     param([Parameter(Mandatory=$true)][string]$ArchivePath)
@@ -56,6 +82,7 @@ function Invoke-PublicZipScan {
         if ($central + $centralSize -ne $end) { throw 'Unsupported or malformed ZIP directory.' }
         $cursor = $central
         $regions = New-Object 'Collections.Generic.List[object]'
+        $memberCrcs = New-Object 'Collections.Generic.List[uint32]'
         $declaredBytes = [long]0
         for ($index = 0; $index -lt $entries; $index++) {
             if ($cursor -lt 0 -or $cursor + 46 -gt $end -or
@@ -75,7 +102,7 @@ function Invoke-PublicZipScan {
                 throw 'ZIP local and central member names do not match.'
             }
             # Version, flags, method, timestamps, CRC and both lengths must
-            # agree. CRC equality is not a recomputation of the content CRC.
+            # agree. Member bytes are checked against this CRC after reading.
             for ($field = 0; $field -lt 22; $field++) {
                 if ($data[[int]$local+4+$field] -ne $data[[int]$cursor+6+$field]) {
                     throw 'ZIP local and central member metadata do not match.'
@@ -88,6 +115,10 @@ function Invoke-PublicZipScan {
             }
             $compressedSize = [long][BitConverter]::ToUInt32($data,[int]$cursor+20)
             $uncompressedSize = [long][BitConverter]::ToUInt32($data,[int]$cursor+24)
+            if ($method -eq 0 -and $compressedSize -ne $uncompressedSize) {
+                throw 'ZIP stored member lengths do not match.'
+            }
+            $memberCrcs.Add([BitConverter]::ToUInt32($data,[int]$cursor+16))
             $declaredBytes += $uncompressedSize
             if ($uncompressedSize -gt 32MB -or $declaredBytes -gt 128MB) {
                 throw 'ZIP declared uncompressed size limit exceeded.'
@@ -150,9 +181,9 @@ function Invoke-PublicZipScan {
             }
             if ($directory) {
                 if ($member.Length -ne 0) { throw 'ZIP directory contains unexpected data.' }
-                continue
+            } else {
+                $files++
             }
-            $files++
             if ($member.Length -gt 32MB -or $member.Length -lt 0 -or $bytes + $member.Length -gt 128MB) {
                 throw 'ZIP uncompressed size limit exceeded.'
             }
@@ -171,9 +202,15 @@ function Invoke-PublicZipScan {
                     $content.Write($buffer,0,$count)
                 }
                 if ($actual -ne $member.Length) { throw 'ZIP member length mismatch.' }
+                $memberBytes = $content.ToArray()
+                if ((Get-PublicZipContentCrc32 $memberBytes) -ne $memberCrcs[$index-1]) {
+                    throw 'ZIP member content CRC mismatch.'
+                }
                 $bytes += $actual
-                foreach ($reason in @(Get-PublicFileFindings $relative ($content.ToArray()))) {
-                    $findings.Add([pscustomobject]@{Entry=$index;Reason=$reason})
+                if (-not $directory) {
+                    foreach ($reason in @(Get-PublicFileFindings $relative $memberBytes)) {
+                        $findings.Add([pscustomobject]@{Entry=$index;Reason=$reason})
+                    }
                 }
             } finally {
                 if ($null -ne $content) { $content.Dispose() }
