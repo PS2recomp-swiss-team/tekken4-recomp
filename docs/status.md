@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02 (App still unrun; supplied draft e1da2bebeb; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft ab64c85901; NO-GO)_
 
 ## Resume here
 
@@ -14,10 +14,10 @@ _Last updated: 2026-11-02 (App still unrun; supplied draft e1da2bebeb; NO-GO)_
   cancel/accept and build/play/return. Actual starter refusal, both 23-tool
   catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
   No production or test code changed. The App never started.
-  Latest supplied draft `e1da2bebeb`: clean 199-second build
-  `943fc4631acf2c13`, finished `2026-11-02T10:16:49`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 47.8/47.8 FPS, stalls 0/121
-  (0/5199 ms), displayed-frame p99 155.7/114.9 ms. Cause and usable pacing
+  Latest supplied draft `ab64c85901`: clean 187-second build
+  `943fc4631acf2c13`, finished `2026-11-02T10:31:53`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 47.9/47.9 FPS, stalls 0/128
+  (0/5136 ms), displayed-frame p99 166.4/118.4 ms. Cause and usable pacing
   remain unproved. Supplied, not reproduced here; no App, enabled
   GUI-profile or two-PC acceptance.
   Owner next: provide the reviewed complete candidate, matching complete
