@@ -9,9 +9,9 @@ repair the archive, start the launcher, build, start a game or publish.
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/scan_public_zip.ps1 -Archive dist/sunday/tekken4-sunday-test-20261031-205628-895451.zip
 ```
 
-Exit 0 means only that this limited scan passed. Exit 1 means findings or an
-invalid input. Findings use numeric member indices and categories, without
-printing member names or matched content. Keep the reported archive SHA-256
+Exit 0 means only that this limited scan passed. Exit 1 means findings, an
+invalid input or an incomplete scan. Findings use numeric member indices and
+categories, without printing member names or matched content. Keep the reported archive SHA-256
 with the result so it identifies the bytes checked. See
 [PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md) for actual retained-archive results.
 
@@ -55,10 +55,23 @@ archive. Counters do not reset between members, and the command has no option
 to raise them. These are parser work limits, not a wall-time guarantee or a
 speed improvement. The PowerShell check can still be slow. See the measured
 retained-input timings in [PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md). A slow
-scan is not evidence of a completed scan or a pass. A retained very-long-word
-fixture also exceeded a test's 180-second deadline; the cause was not isolated.
-That observed performance limitation remains open. The scan has no global
-wall-time guarantee.
+scan is not evidence of a completed scan or a pass.
+
+The shared [text scanner](../tools/public_tree_scan.ps1) gives each of its
+full-content regex operations a two-second .NET regex timeout. Match
+collections are evaluated inside the guard, but their total enumeration time
+is not bounded by one timeout. A timeout or regex failure
+refuses the scan without printing the exception or input text; it does not
+produce a completed `SCANNED` result or a pass. Difficult but otherwise valid
+text can therefore be refused for manual review.
+
+The long-word fix skips the dense-symbol regex only when neither of its
+required literal fragments occurs. Blank-line fixes prevent two line-start
+checks from retrying across every earlier newline. These changes retain the
+content categories and are covered by actual ZIP and tree entry tests below.
+There is still no whole-process deadline. Separate patch-header processing,
+path checks, decompression, I/O and the sum of regex work are not covered by
+one global time limit.
 
 Member paths must use `/`. Some Windows ZIP convenience methods write `\`
 instead; those archives are refused. Use a packager that writes portable
@@ -89,6 +102,11 @@ The [block budget](../tools/test_public_zip_budget_blocks.ps1),
 [symbol budget](../tools/test_public_zip_budget_symbols.ps1) and
 [table budget](../tools/test_public_zip_budget_tables.ps1) suites exercise the
 fixed work counters through that entry, including cumulative member work.
+The shared text regressions cover [long words](../tools/test_public_text_words.ps1),
+[blank lines](../tools/test_public_text_lines.ps1) and
+[content categories and timeout refusal](../tools/test_public_text_categories.ps1)
+through both actual scanner entries, with clean controls and bounded test
+processes. A killed test process is a failed test, not a scanner refusal.
 No game data, keys, screenshots or real credentials are needed for them.
 Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
 remains open.

@@ -1,6 +1,33 @@
 # Conservative guards for the public staging tool. No files are changed here.
 # A clean scan does not establish copyright permission or licence compliance.
 
+# Each content regex has its own deadline. This is not a whole-scan deadline.
+# Never include the exception message: it can contain private input text.
+function Test-PublicTextMatch {
+    param([string]$Text, [string]$Pattern)
+    try {
+        return [regex]::IsMatch($Text, $Pattern, [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromSeconds(2))
+    } catch { throw 'text scan limit or failure; manual review required' }
+}
+
+function Get-PublicTextMatch {
+    param([string]$Text, [string]$Pattern)
+    try {
+        return [regex]::Match($Text, $Pattern, [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromSeconds(2))
+    } catch { throw 'text scan limit or failure; manual review required' }
+}
+
+function Get-PublicTextMatches {
+    param([string]$Text, [string]$Pattern)
+    try {
+        $found = [regex]::Matches($Text, $Pattern, [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromSeconds(2))
+        # MatchCollection evaluates lazily; force it inside the guarded call.
+        # Call the getter explicitly: PowerShell can suppress property errors.
+        $null = $found.get_Count()
+        return ,$found
+    } catch { throw 'text scan limit or failure; manual review required' }
+}
+
 function Test-PublicImageName {
     param([string]$Name)
     return [IO.Path]::GetExtension($Name).ToLowerInvariant() -in @(
@@ -65,8 +92,8 @@ function Get-PublicFileFindings {
     $magic = [BitConverter]::ToString($Data, 0, [Math]::Min(12,$Data.Length))
     if ($magic -match '^(?:89-50-4E-47-0D-0A-1A-0A|FF-D8-FF|47-49-46-38-37-61|47-49-46-38-39-61|42-4D|49-49-2A-00|4D-4D-00-2A|00-00-01-00|44-44-53-20)' -or
         ($latin.StartsWith('RIFF') -and $Data.Length -ge 12 -and $latin.Substring(8,4) -eq 'WEBP') -or
-        $latin -match ('(?i)<sv' + 'g(?:\s|>)') -or
-        $latin.StartsWith('/* X' + 'PM */') -or $latin -match '^P[1-6][\r\n\t ]') {
+        (Test-PublicTextMatch $latin ('(?i)<sv' + 'g(?:\s|>)')) -or
+        $latin.StartsWith('/* X' + 'PM */') -or (Test-PublicTextMatch $latin '(?i)^P[1-6][\r\n\t ]')) {
         $reasons.Add('image filename or content')
     }
     if ($magic -match '^(?:7F-45-4C-46|4D-5A|50-4B-03-04|50-4B-05-06|37-7A-BC-AF-27-1C|52-61-72-21|1F-8B)' -or
@@ -76,21 +103,24 @@ function Get-PublicFileFindings {
     }
     try { $text = (New-Object Text.UTF8Encoding($false,$true)).GetString($Data) }
     catch { $reasons.Add('non-UTF-8 or binary content; manual review required'); return @($reasons | Select-Object -Unique) }
-    if ($text -match '[\x00-\x08\x0b\x0e-\x1f]') { $reasons.Add('binary content; manual review required') }
-    if ($text -match ('(?i)data:ima' + 'ge/|<im' + 'g(?:\s|>)|!\[[^\]\r\n]*\]\s*[\[(]')) {
+    if (Test-PublicTextMatch $text '[\x00-\x08\x0b\x0e-\x1f]') { $reasons.Add('binary content; manual review required') }
+    if (Test-PublicTextMatch $text ('(?i)data:ima' + 'ge/|<im' + 'g(?:\s|>)|!\[[^\]\r\n]*\]\s*[\[(]')) {
         $reasons.Add('embedded image or image reference; manual review required')
     }
     $secretPattern = '-----BEGIN (?:[A-Z0-9 ]*PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----|' +
         '\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b|' +
         '(?i:' + '\b(?:[a-z][a-z0-9_]*[_-])?(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|private[_-]?key|signing[_-]?key|client[_-]?secret|secret|token)\b)["'']?\s*[:=]\s*(?:[rRuUbBfF]{0,2}["''](?![<{$])[^"''\r\n]{8,}["'']|[a-zA-Z0-9_/-]{20,})'
-    if ($text -cmatch $secretPattern -or $text -cmatch '(?m)^\s*[0-9a-fA-F]{64}\s*$') {
+    # A blank prefix/suffix can be tested on the hash's own line. Crossing
+    # newlines here would retry the same whitespace run from every blank line.
+    if ((Test-PublicTextMatch $text $secretPattern) -or
+        (Test-PublicTextMatch $text '(?m)^[^\S\n]*[0-9a-fA-F]{64}[^\S\n]*$')) {
         $reasons.Add('credential or private key content')
     }
     $personalPattern = '(?i)(?:\b[a-z]:[\\/]|(?<![a-z0-9_.\\/])\\\\[a-z0-9_.-]+[\\/]|/(?:home|Users)/[a-z0-9_.-]+|~[\\/])'
     $personalText = $text
     # This exact diff is the reviewed guest CD-path example already pinned by
     # publish_source.py. Only this category is excepted, never the mail preamble.
-    $diff = [regex]::Match($latin, '(?m)^diff --git ')
+    $diff = Get-PublicTextMatch $latin '(?m)^diff --git '
     if ($suffix -eq '.patch' -and $diff.Success) {
         $sha = [Security.Cryptography.SHA256]::Create()
         try { $digest = [BitConverter]::ToString($sha.ComputeHash($Data,$diff.Index,$Data.Length-$diff.Index)).Replace('-','').ToLowerInvariant() }
@@ -99,10 +129,10 @@ function Get-PublicFileFindings {
             $personalText = [Text.Encoding]::UTF8.GetString($Data,0,$diff.Index)
         }
     }
-    if ($personalText -match $personalPattern) { $reasons.Add('personal or machine-specific path') }
+    if (Test-PublicTextMatch $personalText $personalPattern) { $reasons.Add('personal or machine-specific path') }
     # Require the end of the token so C++ ::Block is not read as IPv6 ::B.
     # Compressed addresses are still checked even when they have few colons.
-    $ipMatches = [regex]::Matches($text, '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])|(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+(?:%[A-Za-z0-9_.-]+)?(?![\w:])')
+    $ipMatches = Get-PublicTextMatches $text '(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])|(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F:.]+(?:%[A-Za-z0-9_.-]+)?(?![\w:])'
     foreach ($match in $ipMatches) {
         $literal = $match.Value.Split('%')[0].TrimEnd('.')
         $address = $null
@@ -119,7 +149,7 @@ function Get-PublicFileFindings {
         'go.microsoft.com','learn.microsoft.com','visualstudio.microsoft.com','www.microsoft.com','developer.microsoft.com',
         'virustotal.com','www.virustotal.com','docs.virustotal.com','spdx.org','opensource.org',
         'git-scm.com','www.git-scm.com','tailscale.com','www.tailscale.com')
-    foreach ($match in [regex]::Matches($text, '\b(?:https?|wss?|tcp|udp)://[^\s<>"''`]+', 'IgnoreCase')) {
+    foreach ($match in (Get-PublicTextMatches $text '(?i)\b(?:https?|wss?|tcp|udp)://[^\s<>"''`]+')) {
         $url = $null
         if (-not [Uri]::TryCreate($match.Value.TrimEnd('.,;)]}'.ToCharArray()), [UriKind]::Absolute, [ref]$url) -or
             $url.Scheme -notin @('http','https') -or $url.DnsSafeHost.ToLowerInvariant() -notin $publicHosts -or
@@ -127,22 +157,27 @@ function Get-PublicFileFindings {
             $reasons.Add('unreviewed server URL'); break
         }
     }
-    foreach ($match in [regex]::Matches($text, '(?i)\b[A-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]*\.)+[A-Z]{2,}\b')) {
-        if ($match.Value -notmatch '(?i)@(?:gnu|fsf)\.org$') { $reasons.Add('email address; manual review required'); break }
+    foreach ($match in (Get-PublicTextMatches $text '(?i)\b[A-Z0-9.!#$%&''*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]*\.)+[A-Z]{2,}\b')) {
+        if (-not (Test-PublicTextMatch $match.Value '(?i)@(?:gnu|fsf)\.org$')) { $reasons.Add('email address; manual review required'); break }
     }
-    if ($text -match '(?i)(?:\b[a-z_]*(?:server|host|endpoint|lobby)[a-z_]*\b["'']?\s*[:=]\s*["'']?|--(?:server|host|lobby)(?:\s+|=))(?:[a-z0-9][a-z0-9.-]*\.[a-z]{2,}|localhost)(?=[:/\s"'']|$)' -or
-        $text -match '(?i)\b[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}:\d{1,5}\b') {
+    if ((Test-PublicTextMatch $text '(?i)(?:\b[a-z_]*(?:server|host|endpoint|lobby)[a-z_]*\b["'']?\s*[:=]\s*["'']?|--(?:server|host|lobby)(?:\s+|=))(?:[a-z0-9][a-z0-9.-]*\.[a-z]{2,}|localhost)(?=[:/\s"'']|$)') -or
+        (Test-PublicTextMatch $text '(?i)\b[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}:\d{1,5}\b')) {
         $reasons.Add('server hostname assignment')
     }
     if ($suffix -eq '.patch') {
         if (-not $diff.Success) { $reasons.Add('patch has no diff boundary') }
         if (Get-Command Get-PublicPatchHeaderFindings -ErrorAction SilentlyContinue) {
             foreach ($reason in @(Get-PublicPatchHeaderFindings $Data)) { $reasons.Add($reason) }
-        } elseif ($diff.Success -and $latin.Substring(0,$diff.Index) -match '(?im)^\s*Co-Authored-By\s*:') {
+        } elseif ($diff.Success -and (Test-PublicTextMatch $latin.Substring(0,$diff.Index) '(?im)^[^\S\n]*Co-Authored-By\s*:')) {
             $reasons.Add('private patch mail header')
         }
     }
-    $symbols = @([regex]::Matches($text,'(?:func_[0-9a-fA-F]{6,8}|[A-Za-z_]\w*_0x[0-9a-fA-F]{6,8})') | ForEach-Object Value | Select-Object -Unique)
+    # Both alternatives require one of these exact literals. Avoid repeatedly
+    # searching every suffix of a long identifier when neither can match.
+    $symbols = @()
+    if ($text.Contains('func_') -or $text.Contains('_0x')) {
+        $symbols = @((Get-PublicTextMatches $text '(?:func_[0-9a-fA-F]{6,8}|[A-Za-z_]\w*_0x[0-9a-fA-F]{6,8})') | ForEach-Object Value | Select-Object -Unique)
+    }
     if ($symbols.Count -ge 64) {
         $sha = [Security.Cryptography.SHA256]::Create()
         try { $digest = [BitConverter]::ToString($sha.ComputeHash($Data)).Replace('-','').ToLowerInvariant() }
@@ -151,7 +186,9 @@ function Get-PublicFileFindings {
             $reasons.Add('dense lifted game function names')
         }
     }
-    if ($text -match '(?im)^\s*(?://|/\*|#|\*)?\s*(?:automatically generated|generated by (?:ps2recomp|ghidra))') {
+    # A comment may precede the marker across blank lines. Without a comment,
+    # start on the marker's own line instead of retrying every earlier newline.
+    if (Test-PublicTextMatch $text '(?im)^[^\S\n]*(?:(?://|/\*|#|\*)\s*)?(?:automatically generated|generated by (?:ps2recomp|ghidra))') {
         $reasons.Add('generated game code marker')
     }
     return @($reasons | Select-Object -Unique)

@@ -63,7 +63,10 @@ function Test-PythonCatalog([string]$Name) {
 try {
     $required = @(
         'publish_public_tree.ps1', 'public_patch_headers.ps1', 'public_tree_scan.ps1',
-        'test_public_patch_headers.ps1', 'test_public_tree_entry.ps1', 'check_public_publish.ps1'
+        'test_public_patch_headers.ps1', 'test_public_tree_entry.ps1',
+        'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+        'public_zip_scan.ps1', 'public_zip_deflate.ps1', 'scan_public_zip.ps1',
+        'check_public_publish.ps1'
     )
     foreach ($name in $required) {
         $path = Join-Path $PSScriptRoot $name
@@ -80,7 +83,8 @@ try {
     Write-Output "Source patches before tests: $($before.Records.Count); From mailbox headers: $($before.Mail); Co-Authored-By preambles: $($before.Coauthor)."
     $shell = Join-Path $PSHOME 'powershell.exe'
     if (-not (Test-Path -LiteralPath $shell -PathType Leaf)) { throw 'Windows PowerShell executable unavailable; no entry-point tests ran.' }
-    foreach ($suite in @('test_public_patch_headers.ps1', 'test_public_tree_entry.ps1')) {
+    foreach ($suite in @('test_public_patch_headers.ps1', 'test_public_tree_entry.ps1',
+            'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1')) {
         Write-Output "Running real test entry: tools/$suite"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $suite)
         if ($LASTEXITCODE -ne 0) {

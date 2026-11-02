@@ -1,6 +1,92 @@
 # T4 beta progress, 2026-11-02
 
-## DEFLATE work-budget follow-up, current session
+## Text scanner timeout follow-up, current session
+
+Release remains **NO-GO**. The selected open source-only item was the two
+retained valid text inputs that exceeded 180 seconds through the actual ZIP
+scanner. No launcher, runtime, switch or server behavior changed.
+
+Done:
+
+- Read AGENTS.md and this record first. Saved original bytes under
+  `logs/text-scan-session-6e27f2655ec14235a54ccdf3e60f7dd9/original/`
+  for review without Git.
+- New actual-entry tests reproduced the old long-word and newline hangs:
+  90-second and 60-second child deadlines failed. Neither timeout was counted
+  as a refusal or pass. Supplemental old-pattern diagnosis confirmed regex
+  timeouts; helper checks are not counted as entry acceptance.
+- The shared text scanner now skips impossible dense-symbol searches and
+  avoids repeatedly scanning LF runs in two line-start patterns. CR whitespace,
+  comment continuation and the existing content categories are preserved.
+- Full-content regex searches in that helper now have a two-second .NET
+  timeout. Failures stop with sanitized errors. Lazy match collections are
+  materialized inside the guard using explicit `get_Count()`; PowerShell's
+  ordinary property getter could hide the timeout exception. This is not a
+  deadline for a whole collection, scan, patch-header helper or process.
+- Three new suites passed 383 assertions through 47 real ZIP/tree scanner
+  processes: words 87/9, whitespace 176/18, categories 120/20. Clean controls
+  pass; category refusals complete; immediate and lazy regex timeouts refuse
+  without echoing input or claiming `SCANNED` or `PASS`. Child deadlines fail
+  the tests. Fixtures remain unchanged and unextracted.
+- Final scanner helper SHA-256 is
+  `5e279f9372d63bc0cc97e0c1a2f20aa4a3bdde7fd4e44ee70dde60291cb83f7c`.
+  The implementation agent ran both original timeout ZIPs against this
+  helper: completed scans and passes, unchanged hashes. The independent final
+  six-input audit confirmed them in 2.517/2.950 seconds. Three Sunday archives
+  completed with the same 138 mail findings each (123/124/124 files); the
+  portable subset passed (80 files, 2,025,621 bytes). All six input and five
+  implementation hashes stayed unchanged. See [audit](docs/PUBLIC_ZIP_AUDIT.md)
+  and `logs/public-text-audit-final-cfe1442fcf614b41a485116a3c3f4355/`.
+- Frozen final independent aggregates both exited 0: ZIP checked 20 required
+  PowerShell files and passed 1,529 assertions through 158 real scanner
+  processes; public-tree checked 12 files and passed 478 checks/assertions.
+  Both actual catalogs reported 23 unique present tools and three root files.
+  All 67 tool-script hashes and all 79 patch names/hashes stayed unchanged
+  across both aggregates. Evidence is under
+  `logs/text-scan-review-final-f10dffaae7054f6082970a3da156d3f6/`.
+- Separate reviewer `final_diff_review_text` reviewed the finished source,
+  tests and documents against saved original bytes and found no blocking
+  issue. Its independent real entries above are the final aggregate evidence.
+  Earlier aggregate/audit attempts overlapped the `get_Count()` correction
+  and are preliminary, never final proof. A redundant integration-agent
+  sequence was already running; it supplies no extra acceptance gate.
+- Updated scanner scope, status and latest supplied switch evidence. Root's
+  actual document checker covered all six changed documents: local links
+  resolved and PowerShell parsing completed; overall exit 1 remains on
+  retained image-name and corrupt-ZIP fixtures. Nothing was deleted or the
+  checker weakened to manufacture a pass. Evidence is
+  `logs/text-scan-session-6e27f2655ec14235a54ccdf3e60f7dd9/root-doc-check.txt`.
+
+Open / owner-only:
+
+- There is no whole-process deadline. Difficult valid text may refuse for
+  manual review. The scanner is a limited source-policy check, not complete
+  payload/privacy/licence acceptance. Whole-tree source checking remains red
+  on retained test fixtures.
+- Exact complete source/player/privacy/licence review, Python suites/payload
+  checks, actual launcher GUI/portable first-run, build/game, enabled GUI
+  switches and two physical PCs remain open. Builds, games and network helpers
+  are forbidden here. A scanner pass cannot close these acceptance gates.
+
+Latest owner-supplied verification, not reproduced here: draft `87e585cc4f`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 162-second build `943fc4631acf2c13`, finished `2026-11-02T02:58:01`.
+Selftest: 6600 wall / 5572 logical frames, 232 successful restores, zero bad,
+514 resim comparisons with zero mismatches, 116/116 wrong-input divergences.
+Switches-OFF same-PC pair: 6000 frames, 199 hashes per side, zero mismatches
+and NETDESYNC lines; host/join run-average FPS 52.1/52.2, stalls 0/95
+(0/3387 ms), displayed-frame p99 122.3/98.9 ms. It proves neither this edited
+tree, the enabled GUI profile nor two-PC play. See
+[switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md).
+
+Eight area agents have exclusive files: `text_scan_fix`, `giant_word_tests`,
+`newline_tests`, `text_category_tests`, `tests_catalogs_text`, `text_scan_docs`,
+`retained_text_audit`, `latest_owner_evidence`. Separate read-only reviewer
+`final_diff_review_text` owns finished-diff review. Root owns this record and
+`docs/status.md`. All read AGENTS.md. No Git command, build, game, network
+helper, server, push or release ran here.
+
+## Earlier DEFLATE work-budget follow-up
 
 Release remains **NO-GO**. The selected open source-only item is the scanner's
 unbounded DEFLATE parser work. This session adds fixed archive-wide work

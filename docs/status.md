@@ -1,17 +1,36 @@
 # Status
 
-_Last updated: 2026-11-02 (DEFLATE work-budget follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (text scanner timeout follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current DEFLATE work-budget follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+- **Current text scanner timeout follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records reproduced long-word/newline hangs and the fix. The same retained
+  ZIPs now complete with unchanged hashes. New tests passed 383 assertions
+  through 47 real ZIP/tree processes, including sanitized immediate and lazy
+  regex timeout refusals. The independent frozen ZIP aggregate passed 1,529
+  assertions through 158 processes; the public-tree aggregate passed 478
+  checks/assertions. All 79 patch names/hashes stayed unchanged. The separate
+  reviewer found no blocking issue. Two seconds is a regex search timeout,
+  not a deadline for a collection or process. GUI/portable first-run, Python
+  suites, exact
+  build/game, enabled GUI switches, complete source/player/licence review and
+  two-PC acceptance remain open. Latest supplied draft `87e585cc4f`, clean
+  162-second build `943fc4631acf2c13`, finished `2026-11-02T02:58:01`: OFF
+  same-PC pair, 199 hashes each, zero mismatches/NETDESYNC, host/join 52.1/52.2
+  FPS, stalls 0/95 (0/3387 ms), displayed-frame p99 122.3/98.9 ms. It does not
+  prove this edited tree, enabled GUI profile or two-PC play. Release remains
+  **NO-GO**. See [scanner scope](PUBLIC_ZIP_SCAN.md) and
+  [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier DEFLATE work-budget follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
   records archive-wide limits of 1,024 blocks, 2,097,152 symbols and 1,048,576
   Huffman lookup slots. The frozen aggregate passed 1,146 assertions through
   111 actual scanner processes; all 79 patch names/hashes stayed unchanged.
   Exact boundaries and cumulative member work ran. All four retained inputs
   kept completed results and unchanged hashes. The separate reviewer independently
   passed the same frozen aggregate and found no blocking code/test issue. No hard wall-time bound or speed improvement is claimed; two
-  180-second fixture timeouts remain open. Latest supplied draft `8676b7430f`,
+  180-second fixture timeouts remained open at that stage. Latest supplied draft `8676b7430f`,
   clean 214-second build `943fc4631acf2c13`, finished `2026-11-02T02:35:39`:
   OFF same-PC pair, 199 hashes each, zero mismatches/NETDESYNC, host/join
   52.1/52.1 FPS, stalls 0/70 (0/2298 ms), displayed-frame p99 106.3/97.9 ms.

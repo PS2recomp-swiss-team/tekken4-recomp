@@ -146,6 +146,47 @@ the completed frozen runs, hashes and output are under
 No retained archive was changed to obtain these results. The sanitized
 subset is still not complete corresponding source or a player candidate.
 
+## Text-work follow-up
+
+Reran the two original timeout fixtures and all four retained inputs through
+the actual scanner after the text-check changes. The frozen text helper
+SHA-256 was
+`5e279f9372d63bc0cc97e0c1a2f20aa4a3bdde7fd4e44ee70dde60291cb83f7c`.
+All five scanner entry/helper hashes and all six archive hashes stayed
+unchanged before, between and after subprocesses. Every reported archive
+identity matched the recorded input hash.
+
+| Input | Exit | Entries / files / bytes read | Elapsed seconds |
+|---|---:|---:|---:|
+| Original giant-word fixture | 0 | 1 / 1 / 1,048,575 | 2.517 |
+| Original pure-newline fixture | 0 | 1 / 1 / 2,097,151 | 2.950 |
+| Sunday `042256-264836` | 1 | 123 / 123 / 4,187,421 | 41.410 |
+| Sunday `205433-879960` | 1 | 124 / 124 / 4,207,076 | 41.226 |
+| Sunday `205628-895451` | 1 | 124 / 124 / 4,207,280 | 41.485 |
+| Portable sanitized subset | 0 | 80 / 80 / 2,025,621 | 18.984 |
+
+Both original timeout fixtures now completed with `SCANNED` counts and
+`PASS`, using their unchanged bytes. Their SHA-256 values remain
+`9adcb8e2df7445658ad78a7c4c766ab098b43e720c89ae83e773c6bd8d297bf1`
+and `6b19a98f6ac0d7fb98442a7d7398988697dd5151cb47aedfdacc8bc3976feaae`,
+respectively. Their earlier 180-second timeouts remain failed tests, not
+scanner refusals or passes.
+
+All three Sunday scans completed content reads and reported only the same
+46 email, 46 coauthor-mail and 46 author-mailbox categories. The subset
+passed. No subprocess timed out or wrote standard error. These observed
+wall times include PowerShell startup and concurrent tests; they are not
+an isolated benchmark or a whole-scan time guarantee. The two-second regex
+matching limits do not impose a hard process deadline.
+
+Final command output, six result records and before/after hashes are under
+`logs/public-text-audit-final-cfe1442fcf614b41a485116a3c3f4355/`.
+The earlier attempt under
+`logs/public-text-audit-f39b0291f6114362973013f31f4f0f97/` detected a helper
+change and failed; it is preliminary evidence only. No retained archive was
+changed, repaired or extracted. This closes the two observed timeout cases,
+not complete source/player acceptance or the owner-only runtime gates.
+
 ## Sanitized source subset experiment
 
 The real `publish_public_tree.ps1` entry also staged `LICENSE` and all
