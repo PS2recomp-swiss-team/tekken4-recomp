@@ -1,45 +1,53 @@
 # T4 beta progress, 2026-11-02
 
-## Current continuation: runtime proof is still pending
+## Current continuation: real verify still blocked before launch
 
-The supplied duplicate-name refusal did not start a verify. Sixteen independent
-area reviews found no new paired runtime logs in this tree and no concrete
-source defect warranting a second experiment. No new runtime edit was made.
-The existing default-off catchup change and VERIFY_ENV.txt remain unchanged.
+The latest supplied result is the same duplicate-name refusal. No verify,
+build or game started. A fresh inventory found no paired runtime/transport
+logs in this tree; runtime-marker matches were prior source-review records.
+Input arrival times, measured advantage and which peer waited remain unknown.
+No cause of the supplied rollback imbalance is proved.
 
-Source findings refine the pending hypothesis: nominal time-sync waits already
-shift deadlines by their requested duration; prediction waits shift by measured
-duration. Catchup therefore tests remaining processing, restore/resimulation,
-hitch and oversleep debt. Receive handling and resends continue on background
-threads, but resimulation can delay the next local input sample. No fixed
-host/join branch was found in these live pacing paths. None of this proves the
-cause of the supplied rollback imbalance. One-second diagnostics cannot recover
-per-input arrival order or every wait.
-
-Open / owner-only: stage the existing runtime change into the actual runner,
-use a fresh unused verify name, and run the same new build OFF and ON. Require
-an ID different from 943fc4631acf2c13 plus both ON peers' literal activation and
-nonzero NETREBASE_CATCHUP rebases; source identity alone is insufficient. Keep
-TimingDiag and all other experiments identical. Root VERIFY_ENV.txt stays:
+Done: sixteen read-only area agents checked the pending runtime experiment and
+its real-entry route. No new runtime edit or switch was added. Keep the existing
+default-off change in runtime/tekken4_rollback_overrides.cpp and root
+VERIFY_ENV.txt unchanged:
 TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
-Retain complete paired runtime/transport logs and effective per-peer settings.
-Compare sustained lead, confirmed progress, input-generation gaps, waits,
-rollback depth/cost/totals and pacing; lower rebase time alone is mechanical.
+
+The single pending hypothesis remains lost catchup headroom after processing,
+restore/resimulation, hitches or oversleep. Nominal time-sync waits already
+shift deadlines by requested duration; prediction waits shift by measured
+duration. Catchup retains about 33 ms of live debt at the >50 ms guard. It does
+not reduce raw resimulation cost or prove recovered time. Source review found
+no fixed host/join branch in live pacing. Reordered packets can replace a newer
+peer-lead estimate, but that is an unproved alternative, not a second experiment.
+Current diagnostics timestamp packet handling, not each input's first arrival.
+
+Open / owner-only: stage the existing runtime patch into the actual runner,
+choose a fresh unused verify name, then build and run the same new build OFF
+and ON. The outer verify wrapper is absent here. Build IDs hash staged source,
+not executable bytes; require an ID different from 943fc4631acf2c13 AND both
+ON peers' literal activation plus nonzero NETREBASE_CATCHUP rebases. Pass the
+file through common -Env; per-peer overrides must not replace it. Keep
+TimingDiag, input scripts, simulated network settings and other switches
+identical. Retain complete paired runtime/transport logs and effective params.
+Compare sustained lead, confirmed progress, sender gaps, wait durations,
+rollback depth/cost/totals and pacing. A smaller ratio or rebase time alone is
+not success. Role swaps also change simulated network streams and input scripts.
 
 Compilation, selftest, actual OFF/ON pair and runtime improvement remain UNRUN.
-AGENTS.md forbids the real build/game/network entry here. The selftest dispatch
-does not reach netplay pacing. No catalog test was repeated for a green result;
-no production change was added without its real-entry test. Only this progress
-record and its separate review record are new in this continuation.
+AGENTS.md forbids their real build/game/network entries here. Selftest does not
+reach this pacing path. No unrelated catalog pass was repeated as runtime
+proof. Further source-only audit cycles cannot replace the missing real run.
 
-Read-only area agents: pair_log_inventory, catchup_guard, timesync_sleep,
-advantage_frontier, arrival_measurement, vblank_entry, transport_poll_order,
-prediction_wait, role_symmetry, resim_cost, resend_frontier, verify_env_route,
-tests_catalogs_entry, build_id_staging, clock_deadline, ab_falsification.
-Separate reviewer: final_diff_review_pending; review record:
-logs/runtime-catchup-pending/final-review.txt. Root exclusively owns this update
-and its saved original; agents do not share edit ownership. No outside-tree
-read, Git command, build, game, forbidden helper, deletion, server or release.
+Area agents: pair_logs_now, rebase_branch_now, timesync_now, advantage_now,
+arrival_now, vblank_now, polling_now, prediction_now, roles_now,
+resimulation_now, resend_now, env_route_now, tests_catalogs_now2,
+build_identity_now, clock_now, falsification_now. All read-only. Root owns this
+progress update; final_diff_review_recheck owns only its review record under
+logs/runtime-catchup-recheck/. The original progress and hashes are saved there.
+No Git command, outside-tree read, deletion, patch edit, build, game, forbidden
+helper, server, push or release ran here.
 
 ## Catchup follow-up: latest verify stopped before testing
 
