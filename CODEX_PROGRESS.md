@@ -1,5 +1,116 @@
 # T4 beta progress, 2026-11-02
 
+## Current: test the steady-state time-sync deadband
+
+Latest supplied verify: draft 627c87cafe, clean merge, 198-second build,
+build ID 5f9d20dbdd2c0012, finished 2026-11-02T23:02:40. The old unchanged-ID
+concern is superseded. BOOT_RENDEZVOUS really ran: both ON peers observed
+f=605, target=608, local_max=609, rc=607->609, ready=1, calls=1; host/join
+waited 56.045/96.173 ms. Yet join/host rollback ratio stayed 2.99 -> 3.00,
+combined replay rose 4254 -> 4379 (+2.9%), and stall+sync time rose
+6666 -> 7771 ms (+16.6%). This weakens a startup-only explanation. No prior
+experiment becomes a default. SELFTEST still bypasses npBoundary.
+
+Done: 24 independent area agents reviewed source/evidence, including one
+running the actual catalog entry. Safe inventory found eight .log files,
+all scanner/catalog output; no chronological host/join runtime pair logs.
+No outside-tree location was opened. Unique input arrivals, initial lead
+and first-wait order remain unknown. The summaries cannot establish cause.
+Rebase differences again match extra join waits (OFF 6563 vs 6600 ms;
+ON 7753 vs 7737 ms), rather than proving a separate pacing debt defect.
+No fixed host/join steady-state policy, time-sync sign or counting error
+was found. Prior filter/rebase/early/headroom/publication/flush experiments
+already cover those mechanisms; they are not repeated here.
+
+One new hypothesis: a persistent subframe producer phase survives the
+one-frame time-sync deadband, sustaining unequal prediction exposure.
+At RTT 150 ms and delay 3, nominal one-way transit beyond input delay is
+about 1.5 frames. A residual phase below one frame is large relative to that
+window. This is a source-based hypothesis, NOT a measured explanation of
+the rollback ratio. The filtered lead estimate is quantized and delayed;
+smaller corrections can chase noise, add waits and worsen performance.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_SUBFRAME_SYNC=1. For eligible filtered advantage 0.25 <= adv < 1,
+give up adv * 16667 microseconds, truncated to integer microseconds (at least
+4166 us). At adv >= 1 the existing correction arithmetic is retained. The
+20-sample window, trimming, startup exclusion, ten-live-frame minimum gap,
+and RTT settling hold remain: fractional corrections use one whole frame
+for the hold. Host-only flags/counters stay outside snapshots. Existing
+once-per-live-frame sync dispatch prevents replay from repeating a correction.
+This differs from FAST_SYNC (refill length) and BOOT (one-time perturbation).
+
+Both arms append NETSUBFRAME to the same NETSUMMARY line retained by the
+pair report: subframe_sync, time_sync, eligible_evals, corrections,
+requested_ms, actual_ms, last_f and last_adv. Eligible evaluations overlap;
+they are NOT distinct phase episodes and are counted after filter/spacing
+guards. OFF records opportunities with zero fractional corrections/time.
+ON records actual actions. actual_ms includes waiting to max(now,liveT)
+plus the requested interval and deadline-shift overhead; it is not isolated
+sleep time. Last f/adv refer to the last eligible evaluation, not necessarily
+the final frame. ON logs literal activation and NETSUBFRAME_EVENT with
+steady start/end timestamps, slot, f, adv, give_us, hold_frames, window,
+samples and remote frontier before/after. The before value is the frontier
+snapshot passed into time sync. Events do not timestamp unique input arrivals.
+Fractional actions use NETSUBFRAME_EVENT; legacy whole-frame actions use NETTS.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_SUBFRAME_SYNC=1
+
+Open / owner-only real-entry test: stage/build these exact runtime bytes,
+refresh identity and run real paired netplay OFF/ON through the external
+verify wrapper, varying only SUBFRAME_SYNC. net_pair does not read this file;
+the wrapper must forward its content through -Env. Explicitly pass common
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1 in BOTH arms.
+Keep RBSTART=600, RB_MODE unset/net, TIMESYNC=1, the normal 20-sample window,
+and other experiments equal/off, including BOOT_RENDEZVOUS. Record simulator
+settings/seeds and effective parameters; same seeds do not imply identical
+loss/jitter draws when packet counts change. Preserve full rb_frames and
+transport logs, stdout/stderr, staged-source/executable hashes and build ID.
+
+Require OFF NETSUBFRAME subframe_sync=0, corrections=0, requested_ms=actual_ms=0;
+ON literal activation, subframe_sync=1, time_sync=1 and real fractional
+corrections with matching events and nonzero times. Each such event must
+have 0.25 <= adv < 1, give_us < 16667, hold_frames=1 and window=20.
+Some peers may never enter that band: do not require fabricated actions on
+both. No eligible evaluations/actions leaves the hypothesis untested; few
+evaluations in OFF weakens deadband as the main cause. Align same-PC steady
+timestamps to compare sampled advantage, frontiers and wait dominance before
+and after actions; transport session-relative timestamps need calibration.
+Require reduced absolute aggregate replay/depth and acceptable combined waits,
+FPS and frame tails, rather than a better ratio alone. If substantial actions
+occur but asymmetry quickly returns, the hypothesis weakens. Require zero hash
+mismatches/NETDESYNC and complete logs; repeat same-role pairs, then two PCs.
+
+Ran: tests_catalogs invoked tools/check_online_catalogs.ps1, exit 0: two
+23-tool catalogs, three root inputs and Host/Join dependencies present.
+Inventory only. No mock, source assertion or model is counted as runtime proof.
+Compilation, actual switch activation, scheduling/peer-loss behavior, replay
+safety and benefit remain UNRUN here: AGENTS.md forbids builds, games and
+tools/net_* execution. No changed runtime entry ran; this is a candidate for
+the owner's next real verify, not a tested fix or release acceptance.
+
+Original bytes of the three changed files are retained under
+logs/runtime-subframe-sync/originals. Root alone edits; all area agents are
+read-only. No Git command, outside-tree read, deletion, patch change, build,
+game, forbidden helper, server, push or release was used.
+
+Area agents: pair_logs, verify_metrics, timesync_sign, timesync_filter,
+prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+experiment_gate reviewed the implemented candidate and found no source blocker.
+Separate final reviewer: final_diff_review_subframe completed the three-file
+diff review against retained originals with no blocking source issue. It checked
+OFF/ON scope, filter/spacing/RTT hold, replay guards, format types, summary
+retention, exact environment bytes, latest arithmetic and retained history.
+Root also checked LF-only runtime bytes, exact environment bytes and preserved
+progress suffix. These are source/integrity checks, not runtime proof.
+
+# T4 beta progress, 2026-11-02
+
 ## Current: test startup producer phase after the real flush comparison
 
 Latest supplied verify: draft 7f51c79087, clean merge, 196-second build,
