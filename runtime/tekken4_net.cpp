@@ -223,6 +223,10 @@ namespace t4net
             Ring local, remote;
             uint32_t localMax = 0, remoteContig = 0, peerAck = 0;
             int8_t localLead = 0, peerLeadV = 0;
+            // TEKKEN4_NET_ORDERED_LEAD=1: ignore regressing pacing metadata, not inputs.
+            bool orderedLead = false;
+            uint32_t peerLeadAck = 0, peerLeadEnd = 0;
+            uint64_t leadStale = 0, leadStaleDiff = 0, leadRejected = 0;
             uint32_t localHashMax = 0, remoteHashMax = 0, checked = 0, compared = 0, mismatches = 0;
             std::deque<std::array<uint64_t, 3>> mismatchQueue;
             // round trip
@@ -796,7 +800,23 @@ namespace t4net
             }
             if (ih.ack > s.peerAck)
                 s.peerAck = ih.ack;
-            s.peerLeadV = ih.lead;
+            // Both fields are nondecreasing at the sender. Jitter can deliver an older
+            // packet after a newer one; its inputs/hashes still matter, its lead may not.
+            // Equal-frontier packets cannot be ordered without a wire sequence number.
+            const uint32_t leadEnd = ih.first + ih.count;
+            const bool staleLead = ih.ack < s.peerLeadAck || leadEnd < s.peerLeadEnd;
+            if (staleLead)
+            {
+                ++s.leadStale;
+                if (ih.lead != s.peerLeadV)
+                    ++s.leadStaleDiff;
+            }
+            if (s.orderedLead && staleLead)
+                ++s.leadRejected;
+            else
+                s.peerLeadV = ih.lead;
+            s.peerLeadAck = std::max(s.peerLeadAck, ih.ack);
+            s.peerLeadEnd = std::max(s.peerLeadEnd, leadEnd);
             if (ih.delay != kNoDelay && s.cfg.role == Role::Join && s.decided < 0)
                 s.decided = ih.delay;
             const uint8_t *at = p + sizeof(Hdr) + sizeof(InputHdr);
@@ -932,7 +952,8 @@ namespace t4net
                     {
                         s.diagLastUs = us;
                         note("NETDIAG local=%u remote=%u ack=%u lead=%d peer_lead=%d lead_end=%u lead_end_max=%u lead_back=%llu lead_end_age_ms=%.1f input_age_ms=%.1f progress_age_ms=%.1f "
-                             "local_age_ms=%.1f local_gap_ms=%.1f input_gap_ms=%.1f rx_lock_ms=%.1f tick_gap_ms=%.1f sim_late_ms=%.1f sim_late_n=%llu sim_depth=%llu",
+                             "local_age_ms=%.1f local_gap_ms=%.1f input_gap_ms=%.1f rx_lock_ms=%.1f tick_gap_ms=%.1f sim_late_ms=%.1f sim_late_n=%llu sim_depth=%llu "
+                             "lead_ordered=%d lead_ack_max=%u lead_end_high=%u lead_stale=%llu lead_stale_diff=%llu lead_rejected=%llu",
                              s.localMax, s.remoteContig, s.peerAck, s.localLead, s.peerLeadV,
                              s.diagLeadEnd, s.diagLeadEndMax, static_cast<unsigned long long>(s.diagLeadBack),
                              s.diagLeadEndUs ? (us - s.diagLeadEndUs) / 1000.0 : -1.0,
@@ -942,7 +963,10 @@ namespace t4net
                              s.diagLocalGapUs / 1000.0, s.diagInputGapUs / 1000.0, s.diagRxWaitUs / 1000.0,
                              s.diagTickGapUs / 1000.0, s.diagSimLateUs.exchange(0, std::memory_order_relaxed) / 1000.0,
                              static_cast<unsigned long long>(s.diagSimLateCount.exchange(0, std::memory_order_relaxed)),
-                             static_cast<unsigned long long>(s.diagSimDepth.exchange(0, std::memory_order_relaxed)));
+                             static_cast<unsigned long long>(s.diagSimDepth.exchange(0, std::memory_order_relaxed)),
+                             s.orderedLead, s.peerLeadAck, s.peerLeadEnd,
+                             static_cast<unsigned long long>(s.leadStale), static_cast<unsigned long long>(s.leadStaleDiff),
+                             static_cast<unsigned long long>(s.leadRejected));
                         s.diagTickGapUs = s.diagRxWaitUs = s.diagLocalGapUs = s.diagInputGapUs = 0;
                         s.diagLeadBack = 0;
                     }
@@ -1046,6 +1070,8 @@ namespace t4net
         s.diag = diag && std::strcmp(diag, "1") == 0;
         const char *simSafeWait = std::getenv("TEKKEN4_NET_SIM_SAFE_WAIT");
         s.simSafeWait = simSafeWait && std::strcmp(simSafeWait, "1") == 0;
+        const char *orderedLead = std::getenv("TEKKEN4_NET_ORDERED_LEAD");
+        s.orderedLead = orderedLead && std::strcmp(orderedLead, "1") == 0;
         s.lastInputBytes = 0;
         s.startMs = nowMs();
         s.log = std::fopen(config.logPath.c_str(), "w");
@@ -1173,6 +1199,8 @@ namespace t4net
                  config.simSeed, config.role == Role::Host ? 1 : 2, s.simSafeWait);
         if (s.simSafeWait)
             note("TEKKEN4_NET_SIM_SAFE_WAIT=1: simulator wait uses a copied deadline while its queue is unlocked");
+        if (s.orderedLead)
+            note("TEKKEN4_NET_ORDERED_LEAD=1: ignore peer lead when INPUT ack or end regresses; inputs and hashes unchanged");
         std::thread(rxThread).detach();
         std::thread(tickThread).detach();
         if (s.sim)

@@ -1,5 +1,72 @@
 # T4 beta progress, 2026-11-02
 
+## Current: ordered peer-lead experiment after the real catchup comparison
+
+Latest owner-supplied verify: draft 657b040128, build a597efc21b859a12,
+finished 2026-11-02T16:03:33. The printed build ID changed. Catchup OFF/ON
+rollbacks were host 239/234, join 963/964; join time-sync corrections stayed
+94. ON increased join resim frames from 3963 to 4141 and stall time from
+4489 to 7531 ms. Both arms reported zero hash mismatches and NETDESYNC lines.
+These supplied real runs supersede the old unrun-catchup status below and
+weaken the catchup hypothesis. Full logs are absent, so branch activation
+and equal diagnostic settings cannot be independently checked here.
+
+Done: 25 independent read-only area agents checked runtime and evidence,
+including tests/catalogs. Inventory found no raw paired logs in this tree;
+the eight .log files are scanner output. Input first-arrival times, sustained
+advantage and exact wait ordering cannot be recovered from the summaries.
+No cause of the one-sided rollback burden is proved.
+
+New hypothesis: reordered INPUT packets replace newer peer-lead feedback,
+distorting which peer yields time. Input ACK/progress is monotonic, but the
+old receive path assigned peerLeadV from every packet. Root added the
+default-off TEKKEN4_NET_ORDERED_LEAD switch in runtime/tekken4_net.cpp. It
+ignores only lead metadata when the packet ACK or first+count falls below
+the observed high-water marks. Input, ACK, hash and delay processing continues.
+No wire format or controller gains changed. Equal-frontier reorder remains
+indistinguishable without a packet sequence; this is a bounded experiment,
+not a proved fix. NETDIAG now includes cumulative lead_stale, lead_stale_diff,
+lead_rejected and the metadata high-water marks in both arms.
+
+VERIFY_ENV.txt now contains exactly one line:
+TEKKEN4_NET_ORDERED_LEAD=1;TEKKEN4_NET_DIAG=1
+
+Open / owner-only: stage this working-tree runtime, build once and regenerate
+identity, then run the real selftest and same-build OFF/ON pair. The actual
+entry is tools/net_pair.ps1; do not substitute catalogs or a model test.
+Pass the file line through common -Env. Keep TimingDiag/DIAG=1 in BOTH arms,
+the previous catchup switch OFF in BOTH, and every other setting equal.
+Peer overrides must not replace the common experiment. Keep full paired
+runtime/transport logs, stdout/stderr and effective params. Require both ON
+peers' literal TEKKEN4_NET_ORDERED_LEAD=1 activation, lead_ordered=1, and
+nonzero lead_rejected plus lead_stale_diff to demonstrate altered feedback.
+Zero rejections leaves the mechanism unexercised; rejections without a
+different value do not demonstrate changed pacing feedback. Compare lead,
+frontier/input gaps, NETTS corrections and actual waits, absolute rollback
+and resim work, stalls and displayed pacing. Similar bad results despite
+changed feedback weaken this hypothesis. A smaller ratio alone is no win.
+Repeated same-PC runs and then two physical PCs remain necessary.
+
+Compilation, selftest and the new real OFF/ON entry are UNRUN here. AGENTS.md
+forbids their build/game/network entries. No substitute test was counted as
+runtime validation; this candidate still needs its first real-entry test.
+Original bytes for this change are in logs/runtime-ordered-lead/originals.
+Only root edits runtime, VERIFY_ENV and this record; all area agents are
+read-only. Separate final diff review completed with no blocking source
+issue found. It checked the original/current changes, switch default and
+parsing, metadata-only filtering, diagnostic format/buffer bounds, exact
+VERIFY_ENV line and unchanged historical progress. This was source review,
+not compilation or runtime validation.
+
+Area agents: pair_evidence, timesync_sign, peer_lead_order, local_advantage,
+input_arrival, wait_order, vblank_pacing, transport_poll, prediction_budget,
+role_startup, resim_cost, resend_order, switch_route, tests_catalogs,
+build_identity, clock_domains, simulation_bias, input_sampling, telemetry,
+state_ring, mismatch_detection, coalescing, diag_contention, frontier_refresh,
+experiment_design. Separate reviewer: final_diff_review_ordered_lead.
+No Git command, outside-tree read, deletion, patch edit, build, game,
+forbidden helper, server, push or release ran this continuation.
+
 ## Current continuation: real-entry evidence is still missing
 
 Done this continuation: 24 read-only area agents reviewed independent runtime
