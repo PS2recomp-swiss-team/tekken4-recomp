@@ -65,6 +65,7 @@ try {
         'publish_public_tree.ps1', 'public_tree_worker.ps1', 'public_patch_headers.ps1', 'public_tree_scan.ps1',
         'test_public_patch_headers.ps1', 'test_public_tree_entry.ps1',
         'test_public_tree_deadline.ps1', 'test_public_tree_deadline_compat.ps1',
+        'test_public_tree_write_failure.ps1', 'test_public_tree_worker_failure.ps1',
         'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
         'public_zip_scan.ps1', 'public_zip_deflate.ps1', 'scan_public_zip.ps1',
         'check_public_publish.ps1'
@@ -86,6 +87,7 @@ try {
     if (-not (Test-Path -LiteralPath $shell -PathType Leaf)) { throw 'Windows PowerShell executable unavailable; no entry-point tests ran.' }
     foreach ($suite in @('test_public_patch_headers.ps1', 'test_public_tree_entry.ps1',
             'test_public_tree_deadline.ps1', 'test_public_tree_deadline_compat.ps1',
+            'test_public_tree_write_failure.ps1', 'test_public_tree_worker_failure.ps1',
             'test_public_text_words.ps1', 'test_public_text_lines.ps1', 'test_public_text_categories.ps1')) {
         Write-Output "Running real test entry: tools/$suite"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $suite)

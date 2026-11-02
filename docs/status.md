@@ -1,10 +1,31 @@
 # Status
 
-_Last updated: 2026-11-02 (public-tree process deadline follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (export failure coverage follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current public-tree process deadline follow-up:**
+- **Current export failure coverage follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records new actual-entry tests for
+  partial staging after a filesystem write error and worker/helper load failure.
+  No production behavior changed. Failed export output stays unapproved even
+  if its content later passes a scan; fresh complete export is required.
+  Worker-load tests intentionally hold source read locks, so run the aggregate
+  alone. The frozen aggregate passed nine suites with 5,860 checks/assertions:
+  85 / eight actual entry processes for partial writes and 84 / seven for
+  worker-load failures. All 114 tool hashes and 79 patch names/hashes stayed
+  unchanged. Separate review independently passed both new suites and catalogs;
+  no code blocker was found. The document checker covered all four changed
+  documents and 103 local links; overall exit 1 remains on retained image-name
+  fixtures and a corrupt ZIP, so no completed whole-tree check is claimed. The actual
+  starter still refuses missing private Python; readiness exits 2 / BLOCKED,
+  GUI never started. Latest supplied draft `31924ed524`, clean 231-second build
+  `943fc4631acf2c13`, finished `2026-11-02T04:27:40`: OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.2/52.2 FPS, stalls 0/83
+  (0/2778 ms), displayed-frame p99 111.0/99.8 ms. This does not prove this
+  edited tree, the enabled GUI profile or physical two-PC play. See
+  [export scope](PUBLIC_SOURCE_EXPORT.md) and [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier public-tree process deadline follow-up:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records supervised export and scan,
   with a default 120-second worker deadline and `-TimeoutSeconds` from 1-600.
   Timeout refuses and retains unapproved partial staging; it is not a completed

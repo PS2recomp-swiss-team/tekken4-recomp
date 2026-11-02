@@ -17,11 +17,15 @@ default worker deadline is 120 seconds; `-TimeoutSeconds` accepts integers from
 budget. Wrapper preflight and operating-system termination are outside it, so
 this is not a hard wall-time bound for the entire command.
 
-On timeout the entry exits 1, reports refusal and discards worker output. Any
-partly written staging remains for inspection and is not approved for use.
+On timeout the entry exits 1, reports refusal and discards worker output. On
+any refusal, partly written staging remains for inspection and is not approved.
 Do not publish it or reuse that output directory; choose a fresh output for
 the next export. A timeout is not a completed content scan. If worker
 termination cannot be confirmed, the refusal says so.
+
+A later successful `-ScanOnly` does not prove that a failed export is complete.
+It checks the files present, not whether every selected source file arrived.
+Even a retained tree containing only `LICENSE` can pass that content check.
 
 The export removes mail addresses and transport headers from patch preambles
 and removes `Co-Authored-By` lines there. Every byte starting with the first
@@ -77,6 +81,23 @@ The [tree deadline tests](../tools/test_public_tree_deadline.ps1) and
 [compatibility tests](../tools/test_public_tree_deadline_compat.ps1) use the
 actual export/scan entry. An entry's own deadline refusal is distinct from a
 test watchdog killing an entry that failed to return.
+
+The [write-failure tests](../tools/test_public_tree_write_failure.ps1) deny
+directory creation in empty fixture outputs. The real export writes `LICENSE`,
+then refuses when a nested directory cannot be created. The partial output
+stays unchanged and retries refuse it; the same selected files export to fresh
+outputs. This proves a write error after staging begins, not a timeout during
+writing.
+
+The [worker-load tests](../tools/test_public_tree_worker_failure.ps1) briefly
+hold read locks on the actual worker and shared text helper without changing
+their bytes. The real entry refuses scan and export without creating staging;
+the unchanged fixture passes after the locks are released. Run the checker
+and these failure suites alone: concurrent tree or ZIP scans can refuse while
+the locks are held. OS process-start failure, termination-error and test-watchdog
+failure branches remain unforced. These tests do not prove absence of orphan
+processes.
+
 Image and binary signature checks use memory fixtures; they do not add game
 data or screenshots.
 See [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for the commands actually run,

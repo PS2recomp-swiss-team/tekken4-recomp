@@ -1,6 +1,97 @@
 # T4 beta progress, 2026-11-02
 
-## Public-tree process deadline follow-up, current session
+## Export failure coverage follow-up, current session
+
+Release remains **NO-GO**. The actual launcher is still the main release gate:
+private Python is missing. The actionable source-only item selected here is
+failure coverage after export staging begins and during worker/helper loading.
+No production launcher, scanner, runtime, switch or server behavior changed.
+Original bytes and hashes are saved without Git under
+`logs/release-failure-session-20261102/original/` and `baseline.json`.
+
+Done:
+
+- Added [write-failure tests](tools/test_public_tree_write_failure.ps1) through
+  the actual export/scan entry. Fixture-only directory permissions allow the
+  root LICENSE write but deny creation of the next selected subdirectory.
+  Original access rules are restored in finally; no account SID or ACL is saved.
+  Retained partial output and source bytes are checked; export retries must
+  refuse unchanged staging and fresh complete controls must pass. A content
+  scan of a partial tree does not prove the selected export completed.
+- Added [worker-load tests](tools/test_public_tree_worker_failure.ps1).
+  An initial run passed 84 assertions through seven actual entry subprocesses.
+  Exclusive read locks on the actual worker and shared helper caused four
+  sanitized scan/export refusals without staging. The unchanged input scanned
+  before and after and exported after the locks were released. All five code
+  hashes and input inventory/bytes stayed unchanged. Evidence:
+  `logs/public-tree-worker-failure-bd521583a43f49c6863c78c2fec0b7cc/`.
+  These tests run serially; do not run other tree/ZIP scans while they hold locks.
+- The [aggregate](tools/check_public_publish.ps1) now parses and executes both
+  suites in addition to every existing suite. The frozen actual aggregate and
+  hash harness exited 0: 17 PowerShell files parsed, nine suites passed 5,860
+  checks/assertions. The revised write suite passed 85 assertions through eight
+  actual export/scan processes; both partial trees passed content scans while
+  export retries correctly refused their incomplete output. Worker-load suite:
+  84 assertions / seven processes. Both 23-tool catalogs passed. All 114 direct
+  PowerShell/Python tool names/hashes and all 79 patch names/hashes stayed
+  unchanged. Evidence: `logs/release-failure-session-20261102/catalog-agent/`.
+  The earlier 69 / six write-suite result is preliminary for this revision.
+- Independent retained-input export and scan both exited 0 with empty stderr
+  in 37.687 and 6.619 seconds: 80 files, 2,025,621 bytes, 79 byte-identical patch
+  diff ranges; all 84 code/input snapshots stayed unchanged. The first harness
+  retained a preliminary run with parent PowerShell progress on stderr; the
+  corrected harness silenced progress and reran both actual entries. Evidence:
+  `logs/retained-export-failure-followup-f5b9f9973ce1499b8f085f81b457013b/`.
+  This subset is not complete corresponding source or a player candidate.
+- Actual launcher refusal test exited 0 solely because real Tekken4.cmd exited
+  1 for missing private Python. Actual readiness exited 2 / BLOCKED after its
+  catalog and starter entries. Both stderr streams were empty; six source
+  hashes stayed unchanged. GUI never started. Evidence:
+  `logs/release-failure-session-20261102/launcher-agent-0ca0c13f8e2d4722955dc2ab4fa5b232/`.
+- Updated [export scope](docs/PUBLIC_SOURCE_EXPORT.md) and latest supplied
+  [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md). The actual document checker
+  covered all four changed documents: 103 local links resolved and 197
+  PowerShell files parsed. Overall exit 1 remains on retained image-name
+  fixtures and a corrupt ZIP; the whole-tree check did not complete. Nothing
+  was removed or weakened. Evidence:
+  `logs/release-failure-session-20261102/root-doc-check-final.txt`.
+- Separate reviewer `final_diff_review_failure` found no code blocker and
+  independently passed both frozen new suites (85 / eight and 84 / seven)
+  and actual catalogs (23 tools each, three root files). All 119 recursive
+  PowerShell/Python tool hashes and all 79 patch names/hashes stayed unchanged.
+  The production supervisor and worker match the saved baseline byte-for-byte.
+  All source locks are released. Evidence: `logs/release-failure-review-20261102/`.
+
+Latest owner-supplied verification, not reproduced here: draft `31924ed524`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 231-second build `943fc4631acf2c13`, finished `2026-11-02T04:27:40`.
+Selftest OFF: 6600 wall / 5572 logical, 232 successful restores, zero bad,
+514 comparisons with zero mismatches, 116/116 wrong-input divergences.
+OFF same-PC pair: 6000 frames, 199 hashes each, zero mismatches/NETDESYNC;
+host/join FPS 52.2/52.2, stalls 0/83 (0/2778 ms), displayed-frame p99
+111.0/99.8 ms. This does not prove this edited tree, the enabled GUI profile
+or two physical PCs. No personal worktree paths were copied here.
+
+Open / owner-only:
+
+- Timed interruption during writes, OS process-start failure, termination-error
+  and outer test-watchdog failure branches remain unforced. Independent process
+  inventory remains unavailable; no no-orphan claim is made. Whole-tree source
+  checking still has retained intentional fixtures; nothing is deleted or
+  weakened to manufacture a pass.
+- Actual GUI and portable first-run, Python suites/payload checks, complete
+  source/player/privacy/licence review, exact build/game, enabled GUI switches
+  and two physical PCs remain unproved here. Builds, games and network helpers
+  are forbidden in this copy. Scanner tests cannot close those release gates.
+
+Eight area agents: `staging_failure_tests`, `worker_load_tests`,
+`tests_catalogs`, `export_failure_docs`, `launcher_gate`, `owner_evidence`,
+`retained_export_audit`, `failure_branch_audit`. Separate read-only reviewer:
+`final_diff_review_failure`. All read AGENTS.md and this record;
+file ownership is exclusive. Root owns this record and docs/status.md.
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier public-tree process deadline follow-up
 
 Release remains **NO-GO**. The actual launcher is the main release gate;
 its refusal-only recheck still finds private Python missing. The selected
