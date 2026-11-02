@@ -1,5 +1,98 @@
 # T4 beta progress, 2026-11-02
 
+## Current: shorter time-sync window after the real LIVE_LEAD comparison
+
+Latest owner-supplied verify: draft 7c12b4b5ba, build 09ae6812c84e6c3e,
+finished 2026-11-02T16:42:35. The changed printed ID supersedes the old
+unchanged-ID concern. LIVE_LEAD OFF/ON rollbacks were host 217/212,
+join 987/979; resim frames host 426/466, join 4062/4478. Join had 132/150
+stalls and 94/95 time-sync corrections; host had none. Both arms reported
+zero hash mismatches and NETDESYNC lines. This weakens stale send-time lead
+as the explanation; full activation/change diagnostics were not supplied.
+
+Done: 25 independent read-only area agents reviewed runtime, transport,
+evidence and tests/catalogs. No paired runtime logs are in this tree. Its
+eight .log files are scanner output. Exact per-frame first-arrival times,
+sustained advantage and chronological wait order cannot be reconstructed.
+The histograms reproduce actual rollback/resim work, not a counting artifact.
+No root cause is proved. No outside-tree log path was opened.
+
+Single new hypothesis: the ahead peer reacquires time-sync feedback too
+slowly after yielding, allowing its lead and prediction debt to rebuild.
+npTimeSync clears the lead window after each correction, suppresses samples
+for correction frames plus one RTT plus two frames, then requires twenty
+fresh live samples. At RTT 150 ms this permits roughly 31-34 live frames
+between corrections, while prediction reaches depth nine. The supplied join
+waits and larger host discarded pacing debt fit that mechanism, but do not
+prove it. Dedicated transport threads keep receiving during main-thread waits.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_FAST_SYNC=1. It uses eight lead samples rather than twenty,
+trimming one from each tail instead of four. This saves twelve refill frames.
+The RTT settling hold, startup exclusion, correction threshold/gain/cap and
+minimum spacing remain the same. Input, prediction budget, wire format and
+transport are unchanged. Shorter filtering can react to noise and add waits;
+this is an unvalidated experiment, not a demonstrated fix.
+
+Runtime activation logs the literal switch. One-second NETDIAG now appends
+sync_fast, sync_window, sync_eval, sync_eval_f, sync_early_eval and
+sync_early_corrections. Counters are cumulative: early means evaluation or
+correction with fewer than twenty samples, including first acquisition after
+startup. sync_eval_f dates the last computed adv; adv is stale during refill.
+NETTS appends window, samples and logical-frame gap from the previous
+correction (zero for the first). Existing inspected collectors retain these
+prefixes; the outer verify wrapper is absent and could not be checked.
+
+VERIFY_ENV.txt contains exactly one line:
+TEKKEN4_NET_FAST_SYNC=1;TEKKEN4_NET_DIAG=1
+
+Open / owner-only: stage this working-tree runtime, build once and regenerate
+identity, then run the actual selftest and same-build OFF/ON pair through
+tools/net_pair.ps1. No script change is needed. Pass the line through common
+-Env; peer overrides must not replace it. Keep DIAG=1 or TimingDiag in BOTH
+arms. Only FAST_SYNC differs; keep LIVE_LEAD, ORDERED_LEAD, REBASE_CATCHUP,
+REFRESH_RC and other experiments equal and off. Keep full host/join runtime
+and transport logs, stdout/stderr and effective params. A printed source ID
+alone does not prove executable activation.
+
+Require literal TEKKEN4_NET_FAST_SYNC=1 activation and sync_window=8 with
+sync_early_eval>0 on BOTH ON peers after startup. This may plateau after
+first acquisition on a peer that never yields; require renewed increments
+on the repeatedly yielding peer. OFF must show sync_window=20 and zero
+early counters. Require sync_early_corrections>0 on
+the yielding ON peer to show that reduced refill changed correction timing;
+zero leaves that action unexercised. Compare NETTS gaps and samples, dated
+advantage, contiguous progress/input/local gaps, actual waits, absolute
+rollback/resim work, stalls, run FPS and displayed-frame tails. Input packet
+ages include repeats, not per-frame first arrivals. More corrections alone
+or a smaller rollback ratio proves no benefit. Similar poor behavior despite
+exercised earlier correction weakens this hypothesis. Repeat same-PC pairs,
+then two physical PCs. Packet draws depend on send timing, so OFF/ON need
+repeats; role swaps also change simulator and input streams. Changed noise
+filtering is a confound: earlier correction alone does not prove latency as
+the unique cause.
+
+Compilation, selftest and real OFF/ON runtime validation remain UNRUN here:
+AGENTS.md forbids builds, games and tools/net_* execution. Selftest uses a
+different boundary and cannot test npTimeSync. No model or source test was
+substituted. The tests/catalogs agent ran check_online_catalogs.ps1: exit 0,
+both 23-tool catalogs and three root inputs; that proves no runtime behavior.
+Original bytes are in logs/runtime-fast-sync/originals. Root alone edits the
+runtime, VERIFY_ENV and this record. Separate final diff review found no
+blocking source issue in OFF behavior, array bounds, switch parsing,
+activation, formats/counters, exact environment line or preserved history.
+This source review does not prove compilation, activation or runtime benefit.
+
+Area agents: pair_evidence, timesync_control, input_arrivals, wait_order,
+vblank_pacing, prediction_budget, startup_roles, resim_cost, transport_poll,
+resend_order, peer_feedback, switch_route, tests_catalogs, build_identity,
+clock_domains, simulation_bias, input_sampling, telemetry, state_ring,
+mismatch_detection, coalescing, diag_contention, frontier_refresh,
+controller_recovery, experiment_falsification.
+Separate reviewer: final_diff_review_fast_sync.
+No Git command, outside-tree read, deletion, patch edit, build, game,
+forbidden helper, server, push or release ran this continuation.
+
 ## Current: send-time lead experiment after ordered-lead comparison
 
 Latest owner-supplied verify: draft d17f6d8031, build e50c0af46744c322,

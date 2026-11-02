@@ -87,6 +87,7 @@
 // TEKKEN4_NET_HASH_PROFILE=1  host-only hash queue/collection age and snapshot reader-wait diagnostics (default off).
 // TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
 // TEKKEN4_NET_DIAG=1      one-second host timing/lead/deadline samples (default off).
+// TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
 // TEKKEN4_STATE_PROBE=1    read-only live-boundary discovery log (requires a rollback mode; docs/DIRECTFIGHT_T4.md).
@@ -1145,6 +1146,7 @@ namespace tekken4_rollback
         int lockDelaySetting = -1, lockDelay = 0;
         uint64_t maxPred = 8, rbStart = 600, endFrame = ~0ull, tsFrom = 0;
         bool timeSync = true, localPad = true, dump = false, ended = false;
+        bool fastSync = false;
         bool autoVs = false, autoVsReleased = false;
         uint64_t autoVsEnd = 1200;
         PadScript autoVsScript;
@@ -1185,8 +1187,10 @@ namespace tekken4_rollback
         std::chrono::steady_clock::time_point liveVblank{}, rbT0{};
         // time sync (T5DR rb_net.cpp ts_correct: trimmed mean of the two lead estimates)
         static constexpr int kLeadWin = 20;
+        int leadWindow = kLeadWin;
         int leadMine[kLeadWin]{}, leadTheirs[kLeadWin]{};
         int leadN = 0;
+        uint64_t syncEvals = 0, syncEarlyEvals = 0, syncEvalFrame = 0, syncEarlyCorrections = 0;
         uint64_t lastCorrection = 0, tsHold = 0;
         // desync dump: RDRAM + scratchpad of the last hashed frames
         struct Kept
@@ -1584,21 +1588,25 @@ namespace tekken4_rollback
             return;
         if (f >= g_np.tsHold)
         {
-            g_np.leadMine[g_np.leadN % NetplayState::kLeadWin] = mine;
-            g_np.leadTheirs[g_np.leadN % NetplayState::kLeadWin] = t4net::peerLead();
+            g_np.leadMine[g_np.leadN % g_np.leadWindow] = mine;
+            g_np.leadTheirs[g_np.leadN % g_np.leadWindow] = t4net::peerLead();
             ++g_np.leadN;
         }
-        if (!g_np.timeSync || g_np.leadN < NetplayState::kLeadWin || t4net::peerLost())
+        if (!g_np.timeSync || g_np.leadN < g_np.leadWindow || t4net::peerLost())
             return;
+        ++g_np.syncEvals;
+        g_np.syncEvalFrame = f;
+        if (g_np.leadN < NetplayState::kLeadWin)
+            ++g_np.syncEarlyEvals;
         int d[NetplayState::kLeadWin];
-        for (int i = 0; i < NetplayState::kLeadWin; ++i)
+        for (int i = 0; i < g_np.leadWindow; ++i)
             d[i] = g_np.leadMine[i] - g_np.leadTheirs[i];
-        std::sort(d, d + NetplayState::kLeadWin);
-        const int cut = NetplayState::kLeadWin / 5;
+        std::sort(d, d + g_np.leadWindow);
+        const int cut = g_np.leadWindow / 5;
         double sum = 0;
-        for (int i = cut; i < NetplayState::kLeadWin - cut; ++i)
+        for (int i = cut; i < g_np.leadWindow - cut; ++i)
             sum += d[i];
-        const double adv = sum / (2.0 * (NetplayState::kLeadWin - 2 * cut)); // frames this side is ahead
+        const double adv = sum / (2.0 * (g_np.leadWindow - 2 * cut)); // frames this side is ahead
         if (g_np.diag)
             g_np.diagAdv = adv;
         if (adv < 1.0 || f - g_np.lastCorrection < 10u)
@@ -1619,11 +1627,14 @@ namespace tekken4_rollback
         }
         const int rtt = t4net::rttMs();
         g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u;
+        std::fprintf(g_log, "NETTS f=%" PRIu64 " ahead %.2f frames: gave up %d frame(s) window=%d samples=%d gap=%" PRIu64 "\n",
+                     f, adv, frames, g_np.leadWindow, g_np.leadN, g_np.corrections ? f - g_np.lastCorrection : 0u);
+        if (g_np.leadN < NetplayState::kLeadWin)
+            ++g_np.syncEarlyCorrections;
         g_np.leadN = 0;
         g_np.lastCorrection = f;
         ++g_np.corrections;
         g_np.correctionMs += ms;
-        std::fprintf(g_log, "NETTS f=%" PRIu64 " ahead %.2f frames: gave up %d frame(s)\n", f, adv, frames);
     }
 
     // Normally discard all debt beyond ~3 frames. The opt-in experiment keeps two vblank periods of live debt
@@ -1668,12 +1679,16 @@ namespace tekken4_rollback
                             " gap_max_ms=%.3f debt_max_ms=%.3f rebase=%" PRIu64 " rebase_ms=%.3f"
                             " sync=%" PRIu64 " sync_req_ms=%.3f sync_actual_ms=%.3f sync_over_max_ms=%.3f"
                             " stalls=%" PRIu64 " stall_ms=%.3f wait_max_ms=%.3f wait_rc=%" PRIu64 "->%" PRIu64
-                            " wait_need=%" PRIu64 " rb=%" PRIu64 " rb_max_ms=%.3f\n",
+                            " wait_need=%" PRIu64 " rb=%" PRIu64 " rb_max_ms=%.3f"
+                            " sync_fast=%d sync_window=%d sync_eval=%" PRIu64 " sync_eval_f=%" PRIu64
+                            " sync_early_eval=%" PRIu64 " sync_early_corrections=%" PRIu64 "\n",
                      steadyMs, g_frame, g_np.slot, rc, mine, t4net::peerLead(), g_np.diagAdv, g_np.leadN, g_np.tsHold,
                      g_np.diagGapMaxMs, g_np.diagDebtMaxMs, g_np.rebases, g_np.rebaseMs,
                      g_np.corrections, g_np.correctionMs, g_np.diagSyncActualMs, g_np.diagSyncOverMaxMs,
                      g_np.stalls, g_np.stallMs, g_np.diagWaitMaxMs, g_np.diagWaitBefore, g_np.diagWaitAfter,
-                     g_np.diagWaitNeed, g_np.rollbacks, g_np.diagRollbackMaxMs);
+                     g_np.diagWaitNeed, g_np.rollbacks, g_np.diagRollbackMaxMs,
+                     g_np.fastSync ? 1 : 0, g_np.leadWindow, g_np.syncEvals, g_np.syncEvalFrame,
+                     g_np.syncEarlyEvals, g_np.syncEarlyCorrections);
         g_np.diagGapMaxMs = g_np.diagDebtMaxMs = g_np.diagSyncOverMaxMs = g_np.diagWaitMaxMs = g_np.diagRollbackMaxMs = 0;
     }
 
@@ -2274,6 +2289,9 @@ namespace tekken4_rollback
             g_np.endFrame = parseNumber(v);
         if (const char *v = std::getenv("TEKKEN4_NET_TIMESYNC"))
             g_np.timeSync = parseNumber(v) != 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_FAST_SYNC"))
+            g_np.fastSync = std::strcmp(v, "1") == 0;
+        g_np.leadWindow = g_np.fastSync ? 8 : NetplayState::kLeadWin;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCKDELAY"); v && *v && std::strcmp(v, "auto") != 0)
             g_np.lockDelaySetting = std::max(0, std::min(kMaxLockDelay, std::atoi(v)));
         if (const char *v = std::getenv("TEKKEN4_NET_EARLY"))
@@ -2317,6 +2335,8 @@ namespace tekken4_rollback
             return false;
         }
         g_np.on = true;
+        if (g_np.fastSync)
+            RUNTIME_LOG("[rollback] TEKKEN4_NET_FAST_SYNC=1: lead window 8, RTT settling hold unchanged\n");
         return true;
     }
 #endif
