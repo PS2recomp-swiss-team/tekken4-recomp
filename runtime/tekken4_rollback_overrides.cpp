@@ -1148,6 +1148,10 @@ namespace tekken4_rollback
         bool timeSync = true, localPad = true, dump = false, ended = false;
         bool fastSync = false;
         bool predHeadroom = false;
+        bool sendFirst = false;
+        // Host-only timing of first-live capture + hash collection, before (OFF) or after (ON) input publication.
+        uint64_t sendFirstFrames = 0, sendFirstInputs = 0, sendPrepFrames = 0, sendPrepFrame = 0;
+        double sendPrepMs = 0, sendPrepMaxMs = 0, sendPrepLastMs = 0;
         // Prediction-wait experiment and host-only cumulative diagnostics; never restored with a snapshot.
         uint64_t headroomOpportunities = 0, headroomWaits = 0, headroomCompleted = 0, headroomRequested = 0;
         uint64_t headroomFrame = 0, headroomBefore = 0, headroomAfter = 0, headroomNeed = 0, headroomTarget = 0;
@@ -1475,6 +1479,19 @@ namespace tekken4_rollback
         return in;
     }
 
+    uint64_t npSendLocal(uint64_t f)
+    {
+        uint64_t sampled = 0;
+        const uint64_t ahead = static_cast<uint64_t>(f < g_np.rbStart ? g_np.lockDelay : g_np.delay);
+        for (uint64_t u = t4net::localMax(); u <= f + ahead; ++u)
+        {
+            t4net::setLocal(static_cast<uint32_t>(u), npSampleLocal(u));
+            ++sampled;
+        }
+        t4net::sendNow();
+        return sampled;
+    }
+
     // The inputs frame g runs with: this side's (decided delay frames ago), the peer's (confirmed, or the last
     // confirmed one repeated = predicted).
     void npDecideInputs(uint64_t g)
@@ -1726,6 +1743,13 @@ namespace tekken4_rollback
                      g_np.headroomOpportunities, g_np.headroomWaits, g_np.headroomCompleted,
                      g_np.headroomRequested, g_np.headroomWaitMs, g_np.headroomFrame,
                      g_np.headroomBefore, g_np.headroomAfter, g_np.headroomNeed, g_np.headroomTarget);
+        std::fprintf(g_log, "NETDIAG steady_ms=%.3f f=%" PRIu64 " slot=%d send_first=%d"
+                            " send_first_frames=%" PRIu64 " send_first_inputs=%" PRIu64 " send_prep_frames=%" PRIu64
+                            " send_prep_ms=%.3f send_prep_max_ms=%.3f send_prep_f=%" PRIu64
+                            " send_prep_last_ms=%.3f\n",
+                     steadyMs, g_frame, g_np.slot, g_np.sendFirst ? 1 : 0,
+                     g_np.sendFirstFrames, g_np.sendFirstInputs, g_np.sendPrepFrames, g_np.sendPrepMs, g_np.sendPrepMaxMs,
+                     g_np.sendPrepFrame, g_np.sendPrepLastMs);
         g_np.diagGapMaxMs = g_np.diagDebtMaxMs = g_np.diagSyncOverMaxMs = g_np.diagWaitMaxMs = g_np.diagRollbackMaxMs = 0;
     }
 
@@ -1902,6 +1926,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_EARLY_DEADLINE=1: overdue early scans defer to sync/wait and late rollback\n");
         if (g_np.predHeadroom)
             std::fprintf(g_log, "NET TEKKEN4_NET_PRED_HEADROOM=1: prediction waits request up to two more confirmed inputs, at most through the current frame\n");
+        if (g_np.sendFirst)
+            std::fprintf(g_log, "NET TEKKEN4_NET_SEND_FIRST=1: first-live input sampled and sent before capture/hash collection\n");
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -1981,6 +2007,17 @@ namespace tekken4_rollback
                 return;
         }
         const uint64_t f = g_frame;
+        // Replay must reuse recorded input. Only a first live visit may publish before capture; leave liveT
+        // assignment below, after npEndResim has restored the live scheduler on a replay's return.
+        const bool firstLive = !g_np.resim && g_np.liveTFrame != f;
+        const bool sentFirst = firstLive && g_np.sendFirst;
+        if (sentFirst)
+        {
+            g_np.sendFirstInputs += npSendLocal(f);
+            ++g_np.sendFirstFrames;
+        }
+        const auto prepT0 = firstLive && g_np.diag ? std::chrono::steady_clock::now()
+                                                 : std::chrono::steady_clock::time_point{};
         if (g_np.resim)
         {
             ++g_np.resimFrames;
@@ -2003,6 +2040,15 @@ namespace tekken4_rollback
             npCapture(cycle);
 
         hashCollect();
+        if (firstLive && g_np.diag)
+        {
+            const double ms = msSince(prepT0);
+            ++g_np.sendPrepFrames;
+            g_np.sendPrepMs += ms;
+            g_np.sendPrepMaxMs = std::max(g_np.sendPrepMaxMs, ms);
+            g_np.sendPrepFrame = f;
+            g_np.sendPrepLastMs = ms;
+        }
         const bool lockstep = f < g_np.rbStart;
         if (g_np.liveTFrame != f)
         {
@@ -2013,10 +2059,8 @@ namespace tekken4_rollback
                              ? std::chrono::steady_clock::now()
                              : next - kVblank + std::chrono::microseconds(g_np.early ? static_cast<int64_t>(g_np.earlyMs * 1000.0) : 0);
             // this side's input for f + delay, sent at once (before any rollback: the peer must not wait for it)
-            const uint64_t ahead = static_cast<uint64_t>(lockstep ? g_np.lockDelay : g_np.delay);
-            for (uint64_t u = t4net::localMax(); u <= f + ahead; ++u)
-                t4net::setLocal(static_cast<uint32_t>(u), npSampleLocal(u));
-            t4net::sendNow();
+            if (!sentFirst)
+                npSendLocal(f);
         }
 
         uint64_t rc = t4net::remoteContig();
@@ -2364,6 +2408,8 @@ namespace tekken4_rollback
             g_np.maxPred = std::max<uint64_t>(1u, std::min<uint64_t>(12u, parseNumber(v)));
         if (const char *v = std::getenv("TEKKEN4_NET_PRED_HEADROOM"))
             g_np.predHeadroom = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_SEND_FIRST"))
+            g_np.sendFirst = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_RBSTART"))
             g_np.rbStart = parseNumber(v);
         if (const char *v = std::getenv("TEKKEN4_NET_END"))

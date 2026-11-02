@@ -1,5 +1,168 @@
 # T4 beta progress, 2026-11-02
 
+## Continuation: pending SEND_FIRST needs its first real result
+
+The supplied 707a8083df / 559637893924db84 verify is the same result already
+analyzed below. It tests PRED_HEADROOM, not the newer SEND_FIRST candidate.
+No new paired runtime result or chronological pair logs were supplied.
+Do not replace this pending hypothesis with another untested switch.
+
+Done: 24 independent read-only area agents rechecked the runtime candidate,
+transport, evidence and catalogs. No blocking source issue was found. No new
+runtime code or environment settings changed this continuation. The existing
+runtime change and exact VERIFY_ENV.txt line below remain the experiment to
+prove. Only this progress record changed; its prior bytes are retained in
+logs/runtime-send-first-followup/CODEX_PROGRESS.before.md.
+
+Evidence precision: hashCollect inserts/compares transport hashes and performs
+synchronous logging; confirmedHash updates memory, not a report file there.
+HASH_PROFILE slot timing includes mutex/predicate overhead as well as reader
+waiting. It is not isolated blocked time. NETDIAG packet ages include resends;
+there is no unique per-input first-receipt timestamp. Full logs could establish
+sampled lead and correction chronology, not complete input-arrival chronology.
+Exactly eight .log files remain scanner output, not paired runtime evidence.
+
+Ran: tests_catalogs invoked the actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+This checks inventory only. No changed game entry ran. Under AGENTS.md, builds,
+games and tools/net_* execution remain forbidden here. The selftest dispatch
+bypasses npBoundary; it cannot validate SEND_FIRST. Compilation, activation,
+replay safety, packet-arrival improvement and performance remain UNRUN.
+
+Open / owner-only: run the existing candidate through real netplay OFF/ON,
+with DELAY=3, DIAG=1 and HASH_PROFILE=1 explicitly passed through common -Env
+in BOTH arms. Change only SEND_FIRST. net_pair clears inherited settings;
+the external wrapper must supply those controls, not merely inherit them.
+Its with/without-the-whole-file convention alone changes four settings and
+cannot isolate SEND_FIRST. Require ON literal activation and increasing
+send_first_frames AND send_first_inputs on both peers, zero early-publication
+counters OFF, and preparation samples/effective settings in both arms. Retain
+full pair logs and compare absolute aggregate replay/depth, waits, FPS and
+tails. Tiny preparation cost or no benefit despite meaningful publication
+actions weakens this hypothesis. Repeat same-role pairs, then two PCs.
+
+Agents: pair_logs, verify_metrics, send_first_guards, input_schedule,
+snapshot_order, scheduler_restore, hash_reader_wait, hash_collect,
+send_diagnostics, timesync_sign, timesync_filter, prediction_wait,
+vblank_pacing, startup_roles, transport_sender, arrival_timestamps,
+transport_receiver, resend_coalesce, simulation_rng, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+Separate final reviewer: final_diff_review_continuation_2 found no blocking
+source issue; compilation and real-entry proof remain unrun.
+Root alone edits progress; every area agent is read-only. No Git command,
+outside-tree read, deletion, patch edit, build, game, forbidden helper,
+server, push or release was used.
+
+## Current: send fresh input before capture/hash work
+
+Latest owner-supplied verify: draft 707a8083df, clean merge, build in 210 s,
+build ID 559637893924db84, finished 2026-11-02T20:39:12. This supersedes the
+incomplete excerpt immediately below and the old unchanged-943fc4631acf2c13
+concern. SELFTEST OFF/ON both exercised 202 restores, 447 replay comparisons
+with zero mismatches and 101/101 wrong-input divergences. Its effective mode
+was not supplied; test/selfnet do not exercise npBoundary's scheduling.
+
+PRED_HEADROOM shows no benefit in this result: aggregate replay 4272 -> 5087
+(+19.1%), rollbacks 1214 -> 1409 (+16.1%). Both peers worsened. The smaller
+join/host rollback ratio, 3.45 -> 2.52, is not an improvement by itself.
+Combined stall+sync time fell 7765 -> 6824 ms; run FPS fell 50.1 -> 49.9.
+For interpretation, negotiated delay was 3 OFF and 2 ON. Auto
+delay crosses its threshold at 150 ms, the simulator's target RTT. Diagnostic
+settings are also unspecified OFF. This is not an isolated headroom result,
+and literal activation/action counters were not supplied. Do not claim its
+mechanism is disproved or re-enable it alongside the new experiment.
+
+Evidence limit: 24 independent read-only area agents found no paired runtime
+or transport logs in this tree. The eight .log files are ZIP scanner output.
+No outside-tree path was opened. Input first-arrival times, sustained frame
+advantage and chronological wait order remain unknown. The summaries identify
+join as the waiting side (OFF: 87 stalls, 94 sync corrections; host zero of
+each), consistent with an ahead peer approaching its prediction cap. The
+histograms reproduce actual replay work; this is not duplicate counting.
+No time-sync sign/unit or steady-state host/join policy error was found.
+Host-minus-join rebases differ by 7743 ms, versus 7765 ms extra join waits:
+that is consistent with deadline accounting, not proof of a pacing cause.
+
+Single new hypothesis: first-live snapshot/hash preparation delays fresh
+input publication, so a capture/hash hitch can amplify peer prediction and
+replay asymmetry. npCapture waits for hash readers BEFORE its capture timer;
+the reported ~0.43 ms capture average excludes that wait. hashCollect also
+runs transport/report/log work before publication. This is a source-supported
+mechanism, not a demonstrated explanation of the fourfold imbalance.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_SEND_FIRST=1. A first live visit samples/sends through the same
+f+delay (or boot lockDelay) before capture/hash collection. Replay boundaries
+and returns to the same live frame reuse recorded input; liveT assignment
+stays after npEndResim restores the scheduler. Captures still precede scans,
+restores and final hashes. The OFF sampling/send location is retained via the
+same helper. Earlier host-pad sampling can legitimately observe a different
+physical input; scripted target-frame inputs are unchanged. No transport,
+prediction limit, input delay policy or time-sync controller was changed.
+
+Literal activation is logged after handshake. With DIAG=1, NETDIAG reports
+send_first, cumulative send_first_frames (early publication calls),
+send_first_inputs (new input samples published there), send_prep_frames,
+send_prep_ms, cumulative send_prep_max_ms, and last send_prep_f/last_ms.
+Preparation measures first-live capture including hash-slot wait plus
+hashCollect: before send OFF, after send ON. It excludes sample/send time,
+replay captures and any later waits. This is time moved out of the pre-send
+path, NOT measured packet arrival improvement. send_first_frames can include
+calls with no new input after priming; require send_first_inputs too. All
+counters are host-only and not restored. HASH_PROFILE adds actual reader-wait
+totals; low preparation/wait times would weaken this candidate's relevance.
+
+VERIFY_ENV.txt now contains exactly one ASCII line plus LF, without BOM:
+TEKKEN4_NET_SEND_FIRST=1;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_HASH_PROFILE=1;TEKKEN4_NET_DELAY=3
+
+Open / owner-only: stage/build these exact bytes in the authorized checkout,
+refresh identity, and run the actual same-build OFF/ON netplay entry. The
+absent outer verify wrapper must pass the file via common -Env; net_pair does
+not read it. In BOTH arms set DELAY=3, DIAG=1 and HASH_PROFILE=1, varying ONLY
+SEND_FIRST (OFF unset/0, ON 1). The line pins the ON profile; it cannot set the
+OFF profile by itself. If the wrapper simply omits the whole line OFF, inspect
+effective params and repeat with common controls before drawing a causal
+conclusion. Keep PRED_HEADROOM and all other experiments equal/off, including
+SIM_SAFE_WAIT; do not silently bundle a second runtime change.
+
+Require both ON peers' literal TEKKEN4_NET_SEND_FIRST=1, send_first=1 and
+increasing send_first_frames AND send_first_inputs. OFF must show send_first=0
+and zero early publication counters. Require preparation samples in BOTH arms;
+retain HASH_PROFILE, full rb_frames/net logs, effective params, stdout/stderr
+and build identity. Align same-PC steady times and frontiers with NETTS,
+producer gaps and actual waits. Packet input_age includes resends; it is not
+unique input first-arrival timing. Compare absolute aggregate replay/depth,
+combined wait time, FPS and frame tails on BOTH peers. Activation alone is no
+benefit; tiny preparation times or unchanged poor replay with meaningful
+publication actions weakens this hypothesis. Repeat same-role pairs because
+packet-count changes also change simulator RNG consumption, then two PCs.
+
+Ran: tests_catalogs executed the actual tools/check_online_catalogs.ps1,
+exit 0; both 23-tool catalogs, three root inputs and Host/Join dependencies
+present. This proves inventory only. No test through the changed real game
+entry could run: AGENTS.md forbids builds, games and tools/net_* execution.
+Compilation, switch activation, replay safety and performance remain UNRUN;
+no model, mocked entry or source assertion is presented as runtime proof.
+The source candidate is therefore unvalidated and release acceptance stays open.
+Original bytes for the three edited files are under
+logs/runtime-send-first/originals. Root alone edits these files; all area
+agents are read-only. Separate final_diff_review_send_first found no blocking
+source issue in OFF publication, first-live/replay guards, snapshot/scan/hash
+ordering, scheduler restoration or diagnostic formats. It independently
+confirmed the exact ASCII environment line and retained progress history.
+Root also checked original/current LF-only runtime formatting, the environment
+line's encoding and the original progress suffix. These are source/integrity
+checks, not compilation or real-entry runtime proof.
+
+Area agents: pair_evidence, timesync_sign, timesync_filter, wait_order,
+vblank_pacing, prediction_budget, startup_roles, transport_poll, resend_order,
+input_sampling, peer_feedback, resim_cost, state_ring, mismatch_detection,
+coalescing, clock_domains, simulation_bias, diag_contention, frontier_refresh,
+switch_route, build_identity, tests_catalogs, experiment_gate, arrival_telemetry.
+Separate reviewer: final_diff_review_send_first. No Git command, outside-tree
+read, deletion, patch edit, build, game, forbidden helper, server, push or
+release was used.
+
 ## Current continuation: headroom still needs its first real paired result
 
 Latest owner-supplied excerpt: draft de203b767d, clean merge, build completed
