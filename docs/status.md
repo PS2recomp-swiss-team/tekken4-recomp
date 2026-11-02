@@ -18,7 +18,7 @@ _Last updated: 2026-11-02 (Windows ZIP device-name follow-up; release remains NO
   exit 0 with empty stderr; 142 tool files and all 79 patch names/hashes
   stayed unchanged. Separate review independently passed the 393 / 35
   device suite and catalogs, with 227 source names/hashes unchanged.
-  The actual document checker covered all six changed docs: 160 local
+  The actual document checker covered all six changed docs: 161 local
   links and 297 PowerShell parses, no document/link/syntax findings.
   Overall exit 1 remains on retained image-name fixtures and a corrupt ZIP;
   no completed whole-tree check is claimed. Ordinary non-ASCII legacy ZIP

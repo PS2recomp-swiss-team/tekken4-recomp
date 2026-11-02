@@ -71,7 +71,7 @@ Done:
   reversing the intended edits. Evidence:
   `logs/release-device-review-20261102/`.
 - The reviewer's actual document checker covered all six changed documents:
-  160 local links and 297 PowerShell parses, with no missing document/link
+  161 local links and 297 PowerShell parses, with no missing document/link
   or syntax findings and empty stderr. Overall exit 1 remains on retained
   text-only image-name fixtures and a corrupt ZIP; whole-tree checking did
   not complete. Nothing was deleted or weakened for a pass.
