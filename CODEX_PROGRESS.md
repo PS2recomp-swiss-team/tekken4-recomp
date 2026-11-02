@@ -1,5 +1,85 @@
 # T4 beta progress, 2026-11-02
 
+## Current blocker and supplied verification 06c5b8013e
+
+Release remains **NO-GO**. The most valuable open item is actual App startup
+and portable first-run. Sixteen area agents checked independent prerequisites;
+the complete candidate, private Python/Tk, dependencies, reviewed locks/notices
+and portable marker remain absent. App initialization also discovers locations
+outside this permitted tree. No production or test code changed: no such fix
+could receive the required real App proof here. More ordinary scanner fixtures
+would not close App acceptance or the remaining scanner conditions.
+
+Done:
+
+- Actual [starter test](tools/test_launcher_entry.ps1): test exit 0; real
+  `Tekken4.cmd` exit 1, missing private Python. Empty stderr and three input
+  hashes unchanged. **The App never started.** Evidence:
+  `logs/launcher-06c5-8dba919f44cc483d81e2f32b91e69ff3/summary.json`.
+- Actual [catalogs](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): both 23-tool catalogs,
+  three root inputs and three actual checker subprocess cases passed.
+  Normal readiness remains 2 / BLOCKED. Empty stderr; 11 source hashes
+  unchanged. Evidence:
+  `logs/tests-catalogs-06c5-503dd8bc5c2c4b5289d6f992a6b5bb0e/summary.json`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `06c5b8013e`,
+  finished `2026-11-02T11:52:50`: clean 190-second build
+  `943fc4631acf2c13`; OFF selftest 6000 wall / 5106 logical frames,
+  202 good restores, zero bad, 447 comparisons with zero mismatches,
+  101/101 wrong-input divergences. OFF same-PC pair: 6000 live/logical
+  frames, 199 hashes each, zero mismatches/NETDESYNC, FPS 48.0/48.0,
+  stalls 0/126 (0/5357 ms), displayed-frame p99 165.5/118.8 ms, delay 3.
+  Supplied, not reproduced here. Versus `71de043320`, FPS rose and p99
+  fell; join stalls and stall time fell. Delay stayed 3. These uncontrolled
+  summaries establish neither cause nor usable pacing.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Pad navigation remains absent.
+Fullscreen inheritance and offline spawn-failure cleanup remain unexecuted
+source observations. Failed scanner termination, interruption inside one write
+and unobserved descendants remain unproved. Unchanged long aggregates and
+the whole-tree beta checker were not rerun.
+
+Owner-only next step: provide the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices, then run
+[actual launcher acceptance](docs/RELEASE_PATH_B.md) in the authorized
+environment: responsive App/process identity, exit/reopen/settings, licence
+cancel/accept, portable build/play/return. Python alone is insufficient.
+GUI, Python suites, packagers, build, game and network helpers stayed **UNRUN
+here**. A same-PC pair does not replace two PCs.
+
+Area agents: `launcher_entry_06c5`, `tests_catalogs_06c5`,
+`supplied_verify_06c5`, `portable_candidate_06c5`, `python_tk_06c5`,
+`settings_process_06c5`, `controller_ui_06c5`, `offline_flow_06c5`,
+`licence_inputs_06c5`, `source_privacy_06c5`, `player_payload_06c5`,
+`corresponding_source_06c5`, `effective_profile_06c5`, `two_pc_pacing_06c5`,
+`scanner_gaps_06c5`, `integrated_launcher_06c5`.
+Root owns this record and `docs/status.md`; source editing ownership was
+exclusive. Originals and a 351-file baseline are saved under
+`logs/release-06c5-c34c877329a94057a03569f64b5d3f4a/`.
+Actual readiness checked the two supplied-evidence documents / 18 links:
+exit 2 / BLOCKED, empty stderr and 14 hashes unchanged. Evidence:
+`logs/supplied-06c5-654117d3bc054b7a816b1c19f3fdea3e/summary.json`.
+Combined actual readiness checked all four changed documents / 245 local
+links, 12 required inputs and seven parses, then catalogs and actual starter
+refusal: exit 2 / BLOCKED, empty stderr, all 351 baseline hashes unchanged
+during the run. Exactly four documents differ from their saved originals.
+Evidence is `combined-entry/` under the root evidence folder above. Two
+initial wrapper attempts failed before checker execution (array handling,
+then child-command quoting); neither supplies a passing result.
+Separate reviewer `final_diff_review_06c5` found no blocking issue in these
+four document changes: no source additions/deletions, earlier progress history
+preserved, supplied metrics match the report. Independent actual readiness
+repeated all 245 links: exit 2 / BLOCKED, empty stderr, all 351 hashes
+unchanged during the run. Evidence is
+`final-review-c1fec0c6006447dfb0ef6fcd18e27039/summary.json` under the root
+evidence folder. A limited added-line check found no machine paths, mailboxes
+or IPv4 addresses; it is not a complete privacy review. This review does not
+close actual App/portable acceptance. No Git command, deletion, outside-tree
+read, build, game, forbidden helper, server, push or release ran here.
+
 ## Current blocker and supplied verification 71de043320
 
 Release remains **NO-GO**. The most valuable open item is actual App startup

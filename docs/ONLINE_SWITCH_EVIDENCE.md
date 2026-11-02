@@ -50,32 +50,32 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `71de043320`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 188 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T11:34:35`.
+Draft `06c5b8013e`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 190 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T11:52:50`.
 This supersedes the earlier supplied verification summaries.
 
 - Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
   restores, zero bad restores, 447 resim comparisons with zero mismatches;
   all 101 deliberate wrong-input passes diverged. Save average/maximum was
-  0.21/4.50 ms; restore average/maximum was 0.29/0.41 ms.
+  0.22/5.16 ms; restore average/maximum was 0.29/0.88 ms.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK. Measured RTT was
-  149/149 ms (host/join), with delay 3 on both endpoints.
-- Host/join rollbacks 215/965, resim frames 365/4175, maximum depth 6/9;
-  prediction stalls 0/130 (0/5584 ms), time sync 2/95 (33/5117 ms).
-  Run-average FPS 47.5/47.6; final FPS windows 59.2/59.4 do not erase the
-  remaining pacing gaps. Displayed-boundary p99 was 167.1/122.8 ms.
-  Restore-and-resim p50 was 7.70/22.01 ms, p90 16.54/50.78 ms and maximum
-  115.09/72.95 ms.
-  Rebases were 240/204 (26064/15413 ms).
+  151/151 ms (host/join), with delay 3 on both endpoints.
+- Host/join rollbacks 211/1001, resim frames 432/4297, maximum depth 5/9;
+  prediction stalls 0/126 (0/5357 ms), time sync 0/89 (0/5167 ms).
+  Run-average FPS 48.0/48.0; final FPS windows 59.3/59.8 do not erase the
+  remaining pacing gaps. Displayed-boundary p99 was 165.5/118.8 ms.
+  Restore-and-resim p50 was 10.84/22.85 ms, p90 15.95/49.63 ms and maximum
+  202.41/64.74 ms.
+  Rebases were 221/193 (24960/14459 ms).
   Coalesced packets were zero on both endpoints.
 
-Host/join run-average FPS changed from 47.9/47.9 in the preceding supplied
-report (`e93f58a43b`) to 47.5/47.6. Displayed-frame p99 changed from
-156.8/118.8 to 167.1/122.8 ms. Join stalls decreased from 147 (5478 ms) to
-130 (5584 ms); total stall time increased. Actual delay changed from 2 to 3
+Host/join run-average FPS changed from 47.5/47.6 in the preceding supplied
+report (`71de043320`) to 48.0/48.0. Displayed-frame p99 changed from
+167.1/122.8 to 165.5/118.8 ms. Join stalls decreased from 130 (5584 ms) to
+126 (5357 ms); total stall time decreased. Actual delay remained 3
 on both endpoints.
 These summaries are not a controlled comparison
 and do not establish a cause. Clean state checks do not establish usable pacing.
