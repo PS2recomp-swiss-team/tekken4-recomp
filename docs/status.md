@@ -1,10 +1,32 @@
 # Status
 
-_Last updated: 2026-11-02 (text scanner timeout follow-up; release remains NO-GO)_
+_Last updated: 2026-11-02 (ZIP process deadline follow-up; release remains NO-GO)_
 
 ## Resume here
 
-- **Current text scanner timeout follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+- **Current ZIP process deadline follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records the supervised scanner and real-entry tests. The default worker
+  deadline is 120 seconds; `-TimeoutSeconds` accepts 1-600. A timeout refuses
+  without a completed scan claim. The independent reviewer passed both new
+  suites: 1,094 assertions / eight scanner processes and 63 / seven. Review
+  reproduced and fixed a smart-apostrophe path refusal; the unchanged ZIP now
+  passes through the actual entry. The corrected frozen aggregate passed
+  2,686 assertions through 173 real scanner processes; all 70 tool-script
+  hashes and all 79 patch names/hashes stayed unchanged. All four
+  retained-input scans completed with unchanged input/source hashes: the
+  Sunday archives kept 138 mail findings each and the 80-file test subset
+  passed. Independent orphan-process enumeration was unavailable. See
+  [scanner scope](PUBLIC_ZIP_SCAN.md). The independent launcher recheck
+  observed the actual starter's missing-private-Python refusal and readiness
+  exit 2 / BLOCKED; the GUI never started. Owner-only acceptance remains open.
+  Latest supplied draft `d56a1ab337`, clean 164-second build
+  `943fc4631acf2c13`, finished `2026-11-02T03:22:35`: OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, host/join 52.2/52.2 FPS,
+  stalls 0/78 (0/2907 ms), displayed-frame p99 112.9/98.8 ms. This does not
+  prove this edited tree, enabled GUI profile or two-PC play. See
+  [switch evidence](ONLINE_SWITCH_EVIDENCE.md). Release remains **NO-GO**.
+
+- **Earlier text scanner timeout follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
   records reproduced long-word/newline hangs and the fix. The same retained
   ZIPs now complete with unchanged hashes. New tests passed 383 assertions
   through 47 real ZIP/tree processes, including sanitized immediate and lazy

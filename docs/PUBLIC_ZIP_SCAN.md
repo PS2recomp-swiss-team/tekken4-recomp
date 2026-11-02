@@ -15,6 +15,20 @@ categories, without printing member names or matched content. Keep the reported 
 with the result so it identifies the bytes checked. See
 [PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md) for actual retained-archive results.
 
+The command supervises a separate scanner process. Its default deadline is
+120 seconds; `-TimeoutSeconds` accepts integers from 1 through 600. The clock
+starts immediately before starting that process and covers its startup,
+scan work and output collection. When the deadline expires, the command
+terminates the child, discards its buffered output and exits 1 with
+`REFUSED: ZIP scan exceeded its process deadline.` It reports neither an
+archive hash nor a completed `SCANNED` or `PASS` result for that attempt.
+If termination cannot be confirmed, it reports that uncertainty and still
+refuses. Wrapper preflight and operating-system process termination are
+outside that worker deadline; this is not a hard real-time guarantee for the
+entire command.
+The [worker](../tools/public_zip_scan_worker.ps1) is an internal implementation,
+not a supported direct scan entry. Use the supervised command above.
+
 The entry refuses paths outside this tree and reparse points. Archive members
 must have safe, unique paths, including consistent directory spelling and no
 file/directory conflicts. Symlinks and other nonregular entries are refused.
@@ -69,9 +83,10 @@ The long-word fix skips the dense-symbol regex only when neither of its
 required literal fragments occurs. Blank-line fixes prevent two line-start
 checks from retrying across every earlier newline. These changes retain the
 content categories and are covered by actual ZIP and tree entry tests below.
-There is still no whole-process deadline. Separate patch-header processing,
-path checks, decompression, I/O and the sum of regex work are not covered by
-one global time limit.
+The supervised ZIP worker deadline also covers patch-header processing,
+path checks, decompression, I/O and the sum of regex work inside that child.
+The separate [public-tree export/scan entry](../tools/publish_public_tree.ps1)
+has no whole-process deadline; its shared regex timeouts remain narrower limits.
 
 Member paths must use `/`. Some Windows ZIP convenience methods write `\`
 instead; those archives are refused. Use a packager that writes portable
@@ -106,7 +121,11 @@ The shared text regressions cover [long words](../tools/test_public_text_words.p
 [blank lines](../tools/test_public_text_lines.ps1) and
 [content categories and timeout refusal](../tools/test_public_text_categories.ps1)
 through both actual scanner entries, with clean controls and bounded test
-processes. A killed test process is a failed test, not a scanner refusal.
+processes. The [deadline cases](../tools/test_public_zip_deadline.ps1) exercise
+the actual supervised command's timeout refusal and cleanup. The
+[compatibility cases](../tools/test_public_zip_deadline_compat.ps1) exercise
+completed scans and refusals through that command, including unusual paths.
+An outer test deadline expiring is a failed test, not a scanner refusal.
 No game data, keys, screenshots or real credentials are needed for them.
 Read [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) for what actually ran and what
 remains open.

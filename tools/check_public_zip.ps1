@@ -53,13 +53,14 @@ function Get-PatchSnapshot {
 try {
     $required = @(
         'public_patch_headers.ps1', 'public_tree_scan.ps1', 'public_zip_scan.ps1',
-        'public_zip_deflate.ps1',
+        'public_zip_deflate.ps1', 'public_zip_scan_worker.ps1',
         'scan_public_zip.ps1', 'test_public_zip_entry.ps1', 'test_public_zip_safety.ps1',
         'test_public_zip_crc.ps1', 'test_public_zip_integrity.ps1',
         'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
         'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
         'test_public_zip_budget_tables.ps1', 'test_public_text_words.ps1',
         'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+        'test_public_zip_deadline.ps1', 'test_public_zip_deadline_compat.ps1',
         'publish_public_tree.ps1', 'check_public_zip.ps1', 'check_online_catalogs.ps1'
     )
     foreach ($name in $required) {
@@ -80,7 +81,8 @@ try {
             'test_public_zip_deflate_valid.ps1', 'test_public_zip_deflate_invalid.ps1',
             'test_public_zip_budget_blocks.ps1', 'test_public_zip_budget_symbols.ps1',
             'test_public_zip_budget_tables.ps1', 'test_public_text_words.ps1',
-            'test_public_text_lines.ps1', 'test_public_text_categories.ps1')) {
+            'test_public_text_lines.ps1', 'test_public_text_categories.ps1',
+            'test_public_zip_deadline.ps1', 'test_public_zip_deadline_compat.ps1')) {
         Write-Output "ENTRY: tools/$entry"
         & $shell -NoProfile -ExecutionPolicy Bypass -File (Get-CheckedPath ('tools/' + $entry))
         if ($LASTEXITCODE -ne 0) {

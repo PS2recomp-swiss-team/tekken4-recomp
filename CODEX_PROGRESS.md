@@ -1,6 +1,103 @@
 # T4 beta progress, 2026-11-02
 
-## Text scanner timeout follow-up, current session
+## ZIP process deadline follow-up, current session
+
+Release remains **NO-GO**. The actual launcher remains the more important
+release gate, but an independent recheck confirms private Python is absent.
+The selected actionable source-only item was the ZIP scanner process deadline.
+No launcher, runtime, switch or server behavior changed.
+
+Done:
+
+- Read AGENTS.md and this record first. Original bytes are saved without Git
+  under `logs/zip-deadline-session-8373762c1f6d47a8a2ab1ddb8b9b110b/original/`.
+- The actual [ZIP scanner entry](tools/scan_public_zip.ps1) supervises an
+  internal worker. Default deadline: 120 seconds; `-TimeoutSeconds` accepts
+  integers 1 through 600. Timeout returns exit 1 / REFUSED and discards output
+  without a hash, completed scan or pass. Worker startup, scan and output
+  collection share the deadline. Wrapper preflight and OS termination are
+  outside it; this is not a hard real-time bound for the entire command.
+  Unconfirmed termination is reported. The worker's scan body is unchanged.
+- Separate review reproduced a valid smart-apostrophe filename refusing in
+  the supervisor while passing in the worker. Both paths now travel as
+  Base64 Unicode values decoded by static child code. The same unchanged
+  reproducer passes through the corrected actual entry; its SHA-256 is
+  `149c0fad8aad0b5183924c6e23f915579b531e0217226d7418b5ca6d6d74fce8`.
+  This proves the observed refusal was fixed; no injected action was run.
+- The independent reviewer's corrected frozen suites passed 1,094 assertions
+  through eight actual scanner processes and 63 through seven. Both actual
+  catalogs passed: 23 unique present tools each and three root files. All
+  five reviewed code hashes stayed unchanged. The same valid 1,000-member
+  ZIP passed before and after two one-second refusals; every input could be
+  reopened exclusively, with unchanged bytes/inventory. Compatibility covers
+  all four smart quote characters and ASCII shell punctuation in filenames.
+  Evidence: `logs/zip-deadline-review-a4934bee727c424a9ad986bd0eceb089/smart-fix-*`.
+- Corrected frozen [aggregate](tools/check_public_zip.ps1) and hash harness
+  both exited 0: 23 required PowerShell files parsed, 2,686 assertions through
+  173 real ZIP/tree scanner processes, both actual catalogs passed. All 70
+  tool-script hashes and all 79 patch names/hashes stayed unchanged. Evidence:
+  `logs/zip-deadline-aggregate-smartquotes-final-b2efd0b09533404db9a84dc2a01c93fa/`.
+- Corrected retained-input audit: three Sunday archives completed with the
+  expected 123/124/124 files and 138 mail findings each, in
+  49.455/51.285/50.880 seconds. The portable LICENSE/79-patch test subset
+  passed: 80 files, 2,025,621 bytes, 23.761 seconds. All four input and six
+  source hashes stayed unchanged before, between and after scans. Stderr
+  was empty; no timeout counted as completed content inspection. Evidence:
+  `logs/public-zip-deadline-audit-corrected-a7aeb1119ecd43bf9f474d16b8dcbff8/`.
+  These are test inputs, not a complete source/player candidate.
+- Independent `launcher_recheck` ran the actual starter-refusal test:
+  `Tekken4.cmd` exited 1 for missing private Python. The actual readiness
+  entry exited 2 / BLOCKED after catalog and starter-refusal entries. GUI
+  never started; no interpreter was substituted. Evidence:
+  `logs/launcher-recheck-9b744e36b44b48f48c58f97056e213ac/`.
+- Separate reviewer `final_diff_review_deadline` reviewed all six saved
+  originals and three new files. No blocking issue remains. It independently
+  ran the corrected suites and catalogs, checked the full aggregate and
+  retained-audit evidence, and confirmed the supplied verification figures.
+- Root's actual document checker covered all four changed documents:
+  96 local links resolved and 103 PowerShell files parsed. Overall exit 1
+  remains on retained image-name fixtures and a corrupt-ZIP fixture; the
+  whole-tree check did not complete. Nothing was removed or weakened to
+  manufacture a pass. Evidence is under
+  `logs/zip-deadline-session-8373762c1f6d47a8a2ab1ddb8b9b110b/root-doc-check-*.txt`.
+
+Final supervisor SHA-256:
+`71b85db2714597b5fdbc877ebe3aea0c96b094bdd01ef4497c4575d2dca4fe6c`;
+worker `2c6cdb18883d5fdca6380fd0088d5a0fc5951081c67b6a85070b8f88e8a48a26`.
+Runs before the cleanup-error wording and Unicode transport corrections are
+preliminary, including the earlier directories called final. Only the
+corrected evidence tied to these hashes applies to this code.
+
+Open / owner-only:
+
+- CIM process enumeration was denied: independent no-orphan proof remains
+  unavailable. Handle release does not prove process absence. Termination-error
+  and outer-test-watchdog failure branches were not forced. The public-tree
+  export/scan entry still has no whole-process deadline. Whole-tree source
+  checking remains red on retained test fixtures.
+- Actual GUI/portable first-run, Python suites/payload checks, complete
+  source/player/privacy/licence review, exact build/game, enabled GUI profile
+  and two physical PCs remain owner-only and unrun here. Builds, games and
+  network helpers are forbidden here. Scanner tests cannot close these gates.
+
+Latest owner-supplied verification, not reproduced here: draft `d56a1ab337`,
+merge base `8b15202341` (branch base `7992837fc3`), onto `c17fd979ca`; clean
+merge; 164-second build `943fc4631acf2c13`, finished `2026-11-02T03:22:35`.
+Selftest: 6000 wall / 5106 logical, 202 successful restores, zero bad,
+447 resim comparisons with zero mismatches, 101/101 wrong-input divergences.
+OFF same-PC pair: 6000 frames, 199 hashes each, zero mismatches/NETDESYNC;
+host/join FPS 52.2/52.2, stalls 0/78 (0/2907 ms), displayed-frame p99
+112.9/98.8 ms. This proves neither this edited tree, enabled GUI profile nor
+two physical PCs. See [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md).
+
+Eight area agents: `zip_deadline_entry`, `zip_deadline_tests`,
+`zip_deadline_compat`, `zip_deadline_catalogs`, `zip_deadline_docs`,
+`zip_deadline_retained`, `launcher_recheck`, `latest_verify_record`.
+Separate read-only reviewer: `final_diff_review_deadline`. Root owns this
+record and `docs/status.md`. All read AGENTS.md; file ownership was exclusive.
+No Git command, build, game, network helper, server, push or release ran here.
+
+## Earlier text scanner timeout follow-up
 
 Release remains **NO-GO**. The selected open source-only item was the two
 retained valid text inputs that exceeded 180 seconds through the actual ZIP
