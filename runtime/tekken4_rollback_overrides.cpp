@@ -1147,6 +1147,11 @@ namespace tekken4_rollback
         uint64_t maxPred = 8, rbStart = 600, endFrame = ~0ull, tsFrom = 0;
         bool timeSync = true, localPad = true, dump = false, ended = false;
         bool fastSync = false;
+        bool predHeadroom = false;
+        // Prediction-wait experiment and host-only cumulative diagnostics; never restored with a snapshot.
+        uint64_t headroomOpportunities = 0, headroomWaits = 0, headroomCompleted = 0, headroomRequested = 0;
+        uint64_t headroomFrame = 0, headroomBefore = 0, headroomAfter = 0, headroomNeed = 0, headroomTarget = 0;
+        double headroomWaitMs = 0;
         bool autoVs = false, autoVsReleased = false;
         uint64_t autoVsEnd = 1200;
         PadScript autoVsScript;
@@ -1712,6 +1717,15 @@ namespace tekken4_rollback
                      steadyMs, g_frame, g_np.slot, g_np.earlyDeadline ? 1 : 0,
                      g_np.earlyDeadlineSkips, g_np.earlyDeadlineRevisits,
                      g_np.earlyOverdueRollbacks, g_np.earlyOverdueRevisits, g_np.earlyDeferredLate);
+        std::fprintf(g_log, "NETDIAG steady_ms=%.3f f=%" PRIu64 " slot=%d pred_headroom=%d"
+                            " headroom_opportunities=%" PRIu64 " headroom_waits=%" PRIu64
+                            " headroom_completed=%" PRIu64 " headroom_requested=%" PRIu64 " headroom_wait_ms=%.3f"
+                            " headroom_f=%" PRIu64 " headroom_rc=%" PRIu64 "->%" PRIu64
+                            " headroom_need=%" PRIu64 " headroom_target=%" PRIu64 "\n",
+                     steadyMs, g_frame, g_np.slot, g_np.predHeadroom ? 1 : 0,
+                     g_np.headroomOpportunities, g_np.headroomWaits, g_np.headroomCompleted,
+                     g_np.headroomRequested, g_np.headroomWaitMs, g_np.headroomFrame,
+                     g_np.headroomBefore, g_np.headroomAfter, g_np.headroomNeed, g_np.headroomTarget);
         g_np.diagGapMaxMs = g_np.diagDebtMaxMs = g_np.diagSyncOverMaxMs = g_np.diagWaitMaxMs = g_np.diagRollbackMaxMs = 0;
     }
 
@@ -1886,6 +1900,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_REBASE_CATCHUP=1: live rebases retain two vblank periods of deadline debt\n");
         if (g_np.earlyDeadline)
             std::fprintf(g_log, "NET TEKKEN4_NET_EARLY_DEADLINE=1: overdue early scans defer to sync/wait and late rollback\n");
+        if (g_np.predHeadroom)
+            std::fprintf(g_log, "NET TEKKEN4_NET_PRED_HEADROOM=1: prediction waits request up to two more confirmed inputs, at most through the current frame\n");
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -2071,13 +2087,41 @@ namespace tekken4_rollback
         {
             const auto t0 = std::chrono::steady_clock::now();
             const uint64_t rcBefore = rc;
+            uint64_t waitNeed = need;
             rc = t4net::waitRemote(static_cast<uint32_t>(need - 1u), UINT32_MAX);
+            if (!lockstep && rc >= need && !t4net::peerLost())
+            {
+                // Releasing at the limit leaves no spare prediction budget. Only after an existing prediction
+                // wait, request up to two frames of headroom. Never require an input beyond f: both peers have already
+                // sampled and sent their current input before waiting. Do not scan until this wait is finished.
+                const uint64_t target = std::min(f + 1u, need + 2u);
+                if (rc < target)
+                {
+                    ++g_np.headroomOpportunities;
+                    if (g_np.predHeadroom)
+                    {
+                        const auto extraT0 = std::chrono::steady_clock::now();
+                        ++g_np.headroomWaits;
+                        g_np.headroomRequested += target - rc;
+                        g_np.headroomFrame = f;
+                        g_np.headroomBefore = rc;
+                        g_np.headroomNeed = need;
+                        g_np.headroomTarget = target;
+                        waitNeed = target;
+                        rc = t4net::waitRemote(static_cast<uint32_t>(target - 1u), UINT32_MAX);
+                        g_np.headroomWaitMs += msSince(extraT0);
+                        g_np.headroomAfter = rc;
+                        if (rc >= target)
+                            ++g_np.headroomCompleted;
+                    }
+                }
+            }
             const double ms = msSince(t0);
             if (g_np.diag)
             {
                 g_np.diagWaitBefore = rcBefore;
                 g_np.diagWaitAfter = rc;
-                g_np.diagWaitNeed = need;
+                g_np.diagWaitNeed = waitNeed;
                 g_np.diagWaitMaxMs = std::max(g_np.diagWaitMaxMs, ms);
             }
             if (lockstep)
@@ -2093,7 +2137,7 @@ namespace tekken4_rollback
             npShift(std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0)));
             if (ms > 200.0)
                 std::fprintf(g_log, "NET frame %" PRIu64 " waited %.0f ms for the peer's input up to %" PRIu64 " (%s)\n", f, ms,
-                             need - 1u, lockstep ? "lockstep" : "prediction window");
+                             waitNeed - 1u, lockstep ? "lockstep" : "prediction window");
         }
 
         if (g_np.autoVs && t4net::peerLost())
@@ -2318,6 +2362,8 @@ namespace tekken4_rollback
         g_np.slot = c.role == t4net::Role::Host ? 0 : 1;
         if (const char *v = std::getenv("TEKKEN4_NET_MAXPRED"))
             g_np.maxPred = std::max<uint64_t>(1u, std::min<uint64_t>(12u, parseNumber(v)));
+        if (const char *v = std::getenv("TEKKEN4_NET_PRED_HEADROOM"))
+            g_np.predHeadroom = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_RBSTART"))
             g_np.rbStart = parseNumber(v);
         if (const char *v = std::getenv("TEKKEN4_NET_END"))

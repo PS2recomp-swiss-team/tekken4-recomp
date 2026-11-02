@@ -1,5 +1,124 @@
 # T4 beta progress, 2026-11-02
 
+## Current: prediction-wait headroom after the real EARLY_DEADLINE comparison
+
+Latest owner-supplied verify: draft 9e442d7e74, build bbf39286af338c8e,
+finished 2026-11-02T17:25:31. The printed build ID changed; the old unchanged
+943fc4631acf2c13 concern is superseded. EARLY_DEADLINE OFF/ON rollbacks were
+host 212/233, join 969/961; replay frames host 304/444, join 4109/4010.
+Aggregate replay rose 4413 to 4454. Join early rollbacks fell 880 to 280,
+but late rollbacks consequently rose 89 to 681. This mostly moved correction
+work and did not demonstrate a benefit. Full activation/opportunity logs
+were not supplied. Both arms reported zero hash mismatches and NETDESYNC.
+
+Done: 24 independent area agents audited runtime, transport and tests/catalogs.
+There are still no paired runtime/transport logs in this tree: the eight .log
+files are scanner outputs. No outside-tree log path was opened. Exact input
+first-arrival times, sustained frame advantage and chronological wait order
+remain unknown. Latest OFF join/host rollback ratio is 4.57, replay ratio
+13.52; the depth histograms reproduce the actual reported work. Join is the
+waiting side in these summaries: 117 prediction stalls and 96 sync corrections,
+versus host zero of each. Host-minus-join discarded pacing time nearly equals
+join wait time; that is consistent with deadline accounting, not proof that
+host pacing caused the imbalance. No root cause is proved.
+
+Single new hypothesis: releasing a prediction-limit wait at its minimum
+frontier leaves the ahead peer at the prediction cap, sustaining deep replay
+and delaying its next input production. Default maxPred=8 permits nine
+consecutive predicted inputs, including the current frame. The join OFF
+histogram has 98 depth-nine rollbacks versus host zero. Existing time sync
+runs only once per live frame; its corrections and the earlier early-deadline
+experiment do not restore prediction headroom at the wait's release.
+This is a testable workload-amplification hypothesis, not an explanation of
+which peer first gets ahead. Same-PC foreground/GPU scheduling remains a
+possible initial cause. Summaries cannot establish its chronology.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_PRED_HEADROOM=1. After the existing prediction-wait call returns,
+if its confirmed frontier is below min(f+1, need+2), ON waits for that target
+before scanning/replaying. It requests at most two further confirmed inputs,
+never beyond current input f. Both peers already sample and send through
+f+delay before waiting; no future sample is required. Lockstep waits retain
+their existing target. The ring size, maximum prediction limit, input delay,
+input values, time-sync controller and transport stay the same. Extra elapsed
+time is included in the existing stall total and deadline shift. OFF adds
+diagnostics but no extra wait. This can add stalls and worsen pacing; it is
+an unvalidated runtime candidate, not a demonstrated fix.
+
+An existing wait call can return immediately because its rc snapshot was stale
+after time sync. Thus the trigger is that existing branch/call, not proof of
+a physically blocking baseline wait. It does not scan and discard a mismatch:
+checked, hashNext, logical frame and ring slots do not advance during waiting.
+The existing late scan still corrects state before final hashes/live inputs.
+The second wait retains existing peer-loss handling. Its target is bounded
+in input frames, not in elapsed milliseconds; it may wait until peer loss.
+
+Runtime activation prints the literal switch after handshake. New one-second
+NETDIAG reports pred_headroom plus cumulative headroom_opportunities (baseline
+prediction-wait returns short of the extra target, in either arm),
+headroom_waits (extra calls, ON only), headroom_completed (returned frontier
+reached target), headroom_requested (sum of target minus frontier at extra-call
+entry, one or two each) and headroom_wait_ms (extra-call elapsed time).
+headroom_f/rc/need/target describe the LAST extra call; rc is before->after.
+These are host-only counters, not restored. Completion alone can be an
+immediate return and proves no actual blocking; inspect elapsed time too.
+The existing wait_need and long-wait message use the effective target.
+No per-input first-arrival telemetry was invented.
+
+VERIFY_ENV.txt contains exactly one line:
+TEKKEN4_NET_PRED_HEADROOM=1;TEKKEN4_NET_DIAG=1
+
+Open / owner-only: stage these reviewed bytes into the authorized validation
+checkout, build and refresh identity, then run actual selftest and repeated
+same-build OFF/ON pairs through tools/net_pair.ps1. The absent outer wrapper
+must pass the file line via common -Env; net_pair does not read the file.
+Use DIAG=1 or TimingDiag in BOTH arms; vary only PRED_HEADROOM. Keep
+EARLY_DEADLINE, FAST_SYNC, LIVE_LEAD, ORDERED_LEAD, REBASE_CATCHUP, REFRESH_RC
+and other experiments equal/off; retain ordinary early rollback, existing
+MAXPRED and delay. Peer overrides must not replace the common experiment.
+Retain full paired runtime/transport logs, stdout/stderr and effective params.
+Build/source IDs and requested parameters alone do not prove code activation.
+
+Require literal TEKKEN4_NET_PRED_HEADROOM=1 and pred_headroom=1 on BOTH ON peers.
+On the burdened peer require headroom_waits and headroom_completed to increase,
+with meaningful headroom_wait_ms and rc reaching target. OFF must show
+pred_headroom=0 and zero waits/completed/requested/wait_ms; opportunities may
+be positive. Zero ON opportunities/actions leaves the mechanism unexercised.
+Align same-PC steady_ms/frame/frontier with NETTS, sync_eval_f, progress/local
+gaps and actual waits. Determine whether extra confirmations reduce repeated
+deep work; packet input_age includes resends and is not first-arrival timing.
+Compare absolute rollback/replay totals and depth distribution, total stall
+plus sync time, run FPS and displayed-frame tails on both peers. A smaller
+ratio, fewer early rollbacks or more waiting alone is no win. Similar poor
+behavior despite exercised headroom weakens this hypothesis. Repeat same-PC
+runs, then two physical PCs; role swaps also change input/simulator streams.
+
+Compilation, selftest and real OFF/ON runtime-entry testing remain UNRUN here:
+AGENTS.md forbids builds, games and tools/net_* execution. This request's real
+entry proof therefore remains owner-only; no model/source test substitutes
+for it. Selftest dispatches to netBoundary, not npBoundary/npTimeSync. The
+tests_catalogs agent ran the actual check_online_catalogs.ps1: exit 0, both
+23-tool catalogs, three root inputs and Host/Join dependencies present. This
+proves inventory only, not any changed runtime behavior. Source safety reviews
+by prediction_budget and state_ring found no blocker; that is no runtime pass.
+Original bytes for the three edited files are in
+logs/runtime-pred-headroom/originals. Root alone edits runtime, VERIFY_ENV and
+this record; area agents are read-only. Separate final diff review found no
+blocking source issue in OFF behavior, literal activation, target bounds,
+peer-loss handling, stall/deadline accounting, ring/hash/mismatch ordering or
+diagnostic formats. It confirmed the exact ASCII environment line plus LF,
+no BOM, and unchanged prior progress history. This does not prove compilation,
+runtime safety, switch activation or benefit in a game run.
+
+Area agents: pair_evidence, timesync_sign, timesync_settling, peer_feedback,
+input_arrivals, wait_order, vblank_pacing, prediction_budget, startup_roles,
+resim_cost, transport_poll, resend_order, switch_route, tests_catalogs,
+build_identity, clock_domains, simulation_bias, input_sampling, telemetry,
+state_ring, mismatch_detection, coalescing, diag_contention, frontier_refresh.
+Separate reviewer: final_diff_review_pred_headroom. No Git command,
+outside-tree read, deletion, patch edit, build, game, forbidden helper,
+server, push or release ran this continuation.
+
 ## Current: deadline-first early rollback after the real FAST_SYNC comparison
 
 Latest owner-supplied verify: draft 950e73dce1, build 86157305ed349c48,
