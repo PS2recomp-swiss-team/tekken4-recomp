@@ -1,5 +1,120 @@
 # T4 beta progress, 2026-11-02
 
+## Current: defer ordinary replay-boundary log flushes
+
+Latest supplied verify: draft 86c36dd1df, clean merge, build in 263 s,
+build ID dbbc892dd1c14cf9, finished 2026-11-02T22:26:52. The ID changed;
+the old unchanged-943fc4631acf2c13 concern is superseded. This is the first
+supplied SEND_FIRST paired result, replacing the pending wording below.
+SELFTEST OFF/ON reports 202 good restores, 447 replay comparisons with zero
+mismatches and 101/101 wrong-input divergences. It does not prove npBoundary.
+
+SEND_FIRST profile OFF/ON: combined replay 6073 -> 4979 (-18.0%), rollbacks
+1070 -> 1149 (+7.4%), stall+sync time 11762 -> 10014 ms, run FPS 42.0 -> 46.3.
+Both arms report delay 3. Join still bears the work: ON replay 4591 versus
+host 388; rollbacks 964 versus 185. Join alone has prediction/time-sync
+waits. The depth histograms reproduce actual replay, not duplicate counts.
+OFF diagnostic/hash-profile settings and ON activation/action counters were
+not supplied; packet-count changes also alter simulator loss/jitter draws.
+This supports an improved ON profile, not an isolated SEND_FIRST benefit or
+a proven explanation of the initial lead. Both arms report zero sampled
+hash mismatches and NETDESYNC lines; this is not full release acceptance.
+
+Evidence: 24 independent read-only area agents investigated runtime and
+transport. Exactly eight .log files are present, all ZIP scanner output.
+No chronological host/join runtime or transport pair logs are in this tree.
+No outside-tree location was opened. Unique input first-arrival timestamps
+are not recorded; packet age includes resends. Full NETDIAG logs can show
+sampled frame advantage/frontier and wait chronology, but summaries cannot.
+No time-sync sign, fixed role policy or snapshot-state error was found.
+Boot handshake/full lockstep deadline shifts are a possible seed phase;
+without transition chronology this is not established as the cause.
+
+Single new hypothesis: synchronous ordinary log flushes on every replay
+boundary amplify unequal replay workload and delay the next fresh input.
+SEND_FIRST moves current publication earlier, but replay still blocks the
+next live sample. The hook explicitly flushes rb_frames and optional trace
+streams even on intermediate replay boundaries. The latest ON join executes
+4591 replay frames versus host 388. More flush opportunities are source
+facts; a material I/O delay or causal feedback loop has NOT been measured.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_DEFER_RESIM_FLUSH=1. Only ordinary hook-end flushes are deferred
+while the post-npBoundary state remains resimulating in an active net session.
+Records are still written; stdio may flush automatically as buffers fill.
+Live return and failed/ended sessions use the ordinary flush path. Explicit
+handshake/failure flushes and the final ordinary flush path are retained. No sampling,
+transport, prediction, scheduler, snapshot or hash policy changed. Abrupt
+termination during replay can lose the buffered tail; this is an opt-in
+experiment, not a release default or a proven fix.
+
+Both arms append NETFLUSH to each NETSUMMARY line so the existing pair
+summary extraction retains it: defer_resim_flush,
+deferred_boundaries, live_flushes/live_ms/live_max_ms and
+replay_flushes/replay_ms/replay_max_ms. Timings/counters are host-only,
+cumulative and outside snapshots. The live/replay bucket is the state ABOUT
+TO execute after npBoundary, so the initial restore boundary belongs to
+replay and its live return belongs to live. They measure only the explicit
+ordinary flush block, not all log I/O, skipped time or disk durability.
+Summary values exclude that boundary's subsequent ordinary flush and every
+explicit flush elsewhere. Compare both buckets: ON can move buffered write
+cost into the live bucket. Skipped calls alone do not demonstrate benefit.
+ON logs the literal switch after handshake; OFF reports
+defer_resim_flush=0 and zero deferred_boundaries.
+
+VERIFY_ENV.txt contains exactly one ASCII line plus LF, without BOM:
+TEKKEN4_NET_DEFER_RESIM_FLUSH=1
+
+The file intentionally contains only the new experiment, so the wrapper's
+with/without-the-file convention varies one setting. SEND_FIRST and earlier
+experiments remain equal/off for this next isolated comparison; no new
+production default is enabled. If retaining SEND_FIRST for follow-up, pass
+it equally in BOTH arms and record it. Pass DELAY=3 and any DIAG/HASH_PROFILE
+controls explicitly through common -Env in BOTH arms. net_pair clears
+inherited TEKKEN4_/PS2X_ settings and does not read VERIFY_ENV itself.
+RB_MODE must be unset or net. The external verify wrapper is absent here.
+
+Ran: tests_catalogs invoked the actual tools/check_online_catalogs.ps1,
+exit 0: both 23-tool catalogs, three root inputs and Host/Join dependencies
+present. Inventory only. No source assertion, model or mock is counted as
+runtime proof. Compilation, actual switch activation, buffered-log behavior,
+replay safety and performance remain UNRUN here: AGENTS.md forbids builds,
+games and tools/net_* execution. The requested real-entry test therefore
+remains owner-only, and release acceptance stays open.
+
+Open / owner-only: stage/build these exact runtime bytes, refresh identity,
+run the real same-build paired netplay OFF/ON with common controls above.
+Retain full rb_frames/transport logs, effective params, stdout/stderr and
+build identity. Require literal ON activation, defer_resim_flush=1 and
+increasing deferred_boundaries on BOTH peers with actual replay. OFF must
+show defer_resim_flush=0, zero deferrals and nonzero replay_flushes. Low OFF
+flush cost weakens this hypothesis; compare total flush cost in both buckets,
+next-input producer gaps, replay p50/p90/tails, absolute aggregate replay/depth,
+waits, FPS and frame tails. Zero deferrals leaves it untested. A smaller
+rollback ratio alone is no win. Require zero hash mismatches/desync and
+complete final logs. Repeat same-role pairs, then two physical PCs. Full
+chronology is still required before claiming why one peer first gets ahead.
+
+Original bytes for the three edited files are retained under
+logs/runtime-defer-resim-flush/originals. Root alone edits them; all area
+agents are read-only. No Git command, outside-tree read, deletion, patch
+edit, build, game, forbidden helper, server, push or release was used.
+
+Area agents: pair_logs, verify_metrics, timesync_sign, timesync_filter,
+prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+Separate final reviewer: final_diff_review_defer_flush found no blocking
+source issue. It independently checked OFF/non-net flush behavior, replay/live
+guards, failure/end paths, format arguments, exact environment bytes and
+preserved progress history. hash_collect and experiment_gate also reviewed
+the implemented candidate. These are source reviews, not runtime proof.
+Root checked LF-only runtime formatting, the environment bytes and the
+retained progress suffix; the final-summary telemetry omits its own later
+ordinary flush as stated above.
+
 ## Continuation: pending SEND_FIRST needs its first real result
 
 The supplied 707a8083df / 559637893924db84 verify is the same result already

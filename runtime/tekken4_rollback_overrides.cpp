@@ -87,6 +87,7 @@
 // TEKKEN4_NET_HASH_PROFILE=1  host-only hash queue/collection age and snapshot reader-wait diagnostics (default off).
 // TEKKEN4_NET_COST_PROFILE=1  bounded host-only live/cut/tail and snapshot/restore/rollback cost histograms (default off).
 // TEKKEN4_NET_DIAG=1      one-second host timing/lead/deadline samples (default off).
+// TEKKEN4_NET_DEFER_RESIM_FLUSH=1  defer ordinary boundary log flushes until replay returns live (default off).
 // TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
@@ -1149,6 +1150,10 @@ namespace tekken4_rollback
         bool fastSync = false;
         bool predHeadroom = false;
         bool sendFirst = false;
+        bool deferResimFlush = false;
+        // Host-only ordinary hook-end flush measurements, in both switch arms; explicit flushes are excluded.
+        uint64_t deferredFlushes = 0, boundaryFlushes[2]{}; // live / replay about to execute
+        double boundaryFlushMs[2]{}, boundaryFlushMaxMs[2]{};
         // Host-only timing of first-live capture + hash collection, before (OFF) or after (ON) input publication.
         uint64_t sendFirstFrames = 0, sendFirstInputs = 0, sendPrepFrames = 0, sendPrepFrame = 0;
         double sendPrepMs = 0, sendPrepMaxMs = 0, sendPrepLastMs = 0;
@@ -1816,7 +1821,7 @@ namespace tekken4_rollback
                      "; capture avg %.2f restore avg %.2f hash avg %.2f ms; peer %s"
                      "; lockstep waits %" PRIu64 " (%.0f ms) lock delay %d; early rollbacks %" PRIu64 " (wait for the vblank %.0f ms)"
                      "; lazy captures skipped %" PRIu64 "; frames > 20 ms %" PRIu64 " > 34 ms %" PRIu64 " of %" PRIu64
-                     "; rdram pages per capture %.0f per restore %.0f%s\n",
+                     "; rdram pages per capture %.0f per restore %.0f%s",
                      tag, g_np.liveFrames, g_frame, g_np.winFps, runS > 0 ? static_cast<double>(g_np.runFrames) / runS : 0.0,
                      g_np.rollbacks, g_np.resimFrames, g_np.maxDepth, hist.c_str(), g_np.predicted, g_np.mispredicted,
                      percentile(g_np.rbCost, 0.5), percentile(g_np.rbCost, 0.9), percentile(g_np.rbCost, 1.0), g_np.stalls,
@@ -1833,6 +1838,12 @@ namespace tekken4_rollback
                      cs.captures ? static_cast<double>(cs.capturePages) / static_cast<double>(cs.captures) : 0.0,
                      cs.restores ? static_cast<double>(cs.restorePages) / static_cast<double>(cs.restores) : 0.0,
                      cs.verifyMismatchPages ? (" VERIFY MISMATCH PAGES " + std::to_string(cs.verifyMismatchPages)).c_str() : "");
+        std::fprintf(g_log, "; NETFLUSH f=%" PRIu64 " defer_resim_flush=%d deferred_boundaries=%" PRIu64
+                            " live_flushes=%" PRIu64 " live_ms=%.3f live_max_ms=%.3f"
+                            " replay_flushes=%" PRIu64 " replay_ms=%.3f replay_max_ms=%.3f\n",
+                     g_frame, g_np.deferResimFlush ? 1 : 0, g_np.deferredFlushes,
+                     g_np.boundaryFlushes[0], g_np.boundaryFlushMs[0], g_np.boundaryFlushMaxMs[0],
+                     g_np.boundaryFlushes[1], g_np.boundaryFlushMs[1], g_np.boundaryFlushMaxMs[1]);
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
                          g_frame, g_np.catchupRebases, g_np.catchupDebtMs);
@@ -1928,6 +1939,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_PRED_HEADROOM=1: prediction waits request up to two more confirmed inputs, at most through the current frame\n");
         if (g_np.sendFirst)
             std::fprintf(g_log, "NET TEKKEN4_NET_SEND_FIRST=1: first-live input sampled and sent before capture/hash collection\n");
+        if (g_np.deferResimFlush)
+            std::fprintf(g_log, "NET TEKKEN4_NET_DEFER_RESIM_FLUSH=1: ordinary log flushes deferred while replay remains active\n");
     }
 
     // A re-simulated boundary b < live frame: its snapshot is needed only if a later rollback can go back to it
@@ -2410,6 +2423,8 @@ namespace tekken4_rollback
             g_np.predHeadroom = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SEND_FIRST"))
             g_np.sendFirst = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_DEFER_RESIM_FLUSH"))
+            g_np.deferResimFlush = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_RBSTART"))
             g_np.rbStart = parseNumber(v);
         if (const char *v = std::getenv("TEKKEN4_NET_END"))
@@ -2606,11 +2621,37 @@ namespace tekken4_rollback
             std::fprintf(g_log, "COST ee ms per executed frame by pass:%s\n", costText().c_str());
             std::fprintf(g_log, "IOP %s\n", iopText().c_str());
         }
-        std::fflush(g_log);
-        if (g_pagesLog)
-            std::fflush(g_pagesLog);
-        if (g_sndLog)
-            std::fflush(g_sndLog);
+#ifdef TEKKEN4_NETPLAY
+        // Use the state AFTER npBoundary: the restore boundary may start replay, and the catch-up boundary
+        // may end it. Keep every record, and flush buffered records on live return or a failed/ended session.
+        const bool netFlush = g_cfg.mode == Mode::Net;
+        const size_t flushKind = netFlush && g_np.resim ? 1u : 0u;
+        const bool deferFlush = netFlush && g_np.deferResimFlush && g_np.started &&
+                                !g_np.failed && !g_np.ended && g_np.resim;
+        if (deferFlush)
+            ++g_np.deferredFlushes;
+        else
+#endif
+        {
+#ifdef TEKKEN4_NETPLAY
+            const auto flushT0 = netFlush ? std::chrono::steady_clock::now()
+                                         : std::chrono::steady_clock::time_point{};
+#endif
+            std::fflush(g_log);
+            if (g_pagesLog)
+                std::fflush(g_pagesLog);
+            if (g_sndLog)
+                std::fflush(g_sndLog);
+#ifdef TEKKEN4_NETPLAY
+            if (netFlush)
+            {
+                const double ms = msSince(flushT0);
+                ++g_np.boundaryFlushes[flushKind];
+                g_np.boundaryFlushMs[flushKind] += ms;
+                g_np.boundaryFlushMaxMs[flushKind] = std::max(g_np.boundaryFlushMaxMs[flushKind], ms);
+            }
+#endif
+        }
 
         g_lastWaitNs = g_runtime->eeScheduler().hostWaitNanoseconds();
         const auto hookEnd = std::chrono::steady_clock::now();
