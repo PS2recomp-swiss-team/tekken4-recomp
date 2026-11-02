@@ -1,5 +1,46 @@
 # T4 beta progress, 2026-11-02
 
+## Current continuation: runtime proof is still pending
+
+The supplied duplicate-name refusal did not start a verify. Sixteen independent
+area reviews found no new paired runtime logs in this tree and no concrete
+source defect warranting a second experiment. No new runtime edit was made.
+The existing default-off catchup change and VERIFY_ENV.txt remain unchanged.
+
+Source findings refine the pending hypothesis: nominal time-sync waits already
+shift deadlines by their requested duration; prediction waits shift by measured
+duration. Catchup therefore tests remaining processing, restore/resimulation,
+hitch and oversleep debt. Receive handling and resends continue on background
+threads, but resimulation can delay the next local input sample. No fixed
+host/join branch was found in these live pacing paths. None of this proves the
+cause of the supplied rollback imbalance. One-second diagnostics cannot recover
+per-input arrival order or every wait.
+
+Open / owner-only: stage the existing runtime change into the actual runner,
+use a fresh unused verify name, and run the same new build OFF and ON. Require
+an ID different from 943fc4631acf2c13 plus both ON peers' literal activation and
+nonzero NETREBASE_CATCHUP rebases; source identity alone is insufficient. Keep
+TimingDiag and all other experiments identical. Root VERIFY_ENV.txt stays:
+TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
+Retain complete paired runtime/transport logs and effective per-peer settings.
+Compare sustained lead, confirmed progress, input-generation gaps, waits,
+rollback depth/cost/totals and pacing; lower rebase time alone is mechanical.
+
+Compilation, selftest, actual OFF/ON pair and runtime improvement remain UNRUN.
+AGENTS.md forbids the real build/game/network entry here. The selftest dispatch
+does not reach netplay pacing. No catalog test was repeated for a green result;
+no production change was added without its real-entry test. Only this progress
+record and its separate review record are new in this continuation.
+
+Read-only area agents: pair_log_inventory, catchup_guard, timesync_sleep,
+advantage_frontier, arrival_measurement, vblank_entry, transport_poll_order,
+prediction_wait, role_symmetry, resim_cost, resend_frontier, verify_env_route,
+tests_catalogs_entry, build_id_staging, clock_deadline, ab_falsification.
+Separate reviewer: final_diff_review_pending; review record:
+logs/runtime-catchup-pending/final-review.txt. Root exclusively owns this update
+and its saved original; agents do not share edit ownership. No outside-tree
+read, Git command, build, game, forbidden helper, deletion, server or release.
+
 ## Catchup follow-up: latest verify stopped before testing
 
 The latest supplied verify refused an existing output name. It supplies no new
