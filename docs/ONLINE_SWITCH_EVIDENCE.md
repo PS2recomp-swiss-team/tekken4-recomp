@@ -50,25 +50,25 @@ coalescing, diagnostics and simulator safe wait only for value `1`.
 
 ## Latest owner-supplied real verification
 
-Draft `5b921f859f`, merge base `8b15202341` (branch base `7992837fc3`),
-onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 165 seconds,
-build ID `943fc4631acf2c13`. Finished `2026-11-02T08:17:22`.
+Draft `c3dc860555`, merge base `8b15202341` (branch base `7992837fc3`),
+onto `us-slus20328` at `c17fd979ca`; clean merge; build OK in 208 seconds,
+build ID `943fc4631acf2c13`. Finished `2026-11-02T08:32:52`.
 This supersedes the earlier supplied verification summaries.
 
 - Selftest, switches OFF: 6000 wall / 5106 logical frames, 202 successful
   restores, zero bad restores, 447 resim comparisons with zero mismatches;
   all 101 deliberate wrong-input passes diverged. Save average/maximum was
-  0.20/4.74 ms; restore average/maximum was 0.28/0.38 ms.
+  0.20/4.51 ms; restore average/maximum was 0.27/0.38 ms.
 - Same-PC pair, switches OFF: RTT target 150 ms, jitter 5 ms, loss 3%, both
   endpoints reached live/logical 6000, 199 hash comparisons per endpoint,
   zero mismatches, zero NETDESYNC lines and peer OK.
-- Host/join rollbacks 319/946, resim frames 644/3702, maximum depth 6/9;
-  prediction stalls 0/69 (0/2195 ms), time sync 2/92 (33/4417 ms).
-  Run-average FPS 52.0/52.0; final FPS windows 59.9/60.0 do not erase the
-  remaining pacing gaps. Displayed-boundary p99 was 105.5/99.7 ms.
-  Restore-and-resim p50 was 9.52/17.99 ms, p90 17.42/41.55 ms and maximum
-  169.39/56.35 ms.
-  Rebases were 163/125 (15311/8761 ms).
+- Host/join rollbacks 303/931, resim frames 619/3693, maximum depth 6/9;
+  prediction stalls 0/84 (0/2556 ms), time sync 1/91 (17/4483 ms).
+  Run-average FPS 52.3/52.3; final FPS windows 60.0/60.0 do not erase the
+  remaining pacing gaps. Displayed-boundary p99 was 107.9/97.7 ms.
+  Restore-and-resim p50 was 9.52/18.39 ms, p90 16.58/42.34 ms and maximum
+  220.93/59.87 ms.
+  Rebases were 152/113 (14651/7654 ms).
   Coalesced packets were zero on both endpoints.
 
 This is supplied evidence, not a run performed here. Full effective parameter

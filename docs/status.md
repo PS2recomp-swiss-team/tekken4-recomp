@@ -1,23 +1,23 @@
 # Status
 
-_Last updated: 2026-11-02 (launcher still unrun; supplied draft 5b921f859f; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft c3dc860555; NO-GO)_
 
 ## Resume here
 
 - **Current release gate:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records eight independent area
   reviews. Actual App/portable acceptance remains blocked: private Python,
-  reviewed input lock and portable toolchain marker are absent; App discovery
+  reviewed input locks and portable toolchain marker are absent; App discovery
   also leaves this copy. The [owner checklist](RELEASE_PATH_B.md) requires a
-  responsive actual App through the exact package's `Tekken4.cmd`, normal
+  responsive App through the exact package's actual `Tekken4.cmd`, normal
   exit/reopen, settings retention, licence cancel/accept and build/play/return.
   Actual starter refusal, both 23-tool catalogs and three readiness cases
-  passed here; normal readiness remains 2 / BLOCKED. No production or test
-  code changed. The App never started; no new source test proves it.
-  Latest supplied draft `5b921f859f`: clean 165-second build
-  `943fc4631acf2c13`, finished `2026-11-02T08:17:22`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 52.0/52.0 FPS, stalls 0/69
-  (0/2195 ms), displayed-frame p99 105.5/99.7 ms. Not reproduced here;
+  passed; normal readiness remains 2 / BLOCKED. No production or test code
+  changed. The App never started; source checks cannot prove App acceptance.
+  Latest supplied draft `c3dc860555`: clean 208-second build
+  `943fc4631acf2c13`, finished `2026-11-02T08:32:52`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.3/52.3 FPS, stalls 0/84
+  (0/2556 ms), displayed-frame p99 107.9/97.7 ms. Not reproduced here;
   complete-package, enabled GUI profile and two-PC proof remain absent.
   Owner next: supply the exact reviewed complete candidate, corresponding
   source and locked inputs/notices, then run that checklist. Full content,

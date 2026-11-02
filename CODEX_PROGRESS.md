@@ -1,5 +1,73 @@
 # T4 beta progress, 2026-11-02
 
+## Release gate and supplied verification c3dc860555
+
+Release remains **NO-GO**. The most valuable open item is actual App startup
+and portable first-run through the exact complete package. This copy lacks
+private Python, reviewed input locks and the portable toolchain marker.
+App construction starts ISO discovery outside this tree. No production or
+test code changed; another source-only pass cannot close that gate.
+
+Done:
+
+- Actual [starter-refusal entry](tools/test_launcher_entry.ps1): test exit 0
+  solely for real `Tekken4.cmd` exit 1, missing private Python. Empty stderr;
+  four checked source hashes unchanged. The App never started. Evidence:
+  `logs/launcher-c3-670dd393fdce489eb15fd18967fdacfb/`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1) passed both
+  23-tool catalogs and three root files. Actual
+  [readiness tests](tools/test_online_readiness.ps1) passed three checker
+  subprocess cases; normal readiness remains 2 / BLOCKED. Empty stderr;
+  ten checked hashes unchanged. Evidence:
+  `logs/tests-catalogs-c3-bbbc34b8c70e4165b75714c0646458db/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `c3dc860555`:
+  clean 208-second build `943fc4631acf2c13`, finished `2026-11-02T08:32:52`;
+  OFF selftest 202 good restores, zero bad, 447 resim comparisons with zero
+  mismatches, all 101 wrong-input passes diverged. OFF same-PC pair: 6000
+  frames, 199 hashes each, zero mismatches/NETDESYNC, 52.3/52.3 FPS,
+  stalls 0/84 (0/2556 ms), displayed-frame p99 107.9/97.7 ms.
+  Supplied, not reproduced here; no App, enabled GUI-profile or two-PC proof.
+  Actual readiness checked both documents / 18 links: exit 2 / BLOCKED,
+  empty stderr, eight checked hashes unchanged. Evidence:
+  `logs/verify-c3-4412e954cbfe4e0f8e9f92a661333bf9/strict-rerun/`.
+  The initial capture used one absent hash-list filename; it is retained as
+  a preliminary capture, superseded by the strict rerun.
+- Independent portable, privacy/source, licence, effective-profile and entry
+  coverage reviews found no justified executable local fix. The three old
+  ZIPs lack the actual App/private Python; member-name inspection alone
+  proves no content safety. The existing [owner checklist](docs/RELEASE_PATH_B.md)
+  already requires responsive App, process identity, normal exit/reopen,
+  settings retention, licence cancel/accept and build/play/return.
+
+Open: complete source/player content and privacy/licence review, Python
+suites, actual App/portable acceptance, enabled GUI Host/Join profile and two
+physical PCs. Scanner limits remain failed termination, interruption within
+one write and unobserved descendants. Retained fixture findings and incomplete
+archives remain failures. Unchanged aggregates and whole-tree beta checks
+were not rerun. No GUI, Python suite, packager, build, game or network helper ran.
+
+Owner-only next step: supply the exact reviewed complete candidate, ZIP hash,
+matching corresponding source and reviewed input locks/notices, then run its
+actual `Tekken4.cmd` using the checklist in the authorized validation
+environment. Supplying only Python cannot establish portable acceptance.
+Then prove integrated launcher, exact build/game, selected GUI profile and
+sound-on play on two physical PCs.
+
+Eight area agents: `launcher_entry_c3`, `portable_candidate_c3`,
+`tests_catalogs_c3`, `supplied_verify_c3`, `source_privacy_c3`,
+`licence_inputs_c3`, `effective_profile_c3`, `entry_gap_c3`.
+Separate final reviewer: `final_diff_review_c3`. File ownership was exclusive.
+Root's actual readiness entry checked all four changed documents / 167 local
+links, 12 required files and seven PowerShell parses, then catalogs and real
+starter refusal: exit 2 / BLOCKED, empty stderr, eight source hashes unchanged.
+Evidence: `entry-result.json` and `entry-stdout.txt` in the root folder below.
+Root owns this record and `docs/status.md`; saved originals/source inventory
+and final review evidence are under
+`logs/release-c3-a6feda85fa234984ab36984c68be6e41/`.
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification 5b921f859f, current session
 
 Release remains **NO-GO**. The most valuable open item is the exact complete
