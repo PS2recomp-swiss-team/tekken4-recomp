@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02 (App still unrun; supplied draft c7f83cf8a0; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft e6b8a2550c; NO-GO)_
 
 ## Resume here
 
@@ -14,12 +14,12 @@ _Last updated: 2026-11-02 (App still unrun; supplied draft c7f83cf8a0; NO-GO)_
   cancel/accept and build/play/return. Actual starter refusal, both 23-tool
   catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
   No production or test code changed. The App never started.
-  Latest supplied draft `c7f83cf8a0`: clean 189-second build
-  `943fc4631acf2c13`, finished `2026-11-02T09:21:01`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 48.2/48.2 FPS, stalls 0/146
-  (0/6403 ms), displayed-frame p99 162.8/117.3 ms. Negotiated delay changed
-  from 2 to 3. Cause and usable pacing remain unproved. Supplied, not
-  reproduced here; no App, enabled GUI-profile or two-PC acceptance.
+  Latest supplied draft `e6b8a2550c`: clean 193-second build
+  `943fc4631acf2c13`, finished `2026-11-02T09:33:49`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 47.7/47.7 FPS, stalls 0/150
+  (0/6526 ms), displayed-frame p99 172.2/122.3 ms. Cause and usable pacing
+  remain unproved. Supplied, not reproduced here; no App, enabled
+  GUI-profile or two-PC acceptance.
   Owner next: provide the reviewed complete candidate, matching complete
   source and locks/notices, then run the existing checklist in the authorized
   environment. Full content/privacy/licence, Python suites and exact

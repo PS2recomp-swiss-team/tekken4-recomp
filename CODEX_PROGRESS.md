@@ -1,5 +1,83 @@
 # T4 beta progress, 2026-11-02
 
+## Release gate and supplied verification e6b8a2550c
+
+Release remains **NO-GO**. Actual App startup and portable first-run through
+an exact complete candidate remain the most valuable open item. Sixteen
+area agents found no justified fix that can be exercised here. Private
+Python, reviewed locks and the portable toolchain marker are absent; App
+initialization discovers ISO candidates outside this permitted tree. No
+production or test code changed. More source checks cannot prove startup.
+
+Done:
+
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1): test exit 0
+  for real `Tekken4.cmd` exit 1, missing private Python; empty stderr and
+  four source hashes unchanged. App never started. Evidence:
+  `logs/launcher-e6-d4b39fff61694596bfbe262c607e9b5e/`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1): both 23-tool
+  catalogs and three root files passed. Actual
+  [readiness tests](tools/test_online_readiness.ps1): three real subprocess
+  cases passed; normal readiness stayed 2 / BLOCKED. Empty stderr and ten
+  source hashes unchanged. Evidence:
+  `logs/tests-catalogs-e6-1a25d926dfb846cb87f2ed55422bae1f/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `e6b8a2550c`:
+  clean 193-second build `943fc4631acf2c13`, finished `2026-11-02T09:33:49`.
+  OFF selftest: 202 good restores, zero bad; 447 resim comparisons, zero
+  mismatches; all 101 wrong-input passes diverged. OFF same-PC pair: 6000
+  live/logical frames and 199 hashes each, zero mismatches/NETDESYNC,
+  47.7/47.7 FPS, stalls 0/150 (0/6526 ms), displayed-frame p99
+  172.2/122.3 ms. Supplied, not reproduced here; no App, enabled GUI-profile
+  or two-PC acceptance. The summaries establish no cause or usable pacing.
+  Actual readiness checked both documents / 18 links: exit 2 / BLOCKED,
+  empty stderr, eight source hashes unchanged. Strict evidence and originals:
+  `logs/supplied-e6-5e7a4838de9042ce822cabcd4a9374f4/`.
+- Independent area reviews confirmed the existing
+  [owner checklist](docs/RELEASE_PATH_B.md) already requires the real App's
+  responsiveness/process identity, normal exit/reopen/settings, licence
+  cancel/accept and build/play/return. Launcher-pad navigation remains
+  unimplemented. The three old incomplete ZIPs are not complete candidates.
+  No duplicate scanner suite or speculative production fix was added.
+
+Open: actual App/portable acceptance, complete source/player content and
+privacy/licence review, Python suites, enabled GUI Host/Join profile and two
+physical PCs with sound-on usable pacing. Fullscreen inheritance and offline
+spawn-failure log cleanup remain source observations, not reproduced defects.
+Scanner limits remain failed termination, interruption inside one write and
+unobserved descendants. Retained fixture findings and incomplete archives
+remain failures. Unchanged long aggregates and whole-tree beta checker were
+not rerun.
+
+Owner-only next step: supply the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices; run its actual
+`Tekken4.cmd` with the existing checklist in the authorized validation
+environment. Observe responsive App, normal exit/reopen/settings and licence
+cancel/accept, then portable first-run/build/play/return. Python alone is
+insufficient. Exact build/game, shared-launcher integration, enabled GUI
+profile and two-PC acceptance still need real proof. GUI, Python suites,
+packagers, build, game and network helpers stayed **UNRUN here**. A same-PC
+pair does not replace two PCs.
+
+Sixteen area agents: `launcher_entry_e6`, `tests_catalogs_e6`,
+`supplied_verify_e6`, `portable_candidate_e6`, `python_tk_e6`,
+`settings_process_e6`, `controller_ui_e6`, `offline_flow_e6`,
+`licence_inputs_e6`, `source_privacy_e6`, `player_payload_e6`,
+`corresponding_source_e6`, `effective_profile_e6`, `two_pc_pacing_e6`,
+`scanner_gaps_e6`, `integrated_launcher_e6`.
+Separate final reviewer: `final_diff_review_e6`. File ownership was exclusive.
+Root owns this record and `docs/status.md`; original bytes and 347-file scoped
+inventory are in `logs/release-e6-8d77018f623f4469bc8bfb35be9f5007/`.
+Combined readiness capture and independent review belong under that folder's
+`strict-final/` and `final-review/`; only their completed results count as proof.
+Initial combined capture failed inventory-array handling after the checker ran;
+its `final-entry/` is retained as invalid. Launcher harness filename failure
+and supplied-document setup/exit
+capture failures are retained as invalid evidence, never passing proof.
+
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification c7f83cf8a0
 
 Release remains **NO-GO**. The most valuable open item is still actual App
