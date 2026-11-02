@@ -1,29 +1,29 @@
 # Status
 
-_Last updated: 2026-11-02 (App still unrun; supplied draft 323f76204d; NO-GO)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft f74cffb3f8; NO-GO)_
 
 ## Resume here
 
 - **Current release gate:**
-  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records sixteen independent area
-  reviews and separate final diff review. Actual App/portable acceptance
-  remains blocked: private Python, reviewed locks and portable toolchain marker
-  are absent; App discovery also leaves this permitted tree. The
-  [owner checklist](RELEASE_PATH_B.md) requires the exact complete candidate's
-  responsive App, process identity, exit/reopen, retained settings, licence
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records sixteen independent areas
+  and a separate final diff reviewer. Actual App/portable acceptance remains
+  blocked: private Python, reviewed locks and portable toolchain marker are
+  absent; App discovery also leaves this permitted tree. The existing
+  [owner checklist](RELEASE_PATH_B.md) requires exact candidate identity,
+  responsive actual App, process identity, exit/reopen/settings, licence
   cancel/accept and build/play/return. Actual starter refusal, both 23-tool
-  catalogs and three readiness cases passed; normal readiness remains
-  2 / BLOCKED. No production or test code changed. The App never started.
-  Latest supplied draft `323f76204d`: clean 165-second build
-  `943fc4631acf2c13`, finished `2026-11-02T08:45:55`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 43.6/43.6 FPS, stalls 209/0
-  (4757/0 ms), displayed-frame p99 129.8/126.7 ms. FPS fell and p99 rose
-  against the preceding supplied summary; cause is unproved. Not reproduced
-  here; clean hashes do not close pacing, complete-package, enabled GUI-profile
-  or two-PC acceptance. Owner next: provide the exact reviewed complete
-  candidate, corresponding source and locked inputs/notices, then run the
-  checklist in the authorized environment. Full content/privacy/licence,
-  Python suites and exact build/game acceptance remain open.
+  catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
+  No production or test code changed. The App never started.
+  Latest supplied draft `f74cffb3f8`: clean 251-second build
+  `943fc4631acf2c13`, finished `2026-11-02T09:03:54`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 47.6/47.6 FPS, stalls 0/144
+  (0/6256 ms), displayed-frame p99 162.5/123.3 ms. FPS rose against the
+  preceding supplied report; host p99 rose while join p99 fell. Cause and
+  usable pacing remain unproved. Supplied, not reproduced here; no App,
+  enabled GUI-profile or two-PC acceptance. Owner next: provide the reviewed
+  complete candidate, matching complete source and locks/notices, then run
+  the existing checklist in the authorized environment. Full content/privacy/
+  licence, Python suites and exact build/game acceptance remain open.
 
 - **Earlier launcher acceptance gate and evidence completion:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal

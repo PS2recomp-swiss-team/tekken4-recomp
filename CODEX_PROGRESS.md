@@ -1,5 +1,88 @@
 # T4 beta progress, 2026-11-02
 
+## Release gate and supplied verification f74cffb3f8
+
+Release remains **NO-GO**. The most valuable open item is the exact complete
+package's actual App startup and portable first-run. Sixteen independent
+areas found no justified fix that can be tested here. Private Python, reviewed
+input locks and the portable toolchain marker are absent; App initialization
+starts ISO discovery outside this permitted tree. No production or test code
+changed. Another scanner pass cannot establish App acceptance.
+
+Done:
+
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1): test exit 0
+  solely for real `Tekken4.cmd` exit 1, missing private Python. Empty stderr;
+  four source hashes unchanged. The App never started. Evidence:
+  `logs/launcher-f74-138b5e96f27448f681f59fd198dce247/`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1): both 23-tool
+  catalogs and three root files passed. Actual
+  [readiness tests](tools/test_online_readiness.ps1): three real checker
+  subprocess cases passed; normal readiness stayed 2 / BLOCKED. Empty stderr;
+  ten checked hashes unchanged. Evidence:
+  `logs/tests-catalogs-f74-dc61840f53f04bc691622b7f61341689/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `f74cffb3f8`:
+  clean 251-second build `943fc4631acf2c13`, finished `2026-11-02T09:03:54`.
+  OFF selftest: 202 good restores, zero bad, 447 resim comparisons with zero
+  mismatches, all 101 wrong-input passes diverged. OFF same-PC pair: 6000
+  live/logical frames and 199 hashes each, zero mismatches/NETDESYNC,
+  47.6/47.6 FPS, stalls 0/144 (0/6256 ms), displayed-frame p99 162.5/123.3 ms.
+  Supplied, not reproduced here. FPS rose from the preceding supplied report;
+  host p99 rose while join p99 fell. These summaries establish neither cause
+  nor usable pacing. Actual readiness checked both changed documents / 18
+  local links: exit 2 / BLOCKED, empty stderr, eight checked hashes unchanged.
+  Originals and evidence:
+  `logs/supplied-f74-4a82181afa3d4006b0191c30d00ade91/`.
+- Independent portable, Python/Tk, settings/process, controller, offline flow,
+  licence, privacy, player payload, corresponding-source, effective-profile,
+  two-PC, scanner-gap and integrated-launcher reviews found no new executable
+  local fix. Existing [owner acceptance](docs/RELEASE_PATH_B.md) already
+  requires actual responsive App/process identity, exit/reopen/settings,
+  licence cancel/accept and build/play/return. In-game controls do not prove
+  launcher-pad navigation, which remains unimplemented. Old incomplete ZIPs
+  and name inspection cannot establish content safety or portable acceptance.
+
+Open: actual App/portable acceptance, complete source/player content and
+privacy/licence review, Python suites, enabled GUI Host/Join profile and two
+physical PCs. Fullscreen inheritance and offline spawn-failure log cleanup
+remain source observations, not reproduced fixes. Scanner limits remain failed
+termination, interruption inside one write and unobserved descendants. Retained
+fixture findings and incomplete archives remain failures. Unchanged long
+aggregates and the whole-tree beta checker were not rerun.
+
+Owner-only next step: supply the exact reviewed complete candidate, ZIP hash,
+matching complete source and reviewed locks/notices; run its actual
+`Tekken4.cmd` in the authorized validation environment using the existing
+checklist. Observe responsive App, normal exit/reopen/settings, then portable
+first-run/build/play/return. Python alone is insufficient. Exact build/game,
+shared-launcher integration, enabled GUI profile, sound-on usable pacing and
+two physical PCs still need real proof. GUI, Python suites, packagers, build,
+game and network helpers stayed **UNRUN here**.
+
+Sixteen area agents: `launcher_entry_f74`, `tests_catalogs_f74`,
+`supplied_verify_f74`, `portable_candidate_f74`, `python_tk_f74`,
+`settings_process_f74`, `controller_ui_f74`, `offline_flow_f74`,
+`licence_inputs_f74`, `source_privacy_f74`, `player_payload_f74`,
+`corresponding_source_f74`, `effective_profile_f74`, `two_pc_pacing_f74`,
+`scanner_gaps_f74`, `integrated_launcher_f74`.
+Separate final reviewer: `final_diff_review_f74`. File ownership was exclusive.
+Root owns this record and `docs/status.md`; saved original bytes/hashes and
+the 347-file scoped inventory are in
+`logs/release-f74-9e7f6ffe13394aa585c099d4aa2d5bec/`.
+Root's actual readiness entry checked four documents / 179 local links,
+12 required files and seven parses, then catalogs and real starter refusal:
+exit 2 / BLOCKED, empty stderr, all 347 scoped hashes unchanged.
+The root's strict readiness capture is under that folder's `strict-final/`;
+the separate review capture is under `final-review/`. These are source and
+starter-refusal checks, never App acceptance. The initial `final-entry/`
+capture had invalid inventory array handling and module progress on stderr;
+it is retained as failed capture evidence, not passing proof. A later harness
+attempt stopped at an existing evidence directory before the checker ran.
+
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Release gate and supplied verification 323f76204d
 
 Release remains **NO-GO**. The most valuable open item is the exact complete
