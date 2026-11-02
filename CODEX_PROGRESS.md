@@ -1,5 +1,47 @@
 # T4 beta progress, 2026-11-02
 
+## Next action remains the first exercised catchup verify
+
+Done this continuation: 24 read-only area agents checked independent runtime,
+evidence and test paths. No paired runtime logs were found: all 14 retained
+latest-verify/runtime/release-b13 evidence directories have zero .log files.
+The supplied existing-name refusal launched no pair. Input arrival times,
+sustained advantage and actual wait ordering are still unknown.
+
+No new runtime edit or test pass is claimed. The pending default-off catchup
+experiment already changes the requested runtime path. Its hypothesis remains
+that discarding all late deadline debt keeps a slow sender behind, while its
+ahead peer predicts further and waits. Source supports the mechanism, not its
+causal role. Adding another unrun change would not answer this question.
+
+Open / owner-only: preserve existing output and use a fresh unused verify name.
+Stage the pending working-tree runtime, build and regenerate identity, then
+test the same new build OFF and ON. input_build.cmd stages committed HEAD;
+that route can omit the pending edit. The actual outer verify route is absent.
+An unchanged ID fits stale staging or a stale stamp but proves neither.
+Require an ID different from 943fc4631acf2c13 AND both ON peers' literal
+activation plus nonzero NETREBASE_CATCHUP rebases. VERIFY_ENV.txt stays:
+TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
+Pass through common -Env, keeping diagnostics and every other setting equal
+in both arms. Retain full paired logs and effective params. Compare sustained
+lead, sender gaps, frontier progress, actual waits and absolute rollback/resim
+work with pacing. Lower ratios or rebase totals alone do not prove improvement.
+
+Compilation, selftest and real OFF/ON runtime entry remain UNRUN: AGENTS.md
+forbids the required build/game/network entries here. The tests/catalog agent
+confirmed selftest and catalog checks do not execute the live pacing guard.
+No substitute green check was run. Only this progress record changed.
+
+Area agents: pair_logs_now, catchup_math_now, sync_order_now, advantage_now,
+arrival_now, vblank_now, polling_now, prediction_now, roles_now, resim_now,
+resend_now, switch_route_now, tests_catalogs_now, build_identity_now,
+clock_domains_now, simulation_now, sampling_now, catchup_telemetry_now,
+state_ring_now, mismatch_now, coalescing_now, diagnostic_lock_now,
+frontier_refresh_now, falsification_now. Separate final reviewer:
+final_diff_review_now. All agents are read-only; root alone edits this record.
+No Git command, outside-tree read, deletion, patch edit, build, game, forbidden
+helper, server, push or release ran this continuation.
+
 ## Current refusal: stage the pending runtime before the next verify
 
 Done: 24 read-only area agents checked independent runtime/evidence paths.
