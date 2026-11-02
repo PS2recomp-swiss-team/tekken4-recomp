@@ -1,10 +1,10 @@
 # Status
 
-_Last updated: 2026-11-02 (concrete launcher handoff; release remains NO-GO)_
+_Last updated: 2026-11-02 (launcher still unrun; supplied draft 363433d330; NO-GO)_
 
 ## Resume here
 
-- **Current concrete launcher acceptance handoff:**
+- **Current launcher gate recheck:**
   [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) resumes the actual App/portable
   gate. The [clean-PC checklist](RELEASE_PATH_B.md) now requires a visible
   responsive App through the exact package's actual `Tekken4.cmd`, observed
@@ -13,10 +13,10 @@ _Last updated: 2026-11-02 (concrete launcher handoff; release remains NO-GO)_
   launcher results stay separate. Real starter refusal, both 23-tool catalogs
   and three readiness cases passed here; normal readiness remains 2 / BLOCKED.
   No production or test code changed. Source checks cannot prove App startup.
-  Latest supplied draft `a3a7ec6862`: clean 165-second build
-  `943fc4631acf2c13`, finished `2026-11-02T07:45:38`; OFF same-PC pair,
-  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/94
-  (0/3439 ms), displayed-frame p99 118.8/99.0 ms. This was not reproduced
+  Latest supplied draft `363433d330`: clean 165-second build
+  `943fc4631acf2c13`, finished `2026-11-02T08:02:46`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/79
+  (0/2843 ms), displayed-frame p99 119.6/100.0 ms. This was not reproduced
   here and proves neither the exact package, enabled GUI profile nor two PCs.
   Private Python and reviewed portable inputs are absent; App ISO discovery
   also leaves this copy. Full source/player/privacy/licence review, Python

@@ -1,6 +1,86 @@
 # T4 beta progress, 2026-11-02
 
-## Concrete launcher acceptance handoff, current session
+## Launcher gate recheck and supplied verification 363433d330, current session
+
+Release remains **NO-GO**. The most valuable open item is still the exact
+complete package's actual App startup and portable first-run. The real
+starter refused missing private Python again; the GUI never started. This
+copy cannot close that item: reviewed portable inputs are absent, and App
+startup searches outside the permitted tree. No production or test code
+changed. No new passing scanner test is presented as launcher evidence.
+
+Done:
+
+- Actual [starter-refusal test](tools/test_launcher_entry.ps1): exit 0 only
+  for real `Tekken4.cmd` exit 1, missing private Python. Empty stderr; five
+  source hashes unchanged. Evidence:
+  `logs/launcher-gate-proof-7c125f2836554db7a47a8778ba21e8aa/`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1): both 23-tool
+  catalogs and three root files passed. Actual
+  [readiness tests](tools/test_online_readiness.ps1): three checker subprocess
+  cases passed; normal readiness remains 2 / BLOCKED. Empty stderr; ten
+  source hashes unchanged. Evidence:
+  `logs/release-tests-catalogs-current-33deffc4557549d2a03bd33f2ff99225/`.
+- Actual readiness link-boundary entries: clean local link returned
+  2 / BLOCKED after catalog/starter entries; missing and outside-tree local
+  links returned 1 before child entries. All three stderr streams were empty;
+  eight source hashes stayed unchanged. No source defect was found. Evidence:
+  `logs/readiness-link-boundary-8432ef7523cb4dcd85fd3cee37c6fc6f/direct-file/`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md) and the
+  [decision sheet](docs/BETA_GO_NO_GO.md) with supplied draft `363433d330`:
+  clean 165-second build `943fc4631acf2c13`, finished `2026-11-02T08:02:46`;
+  OFF selftest 232 good restores, zero bad, 514 comparisons with zero
+  mismatches, all 116 wrong-input passes diverged. OFF same-PC pair: 6,000
+  frames, 199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS,
+  stalls 0/79 (0/2843 ms), displayed-frame p99 119.6/100.0 ms. Supplied,
+  not reproduced here; no exact package, enabled GUI profile or two-PC proof.
+  Actual readiness checked these two documents / 18 links, then catalogs and
+  starter refusal: exit 2 / BLOCKED, empty stderr, edited hashes unchanged.
+  Originals and evidence:
+  `logs/latest-verify-363-4636b2c90ce548b0b8285383050a4cc7/`.
+- Independent tree/ZIP reviews found no justified new watchdog test. Actual
+  deadlines and worker death already have entry coverage. The outer watchdog
+  belongs to the test harness; forcing it would not prove launcher startup.
+  Failed termination, interruption inside one write and unobserved descendants
+  remain unproved. No duplicate suite or production instrumentation was added.
+
+Open: actual App/portable acceptance, complete source/player/privacy/licence
+review, Python suites and the scanner gaps above. Long unchanged aggregates
+and the whole-tree beta checker were not rerun. Retained fixture findings and
+incomplete archives remain failures.
+
+Root's actual readiness entry checked all four changed documents / 155 local
+links, 12 required source files and seven PowerShell parses, then ran catalogs
+and actual starter refusal. Exit 2 / BLOCKED, empty stderr, eight checked
+hashes unchanged. Evidence: the root session's `entry-result.json` and
+`entry-stdout.txt` below. This verifies document links and source/refusal
+checks only; it supplies no App acceptance.
+
+Only the owner can supply the exact reviewed complete candidate and run its
+actual `Tekken4.cmd` in the authorized validation environment: observe a
+responsive App, normal close/reopen and retained settings, then licence
+cancel/accept and portable build/play/return. Exact build/game, integrated
+launcher, enabled GUI Host/Join profile and two physical PCs still need proof.
+No GUI, Python suite, build, game or network helper ran here.
+
+Eight area agents: `tree_watchdog_entry`, `zip_watchdog_entry`,
+`launcher_gate_proof`, `portable_candidate_scope`, `tests_catalogs_current`,
+`latest_verify_evidence`, `readiness_boundary_entry`, `licence_source_release`.
+Separate final reviewer: `final_diff_review_363` found no blocker in the four
+document changes. All four saved original hashes matched. The scoped 348-file
+inventory had unchanged names and only the two expected root-owned documents
+differed from the post-evidence snapshot; the historical progress tail was
+unchanged. Its independent actual readiness entry checked four documents /
+155 links, 12 required files and seven parses, then catalogs and starter
+refusal: exit 2 / BLOCKED, empty stderr, all 348 source hashes unchanged.
+Evidence: `logs/final-review-363-2651acf06a3340ac9c30b31a4d4ed047/`.
+File ownership was exclusive. Root owns this record and `docs/status.md`;
+originals and the 348-file source snapshot are in
+`logs/release-gate-363-b189dd9bc7fd47199c206e64178f991b/`.
+No Git command, deletion, build, game, forbidden helper, server, push or
+release ran here.
+
+## Earlier concrete launcher acceptance handoff
 
 Release remains **NO-GO**. Actual complete-package App startup and portable
 first-run are still the most valuable open item. This copy lacks private
