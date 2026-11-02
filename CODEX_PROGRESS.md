@@ -1,5 +1,133 @@
 # T4 beta progress, 2026-11-02
 
+## Current: test continuous correction of whole-frame lead
+
+Latest supplied verify finished 2026-11-02T23:20:40, build in 180 seconds,
+build ID f682731375e32a72. The unchanged-ID concern is superseded.
+SUBFRAME_SYNC acted: host/join 6/7 fractional corrections, 90.968 ms requested
+and 91.137 ms actual combined. Yet join still had 940 rollbacks, 3667 replay
+frames and 5809 ms stall+sync waits. OFF/ON combined rollback 1453 -> 1251,
+replay 5324 -> 4297, but join/host rollback ratio 2.20 -> 3.02 and combined
+stall+sync time 5506 -> 5851 ms. Delay changed 2 -> 3, so these differences
+cannot isolate SUBFRAME_SYNC. Small fractional deadband is weakened as the
+main explanation. No prior experiment becomes a default. SELFTEST does not
+enter npBoundary and cannot prove its timing policies.
+
+Done: 24 independent area agents read source/evidence. Eight .log files in
+this tree are scanner/catalog output; there are no chronological host/join
+runtime or transport pair logs. No outside-tree location was opened. Unique
+input first-arrival times, sampled advantage chronology and first-wait order
+remain unknown. Summaries cannot establish why one side rolls back more.
+Rebase gaps again match unequal waits: OFF 5400 versus 5406 ms; ON 5741
+versus 5767 ms. No fixed role policy, sign or counting defect was established.
+The ahead side can retain more prediction exposure, while replay delays its
+next fresh input, but the initiating event is not known. Prior lead metadata,
+filter/refill, early, headroom, rebase, send, flush and startup experiments
+are not repeated. Generic earlier references to a gain experiment were
+inaccurate: no documented correction-duration experiment was found.
+
+One new hypothesis: the whole-frame controller's correction quantization
+sustains residual producer lead or overshoots it. For 1 <= adv < 2.5 it gives
+only one frame; above that it rounds and caps at four. Latest join made 92
+total sync corrections but only seven fractional ones; the actual whole-frame
+advantage distribution was not supplied. This is a bounded source hypothesis,
+NOT a measured explanation or a tested fix. Delayed/noisy estimates can make
+continuous correction worse too.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind default-off literal
+TEKKEN4_NET_FULL_SYNC=1. Only for filtered adv >= 1, request
+min(4.0, adv) * 16667 microseconds, truncated to integer microseconds. OFF
+keeps the exact old correction duration. The settling hold rounds the chosen
+microseconds up to whole frames, then adds the existing RTT allowance and two
+frames. Thus the experiment changes duration AND its derived settling hold.
+For example adv=2.0 changes 16667 -> 33334 us; adv=2.75 changes 50001 ->
+45834 us. Cap four, 20-sample trimming, startup exclusion, ten-live-frame gap
+and once-per-live-frame/replay guard remain. SUBFRAME_SYNC independently
+controls adv < 1 and must be off in this comparison. No guest state, input,
+transport, prediction limit or snapshot policy was changed.
+
+Both arms append NETFULLSYNC to the retained NETSUMMARY line: full_sync,
+time_sync, eligible_actions, actions, changed_actions, requested_ms, legacy_ms,
+actual_ms, last_eligible_f/adv. Eligible means an actual >=1 correction
+opportunity where the candidate duration differs from legacy; actions counts
+ALL >=1 corrections in either arm, changed_actions only executed differences.
+Last eligible values refer to that opportunity, not final frame. Requested
+and legacy totals cover actual >=1 actions, excluding subframe corrections.
+Actual time includes any wait to liveT and shift overhead, not isolated sleep.
+Both arms emit NETFULLSYNC_EVENT per >=1 correction with common steady-clock
+start/end, slot, f, adv, selected/legacy/candidate us, hold frames, window,
+samples and remote frontier before/after. The after-action frontier is queried
+during event formatting, after NETTS, rather than atomically at sleepEnd.
+NETTS reports selected fractional frames truthfully. Under common DIAG=1,
+NETWAIT_EVENT records prediction and
+lockstep wait start/end, slot, frame, decision frontier, result, need, time and
+peer-loss state. The decision frontier may predate a sync sleep; it is not a
+unique input-arrival timestamp. These diagnostics add equal code paths in
+both arms; their overhead is not claimed to be zero. No per-input first-arrival
+telemetry was added, and it cannot be reconstructed from these events.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_FULL_SYNC=1
+
+Open / owner-only real-entry test: stage/build these exact runtime bytes,
+refresh identity, and run the actual paired Mode::Net game OFF/ON through
+the external verify wrapper. The wrapper must forward the file through -Env;
+net_pair itself does not read it. Explicit common settings in BOTH arms:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+Keep RBSTART=600, TIMESYNC=1, the normal 20-sample window and RB_MODE unset/net.
+All unrelated experiments equal/off, including SUBFRAME_SYNC and FAST_SYNC.
+Do not put common settings only in this ON-only environment file. Retain both
+full rb_frames and transport logs, params, stdout/stderr, staged runtime and
+executable SHA-256 hashes and build ID. Identity hashes staged inputs rather
+than the executable; the text ID alone does not prove those bytes ran.
+
+Require OFF full_sync=0, changed_actions=0, selected us == legacy us; ON literal
+activation, full_sync=1, time_sync=1, changed_actions>0 and matching events
+with selected us == candidate us, adv>=1, 16667<=give_us<=66668, window=20,
+hold_frames=ceil(give_us/16667). ON eligible_actions must equal changed_actions;
+a peer can legitimately have no eligible actions. No changed actions leaves
+the hypothesis untested. Compare event advantage distribution, repeated lead
+and which peer waits, then absolute aggregate replay/depth, combined waits,
+FPS and frame tails. Require meaningful workload improvement, not a better
+ratio from making the other peer worse. If substantial changed actions occur
+without less persistent lead/burden, the hypothesis weakens. Require zero
+hash mismatches/NETDESYNC and full logs. Repeat same-role runs, then role swaps
+and two physical PCs. Simulator draws follow datagram counts, so equal seeds
+do not provide identical per-frame loss/jitter between arms.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1 once,
+exit 0: both 23-tool catalogs, three root inputs and Host/Join dependencies
+present. Inventory only. No new source test/model/mock is runtime evidence.
+Compilation, literal activation, timing behavior, replay safety, input-arrival
+chronology and performance remain UNRUN here: AGENTS.md forbids builds,
+games and tools/net_* execution. No changed runtime entry ran. This candidate
+has NOT met the user's real-entry test requirement; the required test is
+owner-only and release acceptance remains open.
+
+Original bytes of all three edited files are retained under
+logs/runtime-full-sync/originals. Root alone edits; area agents are read-only.
+No Git command, outside-tree read, deletion, patch change, build, game,
+forbidden helper, server, push or release was used.
+
+Area agents: pair_logs, verify_metrics, timesync_estimate, timesync_filter,
+prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+experiment_gate independently assessed the proposed policy and found no
+source-design blocker, while requiring actual changed actions and real proof.
+Separate final reviewer: final_diff_review_full_sync completed the three-file
+diff against retained originals with no blocking source issue. It checked OFF
+duration/hold equivalence, bounded ON duration/hold, live/replay guards,
+counter/event semantics, format arguments, summary retention, exact env bytes
+and retained progress history. It highlighted that the after-action frontier
+is not atomic with the captured wait endpoint; this is documented above.
+Root also checked LF-only runtime bytes, exact environment bytes and preserved
+progress suffix bytes. These are source/integrity checks, not runtime proof.
+
+# T4 beta progress, 2026-11-02
+
 ## Current: test the steady-state time-sync deadband
 
 Latest supplied verify: draft 627c87cafe, clean merge, 198-second build,

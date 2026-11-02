@@ -91,6 +91,7 @@
 // TEKKEN4_NET_BOOT_RENDEZVOUS=1  wait once for the peer's same-frame publication after boot prefill (default off).
 // TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
 // TEKKEN4_NET_SUBFRAME_SYNC=1  correct filtered leads of 0.25..<1 frame with fractional waits (default off).
+// TEKKEN4_NET_FULL_SYNC=1  give up the measured lead from 1 frame, capped at four, without whole-frame rounding (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
 // TEKKEN4_STATE_PROBE=1    read-only live-boundary discovery log (requires a rollback mode; docs/DIRECTFIGHT_T4.md).
@@ -1151,6 +1152,10 @@ namespace tekken4_rollback
         bool timeSync = true, localPad = true, dump = false, ended = false;
         bool fastSync = false;
         bool subframeSync = false;
+        bool fullSync = false;
+        // Whole-lead duration experiment; host-only opportunities/actions in both arms, never restored.
+        uint64_t fullSyncEvals = 0, fullSyncActions = 0, fullSyncChanged = 0, fullSyncLastFrame = 0;
+        double fullSyncRequestedMs = 0, fullSyncLegacyMs = 0, fullSyncActualMs = 0, fullSyncLastAdv = 0;
         // Eligible filtered evaluations in both arms; actual fractional waits only with the switch on.
         uint64_t subframeEvals = 0, subframeCorrections = 0, subframeLastFrame = 0;
         double subframeMs = 0, subframeActualMs = 0, subframeLastAdv = 0;
@@ -1673,40 +1678,70 @@ namespace tekken4_rollback
         }
         if (adv < (g_np.subframeSync ? 0.25 : 1.0) || f - g_np.lastCorrection < 10u)
             return;
-        const int frames = adv >= 2.5 ? std::min(4, static_cast<int>(adv + 0.5)) : 1;
-        // Only the formerly ignored band gets a fractional wait. At adv >= 1 the legacy policy is retained.
-        // A fractional correction still uses one whole frame for the existing RTT settling hold below.
+        const int legacyFrames = adv >= 2.5 ? std::min(4, static_cast<int>(adv + 0.5)) : 1;
+        const auto legacyGive = kVblank * legacyFrames;
+        const auto fullGive = std::chrono::microseconds(static_cast<int64_t>(kVblank.count() * std::min(4.0, adv)));
+        // FULL_SYNC changes only adv >= 1. SUBFRAME_SYNC independently controls the formerly ignored band.
         const auto give = subframe
                               ? std::chrono::microseconds(static_cast<int64_t>(kVblank.count() * adv))
-                              : kVblank * frames;
-        const auto sleepStart = g_np.diag || subframe ? std::chrono::steady_clock::now()
-                                                    : std::chrono::steady_clock::time_point{};
+                              : (g_np.fullSync ? fullGive : legacyGive);
+        // Round the selected duration UP only for the RTT settling hold, never for the actual wait.
+        const int frames = static_cast<int>((give.count() + kVblank.count() - 1) / kVblank.count());
+        if (!subframe && fullGive != legacyGive)
+        {
+            ++g_np.fullSyncEvals; // Eligible correction opportunities, after every existing controller guard.
+            g_np.fullSyncLastFrame = f;
+            g_np.fullSyncLastAdv = adv;
+        }
+        const auto sleepStart = std::chrono::steady_clock::now();
         npSleepUntil(std::max(std::chrono::steady_clock::now(), g_np.liveT) + give);
         npShift(give);
+        const auto sleepEnd = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(give).count();
+        const double actual = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
+        if (!subframe)
+        {
+            ++g_np.fullSyncActions; // All >= 1-frame corrections in BOTH arms; changed only counts ON differences.
+            if (give != legacyGive)
+                ++g_np.fullSyncChanged;
+            g_np.fullSyncRequestedMs += ms;
+            g_np.fullSyncLegacyMs += std::chrono::duration<double, std::milli>(legacyGive).count();
+            g_np.fullSyncActualMs += actual;
+        }
         if (subframe)
         {
             ++g_np.subframeCorrections;
             g_np.subframeMs += ms;
-            g_np.subframeActualMs += msSince(sleepStart);
+            g_np.subframeActualMs += actual;
         }
         if (g_np.diag)
         {
-            const double actual = msSince(sleepStart);
             g_np.diagSyncActualMs += actual;
             g_np.diagSyncOverMaxMs = std::max(g_np.diagSyncOverMaxMs, actual - ms);
         }
         const int rtt = t4net::rttMs();
         g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u;
         if (!subframe)
-            std::fprintf(g_log, "NETTS f=%" PRIu64 " ahead %.2f frames: gave up %d frame(s) window=%d samples=%d gap=%" PRIu64 "\n",
-                         f, adv, frames, g_np.leadWindow, g_np.leadN, g_np.corrections ? f - g_np.lastCorrection : 0u);
+        {
+            std::fprintf(g_log, "NETTS f=%" PRIu64 " ahead %.2f frames: gave up %.3f frame(s) window=%d samples=%d gap=%" PRIu64 "\n",
+                         f, adv, static_cast<double>(give.count()) / kVblank.count(), g_np.leadWindow, g_np.leadN,
+                         g_np.corrections ? f - g_np.lastCorrection : 0u);
+            std::fprintf(g_log, "NETFULLSYNC_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d f=%" PRIu64
+                                " full_sync=%d adv=%.6f give_us=%" PRId64 " legacy_us=%" PRId64
+                                " candidate_us=%" PRId64 " hold_frames=%d window=%d samples=%d"
+                                " rc_before=%" PRIu64 " rc_after=%u\n",
+                         std::chrono::duration<double, std::milli>(sleepStart.time_since_epoch()).count(),
+                         std::chrono::duration<double, std::milli>(sleepEnd.time_since_epoch()).count(),
+                         g_np.slot, f, g_np.fullSync ? 1 : 0, adv, static_cast<int64_t>(give.count()),
+                         static_cast<int64_t>(legacyGive.count()), static_cast<int64_t>(fullGive.count()), frames,
+                         g_np.leadWindow, g_np.leadN, rc, t4net::remoteContig());
+        }
         if (subframe)
             std::fprintf(g_log, "NETSUBFRAME_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d f=%" PRIu64
                                 " adv=%.3f give_us=%" PRId64 " hold_frames=%d window=%d samples=%d"
                                 " rc_before=%" PRIu64 " rc_after=%u\n",
                          std::chrono::duration<double, std::milli>(sleepStart.time_since_epoch()).count(),
-                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                         std::chrono::duration<double, std::milli>(sleepEnd.time_since_epoch()).count(),
                          g_np.slot, f, adv, static_cast<int64_t>(give.count()), frames, g_np.leadWindow, g_np.leadN,
                          rc, t4net::remoteContig());
         if (g_np.leadN < NetplayState::kLeadWin)
@@ -1889,10 +1924,16 @@ namespace tekken4_rollback
                      g_np.rendezvousBefore, g_np.rendezvousAfter, g_np.rendezvousReady ? 1 : 0, g_np.rendezvousMs);
         std::fprintf(g_log, "; NETSUBFRAME subframe_sync=%d time_sync=%d eligible_evals=%" PRIu64
                             " corrections=%" PRIu64 " requested_ms=%.3f actual_ms=%.3f last_f=%" PRIu64
-                            " last_adv=%.3f\n",
+                            " last_adv=%.3f",
                      g_np.subframeSync ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.subframeEvals,
                      g_np.subframeCorrections, g_np.subframeMs, g_np.subframeActualMs,
                      g_np.subframeLastFrame, g_np.subframeLastAdv);
+        std::fprintf(g_log, "; NETFULLSYNC full_sync=%d time_sync=%d eligible_actions=%" PRIu64
+                            " actions=%" PRIu64 " changed_actions=%" PRIu64 " requested_ms=%.3f legacy_ms=%.3f"
+                            " actual_ms=%.3f last_eligible_f=%" PRIu64 " last_eligible_adv=%.6f\n",
+                     g_np.fullSync ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.fullSyncEvals, g_np.fullSyncActions,
+                     g_np.fullSyncChanged, g_np.fullSyncRequestedMs, g_np.fullSyncLegacyMs, g_np.fullSyncActualMs,
+                     g_np.fullSyncLastFrame, g_np.fullSyncLastAdv);
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
                          g_frame, g_np.catchupRebases, g_np.catchupDebtMs);
@@ -1993,7 +2034,9 @@ namespace tekken4_rollback
         if (g_np.bootRendezvous)
             std::fprintf(g_log, "NET TEKKEN4_NET_BOOT_RENDEZVOUS=1: one same-frame input wait after boot prefill; phase experiment, not a shared release clock\n");
         if (g_np.subframeSync)
-            std::fprintf(g_log, "NET TEKKEN4_NET_SUBFRAME_SYNC=1: fractional waits for filtered leads 0.25..<1 frame; legacy corrections from 1 frame\n");
+            std::fprintf(g_log, "NET TEKKEN4_NET_SUBFRAME_SYNC=1: fractional waits for filtered leads 0.25..<1 frame\n");
+        if (g_np.fullSync)
+            std::fprintf(g_log, "NET TEKKEN4_NET_FULL_SYNC=1: continuous measured lead from 1 frame, cap 4; settling hold rounds up\n");
     }
 
     void npBootRendezvous(uint64_t f)
@@ -2284,6 +2327,13 @@ namespace tekken4_rollback
                 g_np.stallMs += ms;
             }
             npShift(std::chrono::microseconds(static_cast<int64_t>(ms * 1000.0)));
+            if (g_np.diag)
+                std::fprintf(g_log, "NETWAIT_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d f=%" PRIu64
+                                    " lockstep=%d rc_before=%" PRIu64 " rc_after=%" PRIu64 " need=%" PRIu64
+                                    " wait_ms=%.3f peer_lost=%d\n",
+                             std::chrono::duration<double, std::milli>(t0.time_since_epoch()).count(),
+                             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                             g_np.slot, f, lockstep ? 1 : 0, rcBefore, rc, waitNeed, ms, t4net::peerLost() ? 1 : 0);
             if (ms > 200.0)
                 std::fprintf(g_log, "NET frame %" PRIu64 " waited %.0f ms for the peer's input up to %" PRIu64 " (%s)\n", f, ms,
                              waitNeed - 1u, lockstep ? "lockstep" : "prediction window");
@@ -2529,6 +2579,8 @@ namespace tekken4_rollback
             g_np.fastSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SUBFRAME_SYNC"))
             g_np.subframeSync = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_FULL_SYNC"))
+            g_np.fullSync = std::strcmp(v, "1") == 0;
         g_np.leadWindow = g_np.fastSync ? 8 : NetplayState::kLeadWin;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCKDELAY"); v && *v && std::strcmp(v, "auto") != 0)
             g_np.lockDelaySetting = std::max(0, std::min(kMaxLockDelay, std::atoi(v)));
