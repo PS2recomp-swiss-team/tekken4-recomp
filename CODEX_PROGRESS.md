@@ -1,5 +1,82 @@
 # T4 beta progress, 2026-11-02
 
+## Current blocker and supplied verification 19c0d67e5a
+
+Release remains **NO-GO**. The most valuable open item is actual App startup
+and portable first-run. Sixteen area agents checked its independent gates.
+The complete candidate, private Python/Tk, dependencies, reviewed locks/notices
+and portable marker remain absent. App initialization also discovers locations
+outside this permitted tree. No production or test code changed: no App fix
+could receive the required real-entry proof here. Another source audit or
+ordinary scanner fixture would not close this acceptance gate.
+
+Done:
+
+- Real [starter test](tools/test_launcher_entry.ps1): test exit 0, actual
+  `Tekken4.cmd` exit 1 for missing private Python. Empty stderr; three input
+  hashes unchanged. **The App never started.** Evidence:
+  `logs/launcher-19c0-b2d81c54d4cf4f07a44c89f226f7058a/summary.json`.
+- Actual [catalog checker](tools/check_online_catalogs.ps1) and
+  [readiness tests](tools/test_online_readiness.ps1): exit 0 each, empty
+  stderr, both 23-tool catalogs and three root inputs checked. Three real
+  checker subprocess cases passed; normal readiness remains 2 / BLOCKED.
+  Twelve source hashes unchanged. Evidence:
+  `logs/tests-catalogs-19c0-61d12e7dcef246b587a7da9b005e4ab9/summary.json`.
+- Updated [switch evidence](docs/ONLINE_SWITCH_EVIDENCE.md),
+  [decision sheet](docs/BETA_GO_NO_GO.md) and [status](docs/status.md) with
+  supplied draft `19c0d67e5a`, finished `2026-11-02T12:07:05`: clean
+  190-second build `943fc4631acf2c13`; OFF selftest 6000 wall / 5106
+  logical frames, 202 good restores, zero bad, 447 comparisons with zero
+  mismatches, 101/101 wrong-input divergences. OFF same-PC pair: 6000
+  live/logical frames, 199 hashes each, zero mismatches/NETDESYNC,
+  FPS 47.7/47.8, stalls 0/130 (0/5997 ms), displayed-frame p99
+  164.2/116.8 ms, delay 3. Supplied, not reproduced here. Versus
+  `06c5b8013e`, FPS and both p99 values fell; join stalls and stall time
+  rose. Delay stayed 3. No cause or usable pacing is established.
+  Real readiness checked the two evidence documents / 18 links: exit
+  2 / BLOCKED, empty stderr, 14 hashes unchanged. Evidence:
+  `logs/supplied-19c0-ef60170247994380a44249e47a4f3d7a/summary-clean.json`.
+  The initial capture had module-progress stderr; only the clean rerun is used.
+
+Open: actual App/portable acceptance, Python suites, complete source/player
+content and privacy/licence review, enabled GUI Host/Join profile, and two
+physical PCs with sound-on usable pacing. Pad navigation remains absent.
+Fullscreen inheritance and offline spawn-failure cleanup remain unexecuted
+source observations. Failed scanner termination, interruption inside one write
+and unobserved descendants remain unproved. Unchanged long aggregates and
+the whole-tree beta checker were not rerun.
+
+Owner-only next step: provide the exact reviewed complete candidate and ZIP
+hash, matching complete source and reviewed locks/notices, then follow
+[actual launcher acceptance](docs/RELEASE_PATH_B.md) in the authorized
+environment: responsive App/process identity, exit/reopen/settings, licence
+cancel/accept, portable build/play/return. Python alone is insufficient.
+GUI, Python suites, packagers, build, game and network helpers stayed **UNRUN
+here**. A same-PC pair does not replace two PCs.
+
+Area agents: `launcher_entry_19c0`, `tests_catalogs_19c0`,
+`supplied_verify_19c0`, `portable_candidate_19c0`, `python_tk_19c0`,
+`settings_process_19c0`, `controller_ui_19c0`, `offline_flow_19c0`,
+`licence_inputs_19c0`, `source_privacy_19c0`, `player_payload_19c0`,
+`corresponding_source_19c0`, `effective_profile_19c0`, `two_pc_pacing_19c0`,
+`scanner_gaps_19c0`, `integrated_launcher_19c0`.
+Root owns this record and `docs/status.md`; editing ownership was exclusive.
+Originals and a 351-file baseline are saved under
+`logs/release-19c0-bce86a8e869f4e1ebca2885b4e8ef314/`.
+Combined real readiness checked all four changed documents / 252 local links,
+12 required inputs and seven parses, then catalogs and actual starter refusal:
+exit 2 / BLOCKED, empty stderr, all 351 baseline hashes unchanged during the run.
+Exactly four documents differ from their originals. Evidence is
+`combined-entry-clean/summary.json` under that root evidence folder.
+The initial wrapper failed to propagate the checker's exit code and returned
+1; its output is retained in `combined-entry/`. The corrected wrapper explicitly
+propagates the real checker exit. No acceptance pass is inferred from either.
+Separate reviewer `final_diff_review_19c0` checks the final document changes;
+its report and independent entry evidence are retained in `final-review/`
+under the same root evidence folder. See that report for its actual outcome.
+No Git command, deletion, outside-tree read, build, game, forbidden helper,
+server, push or release ran here.
+
 ## Current blocker and supplied verification 06c5b8013e
 
 Release remains **NO-GO**. The most valuable open item is actual App startup
