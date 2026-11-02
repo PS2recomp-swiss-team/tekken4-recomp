@@ -1,5 +1,50 @@
 # T4 beta progress, 2026-11-02
 
+## Current continuation: real-entry evidence is still missing
+
+Done: 24 area agents reviewed independent runtime/evidence paths, including
+one tests/catalog agent. No new runtime change or test pass is claimed.
+The latest existing-name refusal launched no pair. The recorded 206/874 are
+early rollback subtotals; total rollbacks were 209/989. Neither supplies input
+arrival timing, sustained advantage or actual wait ordering.
+
+The pending hypothesis stays unchanged: full pacing rebases discard the slow
+sender's catchup headroom. Resimulation preserves the saved live deadline;
+the existing default-off experiment retains 33.334 ms at the >50 ms guard.
+Source review found no blocking defect, but cannot establish causality.
+Runtime and VERIFY_ENV.txt are unchanged. The switch line remains exactly:
+TEKKEN4_NET_REBASE_CATCHUP=1;TEKKEN4_NET_DIAG=1
+
+Open / owner-only: preserve existing output and choose a fresh unused name.
+Stage the working-tree runtime into the real runner before building and
+regenerating identity. tools/input_build.cmd stages committed HEAD; it can
+omit this edit. The actual outer verify route is absent, so stale staging is
+a risk, not a proved explanation. Use one new build for OFF/ON, with an ID
+different from 943fc4631acf2c13. Keep TimingDiag, scripts, simulation and all
+other switches equal; pass the line through common -Env without peer overrides
+replacing it. Require both ON peers' literal activation and nonzero
+NETREBASE_CATCHUP rebases. Retain full host/join runtime and transport logs,
+stdout/stderr and effective params. Compare sustained lead, sender gaps,
+confirmed progress, actual waits, absolute rollback/resim work and pacing.
+Comparable problems with ON exercised weaken the hypothesis; a lower ratio
+or rebase counter alone proves no benefit.
+
+Compilation, selftest and real OFF/ON entry remain UNRUN. AGENTS.md forbids
+their required build/game/network entries here. Selftest and catalogs never
+enter the live pacing guard. No unrelated green check replaced runtime proof.
+Only this progress insertion changed; root is its sole editor.
+
+Area agents: paired_log_evidence_now, catchup_guard_now, timesync_order_now,
+advantage_math_now, input_arrival_now, vblank_schedule_now, transport_poll_now,
+prediction_wait_now, startup_roles_now, resim_deadline_now, resend_order_now,
+env_route_now, tests_catalogs_now, build_identity_now, clock_domains_now,
+simulation_streams_now, input_sampling_now, catchup_telemetry_now,
+state_ring_now, mismatch_detection_now, send_coalescing_now,
+diagnostic_contention_now, frontier_refresh_now, experiment_falsification_now.
+Separate final reviewer: final_diff_review_now. All are read-only and follow
+AGENTS.md. No Git command, outside-tree read, deletion, patch edit, build,
+game, forbidden helper, server, push or release ran this continuation.
+
 ## Current status: catchup experiment still has no real verify
 
 Done this continuation: 24 read-only area agents checked separate runtime,
