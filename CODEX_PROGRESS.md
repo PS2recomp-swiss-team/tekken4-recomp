@@ -1,3 +1,136 @@
+# T4 beta progress, 2026-11-03
+
+## Current: test bounded confirmation batching before replay
+
+Latest supplied verify finished 2026-11-02T23:57:30. ATOMIC_INPUT enabled
+on both peers but recovered/advanced/ahead_frontier/future_fallback counts
+were all zero. Its changed selection path made no observed recovery; this
+strongly weakens it as the main explanation. Leave it default-off. Latest
+excerpt supplies no build ID. Earlier progress records newer identities than
+943fc4631acf2c13; the current executable bytes remain unproved here.
+
+ON host/join: rollbacks 342/941, replay frames 595/3398, mean replay depth
+1.74/3.61, stall+sync waits 33/5433 ms, rebases 15915/10502 ms. Join/host
+rollback ratio is 2.75, replay ratio 5.71. Excess join waits 5400 ms nearly
+match excess host rebases 5413 ms. That does not identify the initial lead.
+OFF host summary is truncated in the supplied excerpt, and delay changed
+2 -> 3. No aggregate OFF/ON improvement is attributed to ATOMIC_INPUT.
+
+Done: 24 independent area agents read AGENTS.md and reviewed separate source
+or evidence areas. Safe in-tree inventory again found exactly eight .log
+files, all ZIP/scanner results, and no rb_frames, paired runtime/transport
+chronology or JSONL arrivals. No reparse point was traversed. Requested last
+verify pair logs cannot be read because they are absent from this copy.
+First input arrivals, advantage sequence and first-wait order remain UNKNOWN.
+No fixed role/sign/snapshot/sender/receiver defect was established. Earlier
+controller, early-deadline, publication, headroom, startup, rebase, flush and
+atomic-input experiments are not repeated.
+
+One new bounded hypothesis: replay begins while part of its input interval
+is still predicted. Further confirmations can then cause another replay,
+delaying fresh publication and amplifying unequal prediction exposure.
+This is a source-supported possibility, NOT the established initiating cause.
+Previous EARLY_DEADLINE deferred overdue scans; PRED_HEADROOM waited only
+after the prediction cap. This candidate instead waits after a known mismatch,
+including early mismatches, before restoring that preserved mismatch.
+
+Root changed only runtime/tekken4_rollback_overrides.cpp for runtime behavior,
+behind default-off literal TEKKEN4_NET_REPLAY_BATCH=1. After validating the
+snapshot, if remoteContig < live f, request confirmation through f-1 using
+waitRemoteUs(f-1,16667), at most once per live f. An ahead peer may require
+the lagging peer to sample more inputs; it is NOT guaranteed they already
+exist. The finite timeout avoids an indefinite wait for that progress.
+Actual elapsed time can exceed the requested budget because of scheduling
+or mutex contention. On timeout or peer loss, keep the pending mismatch and
+perform the ordinary restore/replay. No second npScan consumes it. The live
+deadline is not shifted. Batch bookkeeping is host-only and survives restore.
+OFF adds observations but retains the original immediate restore policy;
+shared diagnostic/lock overhead is not claimed to be zero.
+
+Both arms append NETREPLAYBATCH to the retained NETSUMMARY line:
+replay_batch; opportunities (first eligible rollback at a live f); waits
+(actual ON wait calls); early_waits; advanced (returned frontier > observed
+before); completed (returned frontier >= f); revisits (all additional valid
+rollback starts at the same live f, including OFF); wait_ms/max_ms; last_f,
+rc_before/after (last ON call); budget_us=16667. These are decision/call
+counts, not unique input arrivals. A call can return immediately if reception
+advanced between locks; advanced does not prove it slept or helped.
+DIAG=1 emits NETREPLAYBATCH_EVENT for each opportunity in BOTH arms with
+common steady start/end times, slot, switch, live f, first mismatch, early
+flag, before/after frontier, target f and elapsed wait. OFF reports equal
+start/end, unchanged observed frontier and zero wait; it makes no extra wait.
+The event does not timestamp unique network arrivals. overdueEarly keeps its
+original trigger-time classification before batching. Existing restore+resim
+and stall+sync totals EXCLUDE batch wait: include NETREPLAYBATCH wait_ms in
+all total-workload wait comparisons. Do not sum max_ms as a total.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_REPLAY_BATCH=1
+
+Open / owner-only real-entry test: stage/build these exact reviewed runtime
+bytes and run actual paired Mode::Net games OFF/ON via the external verify
+wrapper. The wrapper must forward VERIFY_ENV.txt through -Env; net_pair
+does not read the file. Put common settings in BOTH arms, not the ON file:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+Keep RBSTART=600, TIMESYNC=1, normal 20-sample filter, RB_MODE unset/net,
+RTT 150/jitter 5/loss 3, 6000 frames and all other experiments equal/off,
+including ATOMIC_INPUT, FULL_SYNC, SUBFRAME_SYNC, FAST_SYNC, EARLY_DEADLINE
+and PRED_HEADROOM. Retain full paired rb_frames/transport logs and effective
+params/stdout/stderr. Compare reviewed and staged runtime SHA-256 bytes,
+refresh build identity and retain launched executable SHA-256 per peer;
+identity hashes staged sources rather than the executable. Equal simulator
+seeds do not ensure identical frame-by-frame conditions across arms.
+
+Require OFF replay_batch=0 and waits=early_waits=advanced=completed=0;
+ON literal banner, replay_batch=1, waits=opportunities>0, early_waits>0 for
+this mostly-early workload, matching events and advanced/completed activity.
+Check early_waits/advanced/completed <= waits, event target=f and requested
+budget_us=16667, and no second wait at the same live f. Record actual max_ms;
+do not impose a false hard elapsed-time ceiling. If nothing advances, the
+candidate did not batch useful confirmations. If OFF revisits are negligible,
+that weakens same-live-frame repetition as a major source of amplification;
+it does not count all possible later-frame repeated work. Compare absolute
+aggregate replay/depth, predicted replay decisions, revisits, combined
+stall+sync+BATCH waits, FPS and frame tails. Require worthwhile net benefit,
+not a nicer ratio caused by worsening the other peer. Substantial actions
+without less replay/burden weaken this hypothesis. Require zero hash
+mismatches/NETDESYNC, repeat same-role runs, swap roles, then two physical PCs.
+Keep candidate default-off until real proof. Release acceptance stays OPEN.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+This is inventory only. Existing test_* entries do not run actual paired
+Mode::Net; SELFTEST bypasses npBoundary. No model/mock/source assertion is
+counted as runtime proof. Root checked file bytes/environment/history only.
+Compilation, switch activation, runtime safety, timing and performance are
+UNRUN here: AGENTS.md forbids builds, games and tools/net_* execution. No
+changed runtime entry ran. This candidate has NOT met the real-entry test
+requirement. The owner's actual paired game verify is the required test.
+
+Original bytes of the three edited files are retained under
+logs/runtime-replay-batch/originals. Root alone edits source/progress/env;
+area agents are read-only. No Git command, outside-tree read, deletion, patch
+change, build, game, forbidden helper, server, push or release was used.
+
+Area agents: pair_log_inventory, verify_metrics, timesync_estimate,
+timesync_filter, prediction_wait, vblank_pacing, startup_roles, input_sampling,
+send_first_guards, hash_reader_wait, hash_collect, snapshot_restore,
+transport_sender, transport_receiver, resend_coalesce, arrival_timestamps,
+simulation_rng, scheduler_restore, early_rollback, state_serialization,
+switch_entry_route, build_identity, tests_catalogs, experiment_gate.
+experiment_gate reviewed the candidate and found no source safety blocker;
+it corrected the assumption that the remote inputs must already be sampled,
+and required accounting for batch wait and possible timeout overshoot.
+Separate final reviewer final_diff_review_replay_batch completed the
+three-file diff against retained originals with no blocking source issue.
+It checked OFF immediate-restore policy, once/f guard, pending mismatch,
+timeout/loss and underflow handling, scheduler preservation, counters,
+varargs formats, retained summary newline, exact environment bytes, runtime
+LF/no BOM and unchanged progress history suffix. Source review only;
+compilation, activation, runtime safety and performance remain UNRUN.
+Reviewed runtime SHA-256:
+c17a19ae60059f7b96b6bbf3b892d0640baff7aa30c5cdcd00092a7584612a16
+
 # T4 beta progress, 2026-11-02
 
 ## Current: test the remote-input selection race

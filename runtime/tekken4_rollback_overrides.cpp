@@ -1155,6 +1155,12 @@ namespace tekken4_rollback
         bool subframeSync = false;
         bool fullSync = false;
         bool atomicInput = false;
+        bool replayBatch = false;
+        // Host-only bounded confirmation batching; one opportunity/wait per live frame, never restored.
+        uint64_t batchSeenFrame = ~0ull, batchRollbackFrame = ~0ull;
+        uint64_t batchOpportunities = 0, batchWaits = 0, batchEarlyWaits = 0, batchAdvanced = 0,
+                 batchCompleted = 0, batchRevisits = 0, batchFrame = 0, batchBefore = 0, batchAfter = 0;
+        double batchWaitMs = 0, batchMaxMs = 0;
         // Input-selection race observations; host-only, split by live/replay execution, never restored.
         uint64_t inputMisses[2]{}, inputRecovered[2]{}, inputAdvanced[2]{}, inputAheadFrontier[2]{},
                  inputFutureFallbacks[2]{};
@@ -1619,6 +1625,50 @@ namespace tekken4_rollback
             return false;
         }
         const bool overdueEarly = early && std::chrono::steady_clock::now() >= g_np.liveT;
+        if (g_np.batchRollbackFrame == f)
+            ++g_np.batchRevisits;
+        g_np.batchRollbackFrame = f;
+        const uint64_t batchBefore = t4net::remoteContig();
+        if (g_np.batchSeenFrame != f && batchBefore < f && !t4net::peerLost())
+        {
+            g_np.batchSeenFrame = f;
+            ++g_np.batchOpportunities;
+            const auto begin = std::chrono::steady_clock::now();
+            auto end = begin;
+            uint64_t after = batchBefore;
+            double ms = 0;
+            if (g_np.replayBatch)
+            {
+                // Wait only for replay inputs through f-1. A lagging peer may still need to sample them;
+                // the finite budget avoids waiting indefinitely for its progress. Never scan again here:
+                // npScan advanced checked, but g still needs its pending restore.
+                // Leave the live deadline unchanged. This spends wall time, it does not hide a pacing shift.
+                after = t4net::waitRemoteUs(static_cast<uint32_t>(f - 1u), static_cast<uint32_t>(kVblank.count()));
+                end = std::chrono::steady_clock::now();
+                ms = std::chrono::duration<double, std::milli>(end - begin).count();
+                ++g_np.batchWaits;
+                if (early)
+                    ++g_np.batchEarlyWaits;
+                if (after > batchBefore)
+                    ++g_np.batchAdvanced;
+                if (after >= f)
+                    ++g_np.batchCompleted;
+                g_np.batchWaitMs += ms;
+                g_np.batchMaxMs = std::max(g_np.batchMaxMs, ms);
+                g_np.batchFrame = f;
+                g_np.batchBefore = batchBefore;
+                g_np.batchAfter = after;
+            }
+            if (g_np.diag)
+                std::fprintf(g_log, "NETREPLAYBATCH_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d replay_batch=%d"
+                                    " f=%" PRIu64 " from=%" PRIu64 " early=%d rc_before=%" PRIu64
+                                    " rc_after=%" PRIu64 " target=%" PRIu64 " budget_us=%" PRId64
+                                    " wait_ms=%.3f peer_lost=%d\n",
+                             std::chrono::duration<double, std::milli>(begin.time_since_epoch()).count(),
+                             std::chrono::duration<double, std::milli>(end.time_since_epoch()).count(),
+                             g_np.slot, g_np.replayBatch ? 1 : 0, f, g, early ? 1 : 0, batchBefore, after, f,
+                             static_cast<int64_t>(kVblank.count()), ms, t4net::peerLost() ? 1 : 0);
+        }
         g_np.liveVblank = g_runtime->eeScheduler().nextVblankHostDeadline();
         g_np.rbT0 = std::chrono::steady_clock::now();
         ps2_rollback::restore(*g_runtime, g_np.ring[slot]);
@@ -1970,11 +2020,19 @@ namespace tekken4_rollback
                             " recovered_live=%" PRIu64 " recovered_replay=%" PRIu64
                             " advanced_live=%" PRIu64 " advanced_replay=%" PRIu64
                             " ahead_frontier_live=%" PRIu64 " ahead_frontier_replay=%" PRIu64
-                            " future_fallbacks_live=%" PRIu64 " future_fallbacks_replay=%" PRIu64 "\n",
+                            " future_fallbacks_live=%" PRIu64 " future_fallbacks_replay=%" PRIu64,
                      g_np.atomicInput ? 1 : 0, g_np.inputMisses[0], g_np.inputMisses[1],
                      g_np.inputRecovered[0], g_np.inputRecovered[1], g_np.inputAdvanced[0], g_np.inputAdvanced[1],
                      g_np.inputAheadFrontier[0], g_np.inputAheadFrontier[1],
                      g_np.inputFutureFallbacks[0], g_np.inputFutureFallbacks[1]);
+        std::fprintf(g_log, "; NETREPLAYBATCH replay_batch=%d opportunities=%" PRIu64 " waits=%" PRIu64
+                            " early_waits=%" PRIu64 " advanced=%" PRIu64 " completed=%" PRIu64
+                            " revisits=%" PRIu64 " wait_ms=%.3f max_ms=%.3f last_f=%" PRIu64
+                            " rc_before=%" PRIu64 " rc_after=%" PRIu64 " budget_us=%" PRId64 "\n",
+                     g_np.replayBatch ? 1 : 0, g_np.batchOpportunities, g_np.batchWaits, g_np.batchEarlyWaits,
+                     g_np.batchAdvanced, g_np.batchCompleted, g_np.batchRevisits, g_np.batchWaitMs,
+                     g_np.batchMaxMs, g_np.batchFrame, g_np.batchBefore, g_np.batchAfter,
+                     static_cast<int64_t>(kVblank.count()));
         if (g_np.rebaseCatchup)
             std::fprintf(g_log, "NETREBASE_CATCHUP f=%" PRIu64 " rebases=%" PRIu64 " retained_debt_ms=%.3f\n",
                          g_frame, g_np.catchupRebases, g_np.catchupDebtMs);
@@ -2080,6 +2138,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_FULL_SYNC=1: continuous measured lead from 1 frame, cap 4; settling hold rounds up\n");
         if (g_np.atomicInput)
             std::fprintf(g_log, "NET TEKKEN4_NET_ATOMIC_INPUT=1: locked exact-input recheck and held prediction\n");
+        if (g_np.replayBatch)
+            std::fprintf(g_log, "NET TEKKEN4_NET_REPLAY_BATCH=1: wait up to one vblank for replay inputs, once per live frame\n");
     }
 
     void npBootRendezvous(uint64_t f)
@@ -2626,6 +2686,8 @@ namespace tekken4_rollback
             g_np.fullSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_ATOMIC_INPUT"))
             g_np.atomicInput = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_REPLAY_BATCH"))
+            g_np.replayBatch = std::strcmp(v, "1") == 0;
         g_np.leadWindow = g_np.fastSync ? 8 : NetplayState::kLeadWin;
         if (const char *v = std::getenv("TEKKEN4_NET_LOCKDELAY"); v && *v && std::strcmp(v, "auto") != 0)
             g_np.lockDelaySetting = std::max(0, std::min(kMaxLockDelay, std::atoi(v)));
