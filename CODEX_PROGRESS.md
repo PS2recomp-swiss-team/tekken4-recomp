@@ -1,5 +1,138 @@
 # T4 beta progress, 2026-11-03
 
+## Current: test one-frame time-sync pauses with the original settling hold
+
+Latest supplied real verify finished 2026-11-03T00:57:33. SIM_NORMAL_PRIORITY
+really acted: both workers started, priority calls succeeded and reported
+NORMAL. Send lateness stayed below 1.6 ms, with zero >=2 ms observations.
+Nevertheless ON host/join rollbacks are 314/928 (2.96x), replay frames
+508/3852 (7.58x), mean depths 1.62/4.15. Aggregate is 1242 rollbacks and
+4360 replay frames. This weakens simulator priority as the main explanation;
+leave that switch default-off. OFF host is truncated, so no complete OFF/ON
+aggregate benefit is attributed. Latest summaries have no executable hash or
+build ID. Priority activation proves that runtime path ran; the old identity
+943fc4631acf2c13 cannot establish that runtime code never changed. Earlier
+history already records newer IDs. Exact reviewed/executed bytes remain open.
+
+Done: 24 independent read-only area agents read AGENTS.md/current progress.
+Safe in-tree inventory found eight .log files, all ZIP/scanner output; the
+latest-verify pointers also contain no runtime chronology. No reparse point
+was followed. Full paired rb_frames/transport/arrival logs are absent here.
+Input first-arrival timing, advantage sequence and first-wait order remain
+UNKNOWN. Do not reconstruct them from summaries. No fixed role/sign defect
+was established. Positive advantage means the waiting peer is estimated
+AHEAD, not behind. Join excess stall+sync is 6899 ms; host excess rebase is
+6891 ms. That near equality fits timing accounting at equal frame counts;
+it does not identify the initiating peer or causal order.
+
+One new bounded hypothesis: large time-sync pauses interrupt subsequent
+input production and amplify replay bursts. Latest join requested 4500.090 ms
+across 91 corrections, average 49.45 ms (~2.97 frames), while host made one
+16.667 ms correction. Source jumps from one to three frames at filtered
+advantage 2.5 and caps at four. Replay also delays the next live publication.
+These are observations and a source opportunity, NOT proof of causation.
+Waiting the ahead peer is intended to let the other catch up: reducing it
+can UNDER-correct lead, increase stalls and increase repeated replay.
+
+Root changed only runtime/tekken4_rollback_overrides.cpp for behavior behind
+literal, default-off TEKKEN4_NET_SYNC_CAP_ONE=1. Compute the existing selected
+base duration first, including FULL/SUBFRAME choices. ON caps only the pause
+and corresponding scheduler shift to one kVblank (16667 us). Keep the
+pre-cap rounded frames for the original RTT settling hold. Thus no deliberate
+filter/refill/threshold/gap/once-live/replay-order policy change accompanies
+the cap; wall timing can still change later samples and RTT observations.
+Pending REPLAY_BEFORE_SYNC corrections retain base duration and capped give.
+OFF keeps the old duration and hold. No input/wire/snapshot policy changed.
+This differs from FULL_SYNC, which follows measured lead and changes its
+derived hold. Keep all earlier experiments equal/off in this comparison.
+
+Both arms append NETSYNCCAP to the same retained NETSUMMARY line: sync_cap_one,
+time_sync, actions (all applied corrections), eligible_actions (applied base
+pauses > one vblank), changed_actions (give != base), base_ms/requested_ms/
+actual_ms totals and max_request_ms. These are correction observations, not
+arrivals. Totals include every correction and overlap existing sync counters;
+NEVER add them together. actual_ms includes any remaining liveT margin and
+scheduling oversleep; only give_us is capped, not the full measured pause.
+DIAG=1 emits NETSYNCCAP_EVENT with steady start/end, slot/frame, filtered adv,
+base_us/give_us, actual_ms, retained hold_frames/rtt_ms/hold_until and
+rc_before/after.
+rc_before is the selection frontier (also for deferred replay), not an input
+arrival timestamp. Existing FULLSYNC changed_actions compares pre-cap policy
+to legacy; its requested/actual totals continue to describe applied pauses.
+Shared counters and DIAG logging add observations in OFF; no zero-overhead
+claim is made. No logging was added to the receive loop.
+
+VERIFY_ENV.txt is one ASCII line plus LF, no BOM:
+TEKKEN4_NET_SYNC_CAP_ONE=1
+
+Open / owner-only REAL-ENTRY TEST: stage/build these exact reviewed runtime
+bytes and run actual paired Mode::Net games OFF/ON through the external
+verify wrapper. Forward VERIFY_ENV.txt explicitly via -Env in ON; net_pair
+clears inherited settings and does not read this file. Put these settings in
+BOTH arms, outside the ON-only file:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+Use RBSTART=600, TIMESYNC=1, normal 20-sample filter, RB_MODE unset/net,
+RTT150/jitter5/loss3, 6000 frames, matching workload/foreground conditions.
+Keep FULL_SYNC, SUBFRAME_SYNC, FAST_SYNC, REPLAY_BEFORE_SYNC, REPLAY_BATCH,
+ATOMIC_INPUT, SIM_NORMAL_PRIORITY, SIM_SAFE_WAIT, LIVE_LEAD, ORDERED_LEAD,
+REFRESH_RC, SEND_FIRST, REBASE_CATCHUP, EARLY_DEADLINE, PRED_HEADROOM and other
+experiments equal/off. Record all effective parameters, not just the label.
+Retain full paired rb_frames/transport logs, stdout/stderr and timing records.
+Reviewed/staged source SHA-256 must match; refresh identity after staging,
+clear explicit BUILD overrides, retain build success and each launched exe
+SHA-256. Identity hashes staged inputs, not executable bytes. No identity
+refresh or build was performed here. Equal RNG seeds do not ensure equal
+per-input delivery histories.
+
+Require OFF sync_cap_one=0, changed_actions=0, base_ms=requested_ms.
+Require ON literal banner, sync_cap_one=1 and nonzero eligible_actions;
+changed_actions=eligible_actions>0, requested_ms<base_ms and max_request_ms
+<=16.667. ON event give_us=min(base_us,16667), hold_frames=ceil(base_us/16667),
+The original hold formula remains f+hold_frames+trunc(rtt_ms/16.667+0.999)+2
+for positive RTT, else f+hold_frames+2. Event rtt_ms/hold_until record the
+actual sampled RTT and chosen result. Zero changed means
+UNEXERCISED. NETFULLSYNC changed_actions should stay zero with FULL_SYNC off.
+Require pending replay correction drained at normal final. Compare first
+recorded sync/wait and prior producer/frontier gaps in both full logs; existing
+diagnostics still cannot recover every unique input's first arrival.
+Success requires lower absolute aggregate replay/depth and acceptable total
+waits, stalls, FPS and frame tails. A ratio improved by worsening the other
+peer is not success. Increased sustained advantage, stalls, repeated replay
+or total burden rejects this candidate. Require zero hash mismatches and
+NETDESYNC; repeat same roles, swap roles, then use two physical PCs. Default
+stays OFF and release acceptance stays OPEN.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+Inventory only. Test/SelfNet dispatch to different boundaries; neither proves
+paired npBoundary. Root checked source changes, env encoding and retained
+history. These are SOURCE CHECKS. Compilation, activation, safety and benefit
+are UNRUN: AGENTS.md forbids builds, games and tools/net_* here. No changed
+runtime entry ran; this candidate has NOT met the requested real-entry-test
+requirement. Only the owner's actual paired verify can close it. No mock or
+source check is represented as execution of the changed runtime.
+
+Original bytes of the three changed files are retained under
+logs/runtime-sync-cap-one/originals. Root alone edits runtime/progress/env;
+all area agents are read-only. No Git command, outside-tree access, deletion,
+patch edit, build, game, forbidden helper, server, push or release occurred.
+
+Area agents: pair_logs, verify_metrics, advantage_sign, sync_filter,
+prediction_cap, vblank_pacing, input_sampling, publication_guard,
+transport_send, transport_receive, resend_coalesce, arrival_observability,
+simulated_network, early_replay, replay_scheduler, snapshot_state, hash_locks,
+startup_roles, switch_history, build_identity, tests_catalogs, experiment_design,
+runtime_entry_route, fresh_feedback. Separate final_diff_review_sync_cap_one
+completed the final three-file review with no blocking source issue. Checked
+OFF duration, pre-cap hold, pending lifetime, counters/format arguments,
+FULLSYNC separation, exact env bytes and retained history. Review clarified
+that actual_ms includes remaining liveT margin as well as oversleep. Source
+review cannot prove compilation, runtime activation, safety or benefit.
+
+Reviewed runtime SHA-256: 858c04454582c5627874661bb3214b93e068339b0ba2a4db609f552ce682cb19
+
+# T4 beta progress, 2026-11-03
+
 ## Current: test simulator sender priority on the same-PC pair
 
 Latest supplied real verify finished 2026-11-03T00:41:21. The previous

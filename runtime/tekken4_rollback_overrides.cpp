@@ -92,6 +92,7 @@
 // TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
 // TEKKEN4_NET_SUBFRAME_SYNC=1  correct filtered leads of 0.25..<1 frame with fractional waits (default off).
 // TEKKEN4_NET_FULL_SYNC=1  give up the measured lead from 1 frame, capped at four, without whole-frame rounding (default off).
+// TEKKEN4_NET_SYNC_CAP_ONE=1  cap each correction pause at one vblank; retain its original settling hold (default off).
 // TEKKEN4_NET_ATOMIC_INPUT=1  recheck a missing remote input and select its prediction under one lock (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
@@ -1154,6 +1155,10 @@ namespace tekken4_rollback
         bool fastSync = false;
         bool subframeSync = false;
         bool fullSync = false;
+        bool syncCapOne = false;
+        // Applied corrections in both arms; pre-cap durations also define the unchanged settling hold.
+        uint64_t syncCapActions = 0, syncCapEligible = 0, syncCapChanged = 0;
+        double syncCapBaseMs = 0, syncCapRequestedMs = 0, syncCapActualMs = 0, syncCapMaxMs = 0;
         bool atomicInput = false;
         bool replayBatch = false;
         bool replayBeforeSync = false;
@@ -1164,7 +1169,7 @@ namespace tekken4_rollback
             uint64_t frame = 0, rc = 0;
             double adv = 0;
             int frames = 0;
-            std::chrono::microseconds give{}, legacyGive{}, fullGive{};
+            std::chrono::microseconds give{}, baseGive{}, legacyGive{}, fullGive{};
             std::chrono::steady_clock::time_point selected{};
         } pendingSync;
         uint64_t replaySyncEligible = 0, replaySyncMismatch = 0, replaySyncDeferred = 0, replaySyncApplied = 0,
@@ -1743,17 +1748,27 @@ namespace tekken4_rollback
         const double adv = selected.adv;
         const bool subframe = selected.subframe;
         const int frames = selected.frames;
-        const auto give = selected.give, legacyGive = selected.legacyGive, fullGive = selected.fullGive;
+        const auto give = selected.give, baseGive = selected.baseGive;
+        const auto legacyGive = selected.legacyGive, fullGive = selected.fullGive;
         const auto sleepStart = std::chrono::steady_clock::now();
         npSleepUntil(std::max(std::chrono::steady_clock::now(), g_np.liveT) + give);
         npShift(give);
         const auto sleepEnd = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(give).count();
         const double actual = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
+        ++g_np.syncCapActions;
+        if (baseGive > kVblank)
+            ++g_np.syncCapEligible;
+        if (give != baseGive)
+            ++g_np.syncCapChanged;
+        g_np.syncCapBaseMs += std::chrono::duration<double, std::milli>(baseGive).count();
+        g_np.syncCapRequestedMs += ms;
+        g_np.syncCapActualMs += actual;
+        g_np.syncCapMaxMs = std::max(g_np.syncCapMaxMs, ms);
         if (!subframe)
         {
             ++g_np.fullSyncActions; // All >= 1-frame corrections in BOTH arms; changed only counts ON differences.
-            if (give != legacyGive)
+            if (baseGive != legacyGive) // Keep FULL_SYNC's policy changes separate from the pause cap.
                 ++g_np.fullSyncChanged;
             g_np.fullSyncRequestedMs += ms;
             g_np.fullSyncLegacyMs += std::chrono::duration<double, std::milli>(legacyGive).count();
@@ -1772,6 +1787,15 @@ namespace tekken4_rollback
         }
         const int rtt = t4net::rttMs();
         g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u;
+        if (g_np.diag)
+            std::fprintf(g_log, "NETSYNCCAP_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d f=%" PRIu64
+                                " sync_cap_one=%d adv=%.6f base_us=%" PRId64 " give_us=%" PRId64
+                                " actual_ms=%.3f hold_frames=%d rtt_ms=%d hold_until=%" PRIu64
+                                " rc_before=%" PRIu64 " rc_after=%u\n",
+                         std::chrono::duration<double, std::milli>(sleepStart.time_since_epoch()).count(),
+                         std::chrono::duration<double, std::milli>(sleepEnd.time_since_epoch()).count(),
+                         g_np.slot, f, g_np.syncCapOne ? 1 : 0, adv, static_cast<int64_t>(baseGive.count()),
+                         static_cast<int64_t>(give.count()), actual, frames, rtt, g_np.tsHold, rc, t4net::remoteContig());
         if (!subframe)
         {
             std::fprintf(g_log, "NETTS f=%" PRIu64 " ahead %.2f frames: gave up %.3f frame(s) window=%d samples=%d gap=%" PRIu64 "\n",
@@ -1849,11 +1873,12 @@ namespace tekken4_rollback
         const auto legacyGive = kVblank * legacyFrames;
         const auto fullGive = std::chrono::microseconds(static_cast<int64_t>(kVblank.count() * std::min(4.0, adv)));
         // FULL_SYNC changes only adv >= 1. SUBFRAME_SYNC independently controls the formerly ignored band.
-        const auto give = subframe
+        const auto baseGive = subframe
                               ? std::chrono::microseconds(static_cast<int64_t>(kVblank.count() * adv))
                               : (g_np.fullSync ? fullGive : legacyGive);
-        // Round the selected duration UP only for the RTT settling hold, never for the actual wait.
-        const int frames = static_cast<int>((give.count() + kVblank.count() - 1) / kVblank.count());
+        // Isolate pause size: the cap must not shorten the original RTT settling hold or refill sooner.
+        const int frames = static_cast<int>((baseGive.count() + kVblank.count() - 1) / kVblank.count());
+        const auto give = g_np.syncCapOne ? std::min(baseGive, kVblank) : baseGive;
         if (!subframe && fullGive != legacyGive)
         {
             ++g_np.fullSyncEvals; // Eligible correction opportunities, after every existing controller guard.
@@ -1867,6 +1892,7 @@ namespace tekken4_rollback
         selected.subframe = subframe;
         selected.frames = frames;
         selected.give = give;
+        selected.baseGive = baseGive;
         selected.legacyGive = legacyGive;
         selected.fullGive = fullGive;
         selected.selected = std::chrono::steady_clock::now();
@@ -2093,6 +2119,12 @@ namespace tekken4_rollback
                      g_np.fullSync ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.fullSyncEvals, g_np.fullSyncActions,
                      g_np.fullSyncChanged, g_np.fullSyncRequestedMs, g_np.fullSyncLegacyMs, g_np.fullSyncActualMs,
                      g_np.fullSyncLastFrame, g_np.fullSyncLastAdv);
+        std::fprintf(g_log, "; NETSYNCCAP sync_cap_one=%d time_sync=%d actions=%" PRIu64
+                            " eligible_actions=%" PRIu64 " changed_actions=%" PRIu64
+                            " base_ms=%.3f requested_ms=%.3f actual_ms=%.3f max_request_ms=%.3f",
+                     g_np.syncCapOne ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncCapActions,
+                     g_np.syncCapEligible, g_np.syncCapChanged, g_np.syncCapBaseMs,
+                     g_np.syncCapRequestedMs, g_np.syncCapActualMs, g_np.syncCapMaxMs);
         std::fprintf(g_log, "; NETATOMICINPUT atomic_input=%d misses_live=%" PRIu64 " misses_replay=%" PRIu64
                             " recovered_live=%" PRIu64 " recovered_replay=%" PRIu64
                             " advanced_live=%" PRIu64 " advanced_replay=%" PRIu64
@@ -2228,6 +2260,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_SUBFRAME_SYNC=1: fractional waits for filtered leads 0.25..<1 frame\n");
         if (g_np.fullSync)
             std::fprintf(g_log, "NET TEKKEN4_NET_FULL_SYNC=1: continuous measured lead from 1 frame, cap 4; settling hold rounds up\n");
+        if (g_np.syncCapOne)
+            std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_CAP_ONE=1: correction pauses capped at one vblank; pre-cap settling hold retained\n");
         if (g_np.atomicInput)
             std::fprintf(g_log, "NET TEKKEN4_NET_ATOMIC_INPUT=1: locked exact-input recheck and held prediction\n");
         if (g_np.replayBatch)
@@ -2804,6 +2838,8 @@ namespace tekken4_rollback
             g_np.subframeSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_FULL_SYNC"))
             g_np.fullSync = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_SYNC_CAP_ONE"))
+            g_np.syncCapOne = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_ATOMIC_INPUT"))
             g_np.atomicInput = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_REPLAY_BATCH"))
