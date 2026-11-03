@@ -84,6 +84,8 @@ namespace t4net
     // Waits until the peer's input for `frame` is here, the session is lost, or ms passed (UINT32_MAX = no limit
     // but the session's timeout). Returns remoteContig().
     uint32_t waitRemote(uint32_t frame, uint32_t ms);
+    // The same with a microsecond limit (the early-rollback wait before a frame's vblank time; never resends).
+    uint32_t waitRemoteUs(uint32_t frame, uint32_t us);
     void sendNow();           // send the inputs + hashes now (also done by setLocal and every 15 ms while stalled)
 
     // Time sync: this side's lead estimate rides in every packet; the peer's latest.

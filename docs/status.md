@@ -1,8 +1,52 @@
 # Status
 
-_Last updated: 2026-10-29 ~06:30 (US port + rollback night)_
+_Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
 
 ## Resume here
+- **MINI RELEASE 2026-10-30 (dist\T4-Mini-Release-2026-10-30, local only):** Tekken4.cmd (resolution menu, fullscreen
+  J/E/N) + Launcher.cmd + LIESMICH.txt, exe = patches 01-84 + unlock override (all fighters unlocked by default,
+  runtime/tekken4_unlock_overrides.cpp: callback 0x1ec350 -> 1). Intro movie fixed at high resolution (patch 84:
+  device-side movie sound, bicubic movie upscale). Release check (logs/release_check): 1440p Story fight at full
+  speed (round clock 29.97 s per 30 s). Unlock verified: Story and Arcade char select (logs/unlock_story2, logs/unlock/on2), VS netplay pair at RTT 100 + 3 %
+  loss, 6000 frames, 0 desyncs, all fighters in the VS grid (logs/net/nunlock; clean netplay tree D:/tekken4-fork-net2 =
+  t4-us, build script copy in its out/net2_build.cmd). Commits are local; user pushes to swiss.
+- **USER TEST 2026-10-30 morning:** "game runs much smoother", "in-game music/sound better"; fullscreen hid the other
+  monitor -> patch 83 (borderless = undecorated monitor-sized window like T5DR, F11 or Alt+Enter; checked: 2560x1440 on
+  DISPLAY1, DISPLAY2 free, not iconified). Open: "now and then a few micro stutters" (where/when not known yet:
+  ask; candidates: menus present 12-20 ms apart, rare 25 ms frame, windowed compositor).
+- **NIGHT 2026-10-30 (7 agents), RESTART HERE.** All commits LOCAL on us-slus20328 (push to the private Swiss repo is
+  blocked by the auto-mode classifier: the user pushes by hand, `git -C D:\tekken4-us push swiss us-slus20328`; never
+  push to the public Lautreck repo any more). Patches now 01-74 (PS2Recomp t4-us = the same as commits). Done:
+  - Gamepad latency (patches 60-65, docs/INPUT.md): XInput read at the pad read, pad 20.7 -> 10.8 ms median, key
+    21.9 -> 14.5 ms; present 2 ms after each guest vblank (dropped frames 1.9 -> 0.4 %); TEKKEN4_RUNAHEAD=1|2
+    exists (game's 3 frames -> 2, hashes unchanged) but fights drop to 43-53 fps, so default off.
+  - Picture (patches 70-73, docs/GRAPHICS.md): the game's own 480p progressive mode by default (no interlace lines),
+    seam-free upscaling at every scale, TEKKEN4_INTERNAL_RES=lowest|native|1080p|1440p|4k|auto (T5DR steps),
+    TEKKEN4_AA=fxaa default (ssaa/msaa = supersampling), ANISO 4, HUD=sharp, FULLSCREEN + F11 (fullscreen picture
+    not yet seen by a person: captures came back black). 60 fps at every step on Beach and Arena incl. 4K.
+  - Intro movie audio (patches 58-59 + override): 44.1 kHz movie PCM was queued as 48 kHz: now resampled, 0 gaps,
+    in sync within one frame. ~2 s of audio after the last movie picture is cut (console behaviour unverified).
+  - Launcher (launcher/, docs/RELEASE_PLAN_T4.md): Play / Build game / Settings (T5DR resolution steps, AA,
+    progressive) / Controls / Online placeholder; written new (nothing copied from T5DR). Release without Visual
+    Studio needs option B (LLVM+CMake+Ninja in the zip, MSVC libs fetched) or A (game code as a DLL): owner decides.
+  - End-to-end player build from a fresh clone (docs/E2E_BUILD.md): ~8.6 min, ~5.4 GB, reaches a fight; fix in
+    build_game.ps1 for an empty game\vu1\micro. Player still needs Python, Git, CMake, Ninja, VS 2022 Build Tools.
+  - Netplay polish (patch 74, docs/ROLLBACK_PHASE3B.md): incremental snapshots, early rollback, no boot stalls; RTT
+    100: fight 48 -> 55 fps, p99 107 -> 70-79 ms, 0 desyncs. Remaining hitches = both games on one GPU at 99 %:
+    test on two PCs next.
+  - Test builds: dist\T4-Offline-Test-2026-10-30b (progressive, FXAA, resolution menu; not smoke-tested because a
+    perf run held the run lock) and dist\T4-Offline-Test-2026-10-30 (older). Lobby code (T5DR copy) stays in the
+    untracked lobby\ folder; the user allowed it into the private Swiss repo on its own branch (not done yet).
+  - Smoothness (patches 80-82 + runtime/tekken4_perf2_overrides.cpp, docs/PERF.md): all 10 stages 60.0 fps incl.
+    Building, fight present p99 16.9-17.2 ms, 0 repeated/skipped frames. Final build (01-82) checked at 1440p
+    (logs/final_check): fight renders clean; a few bright speckles on the beach sand remain (look later).
+    dist/T4-Offline-Test-2026-10-30b/bin has this final exe. Menus: presents 12-20 ms apart (open).
+  Open: real controller test by the user, fullscreen check, two-PC netplay, lobby on the coordinator's server, release packaging (no VS).
+- **OPEN (user, 2026-10-30): intro movie audio is garbage** (choppy/broken, as on PAL: "super flickery"). Separate path from
+  the BGM fix: movie calls 0x3000/0x3100/0x3200 stay on the local HLE in runtime/tekken4_overrides.cpp, which decodes the
+  interleaved SPU ADPCM itself ("movie audio: unit N -> 3584 stereo frames"); suspects: PCM added after the SPU clamp,
+  unit pacing vs. 60 Hz, sample rate. Also open: upscale seams (64x32 page grid lines/steps), 480p mode (omode 0x50 path
+  exists in the US ELF at 0x22a5c0), soft HUD at high scale. Offline test build: dist\T4-Offline-Test-2026-10-30 (local).
 - **END OF THE US/ROLLBACK NIGHT (2026-10-29 ~06:30), RESTART HERE.** Main line = branch us-slus20328, patches 01-56
   (PS2Recomp branch t4-us in D:\tekken4-fork-ps2recomp = eb8688b + 01-56 as commits). All pushed. Done tonight:
   - QA (logs\qa\REPORT.md): Story, Arcade, Team, Survival, Practice, Training, Tekken Force, Options work; VS needs pad 2;

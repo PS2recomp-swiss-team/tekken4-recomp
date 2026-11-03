@@ -1,0 +1,89 @@
+From dac4e505879a4964e1d76518cf77153348fbe7cb Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 02:19:04 +0100
+Subject: [PATCH] ps2xRuntime: movie PCM accounting (frames played, gaps,
+ queued)
+
+ps2MoviePcmStats(): since the last ps2ClearMoviePcm, the 48 kHz frames the mixer took from the movie PCM queue,
+the mixer frames that found it short after the first push (audible gaps), and the frames still queued. Tekken 4's
+override logs them against the pictures shown (TEKKEN4_MOVIE_SYNC=1) to measure A/V offset and gaps.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ps2_audio.h |  9 +++++++++
+ ps2xRuntime/src/lib/ps2_audio.cpp       | 21 +++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/ps2xRuntime/include/runtime/ps2_audio.h b/ps2xRuntime/include/runtime/ps2_audio.h
+index ad64097..b343d5f 100644
+--- a/ps2xRuntime/include/runtime/ps2_audio.h
++++ b/ps2xRuntime/include/runtime/ps2_audio.h
+@@ -51,5 +51,14 @@ private:
+ // No effect when TEKKEN4_SOUND is off (nothing is queued, the mixer is not running).
+ void ps2PushMoviePcm(const int16_t *stereoInterleaved, size_t frames);
+ void ps2ClearMoviePcm();
++// Movie PCM since the last ps2ClearMoviePcm: frames mixed, mixer frames that found the queue short after the first
++// push (gaps), frames still queued. 48 kHz stereo frames.
++struct Ps2MoviePcmStats
++{
++    uint64_t played = 0;
++    uint64_t missing = 0;
++    size_t queued = 0;
++};
++Ps2MoviePcmStats ps2MoviePcmStats();
+ 
+ #endif
+diff --git a/ps2xRuntime/src/lib/ps2_audio.cpp b/ps2xRuntime/src/lib/ps2_audio.cpp
+index 105059c..675109e 100644
+--- a/ps2xRuntime/src/lib/ps2_audio.cpp
++++ b/ps2xRuntime/src/lib/ps2_audio.cpp
+@@ -338,6 +338,11 @@ void PS2AudioBackend::stopAll()
+ 
+ std::mutex g_movieMutex;
+ std::vector<int16_t> g_moviePcm;
++// Movie PCM accounting since the last ps2ClearMoviePcm (sync / gap measurement): frames mixed from the queue, and
++// mixer frames that found the queue short after the first push (a gap in the movie's sound).
++bool g_movieStarted = false;
++uint64_t g_moviePlayedFrames = 0u;
++uint64_t g_movieMissingFrames = 0u;
+ 
+ namespace
+ {
+@@ -602,6 +607,12 @@ namespace
+         const int16_t *played = pcm;
+         {
+             std::lock_guard<std::mutex> lock(g_movieMutex);
++            if (g_movieStarted && pcm && frames != 0u)
++            {
++                const size_t queued = g_moviePcm.size() / 2u;
++                g_moviePlayedFrames += frames < queued ? frames : queued;
++                g_movieMissingFrames += frames > queued ? frames - queued : 0u;
++            }
+             if (!g_moviePcm.empty() && pcm && frames != 0u)
+             {
+                 mixed.assign(pcm, pcm + frames * 2u);
+@@ -639,6 +650,7 @@ void ps2PushMoviePcm(const int16_t *stereoInterleaved, size_t frames)
+     if (!stereoInterleaved || frames == 0u)
+         return;
+     std::lock_guard<std::mutex> lock(g_movieMutex);
++    g_movieStarted = true;
+     constexpr size_t kMaxFrames = 48000u * 8u;
+     g_moviePcm.insert(g_moviePcm.end(), stereoInterleaved, stereoInterleaved + frames * 2u);
+     if (g_moviePcm.size() / 2u > kMaxFrames)
+@@ -649,4 +661,13 @@ void ps2ClearMoviePcm()
+ {
+     std::lock_guard<std::mutex> lock(g_movieMutex);
+     g_moviePcm.clear();
++    g_movieStarted = false;
++    g_moviePlayedFrames = 0u;
++    g_movieMissingFrames = 0u;
++}
++
++Ps2MoviePcmStats ps2MoviePcmStats()
++{
++    std::lock_guard<std::mutex> lock(g_movieMutex);
++    return Ps2MoviePcmStats{g_moviePlayedFrames, g_movieMissingFrames, g_moviePcm.size() / 2u};
+ }
+-- 
+2.55.0.windows.3
+

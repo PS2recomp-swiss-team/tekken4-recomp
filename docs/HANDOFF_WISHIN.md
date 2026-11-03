@@ -8,8 +8,9 @@ can port later. Your netcode was not changed.
 
 - Active repo: **github.com/PS2recomp-swiss-team/tekken4-recomp** (you and Pablo are admins). The old
   `Lautreck/tekken4-recomp` is archived as a backup. Your PR #2 there was **not merged** (Pablo's decision).
-- `master` = PAL (SCES-50878). `us-slus20328` = your branch, untouched. `us-iso` = your branch + our commits
-  below: work on `us-iso` from now on.
+- `master` = PAL (SCES-50878). **`us-slus20328` = your branch = the main US line** (Pablo, 2026-11-03).
+  `us-iso` = your branch (up to caf10f5) merged with our commits below, so you can take them with
+  `git merge --ff-only origin/us-iso` on `us-slus20328`. Our review of your 10-30 work: docs/REVIEW_WISHIN.md.
 - Pablo's rule: **PAL and US are two independent cousin projects, never merged into each other.** Fixes are
   ported by hand at the other disc's addresses. End goal: one recompiler that handles both ISOs, with online play
   on both. Online work focuses on US (PAL is too heavy network-wise).

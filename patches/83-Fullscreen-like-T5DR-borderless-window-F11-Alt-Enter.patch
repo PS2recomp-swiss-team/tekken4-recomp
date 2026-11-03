@@ -1,0 +1,77 @@
+From aa6cfac36a2d995a422f79242ec31a3e29d9075b Mon Sep 17 00:00:00 2001
+From: Tommy <tommy@pham.cc>
+Date: Fri, 30 Oct 2026 10:02:53 +0100
+Subject: [PATCH] Fullscreen like T5DR: borderless = an undecorated window
+ covering its monitor, F11 or Alt+Enter
+
+raylib's ToggleBorderlessWindowed attaches the window to the monitor (glfwSetWindowMonitor): it iconified when
+another screen was clicked and the other monitors could not be used next to the game.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 31 ++++++++++++++++++++++++++---
+ 1 file changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 98947bb..216a24b 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2572,10 +2572,16 @@ void PS2Runtime::run()
+     {
+         // Tekken 4 port (PC graphics options, docs/GRAPHICS.md): TEKKEN4_FULLSCREEN=1 (or borderless) starts in
+         // borderless fullscreen on the window's monitor, =exclusive in exclusive fullscreen at the monitor's
+-        // resolution (no desktop compositor in between); F11 toggles in either mode (Alt+Enter is not used: Enter
++        // resolution (no desktop compositor in between); F11 or Alt+Enter toggles in either mode (Enter alone
+         // is the pad's Start).
+         {
+             static int s_fullscreenMode = -1; // 0 off, 1 borderless, 2 exclusive
++            // Borderless like T5DR: a plain undecorated window covering its monitor, NOT raylib's
++            // ToggleBorderlessWindowed (that attaches the window to the monitor through glfwSetWindowMonitor, so it
++            // iconifies when another screen is clicked and the other monitors cannot be used next to the game).
++            static bool s_borderless = false;
++            static Vector2 s_savedPos{};
++            static int s_savedW = 0, s_savedH = 0;
+             const auto toggle = []()
+             {
+                 if (s_fullscreenMode == 2)
+@@ -2589,8 +2595,25 @@ void PS2Runtime::run()
+                     if (!IsWindowFullscreen())
+                         SetWindowSize(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT);
+                 }
++                else if (!s_borderless)
++                {
++                    const int monitor = GetCurrentMonitor();
++                    s_savedPos = GetWindowPosition();
++                    s_savedW = GetScreenWidth();
++                    s_savedH = GetScreenHeight();
++                    const Vector2 origin = GetMonitorPosition(monitor);
++                    SetWindowState(FLAG_WINDOW_UNDECORATED);
++                    SetWindowPosition(static_cast<int>(origin.x), static_cast<int>(origin.y));
++                    SetWindowSize(GetMonitorWidth(monitor), GetMonitorHeight(monitor));
++                    s_borderless = true;
++                }
+                 else
+-                    ToggleBorderlessWindowed();
++                {
++                    ClearWindowState(FLAG_WINDOW_UNDECORATED);
++                    SetWindowSize(s_savedW > 0 ? s_savedW : HOST_WINDOW_WIDTH, s_savedH > 0 ? s_savedH : HOST_WINDOW_HEIGHT);
++                    SetWindowPosition(static_cast<int>(s_savedPos.x), static_cast<int>(s_savedPos.y));
++                    s_borderless = false;
++                }
+             };
+             if (s_fullscreenMode < 0)
+             {
+@@ -2602,7 +2625,9 @@ void PS2Runtime::run()
+                 else
+                     s_fullscreenMode = 1; // F11 then toggles borderless fullscreen
+             }
+-            if (IsKeyPressed(KEY_F11))
++            // F11, or Alt+Enter as in T5DR (Enter alone stays the pad's Start)
++            if (IsKeyPressed(KEY_F11) ||
++                (IsKeyPressed(KEY_ENTER) && (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT))))
+                 toggle();
+         }
+         uint32_t presentWidth = FB_WIDTH;
+-- 
+2.55.0.windows.3
+

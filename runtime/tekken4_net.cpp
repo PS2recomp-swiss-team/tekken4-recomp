@@ -849,6 +849,35 @@ namespace t4net
             const BOOL ok = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &throttling, sizeof throttling);
             timeBeginPeriod(1);
             note("power throttling (EcoQoS) %s for this process; timer resolution 1 ms", ok ? "off" : "could not be turned off");
+            // The same for the GPU (phase 3b): the game without the foreground window had its GPU work scheduled
+            // behind, its GS worker then waited 65-200 ms every ~6 frames for the vertex ring's fences (the GPU
+            // tens of ms behind) -- a picture held 4-12 refreshes. The process GPU scheduling priority class
+            // (gdi32 D3DKMTSetProcessSchedulingPriorityClass, what OBS uses for the same reason): HIGH, else
+            // ABOVE_NORMAL (HIGH may need elevation). TEKKEN4_NET_GPU_PRIORITY=0 leaves it.
+            const char *gp = std::getenv("TEKKEN4_NET_GPU_PRIORITY");
+            if (!gp || *gp != '0')
+            {
+                using SetGpuPriority = LONG(WINAPI *)(HANDLE, int);
+                HMODULE gdi = GetModuleHandleA("gdi32.dll");
+                if (!gdi)
+                    gdi = LoadLibraryA("gdi32.dll");
+                const auto fn = gdi ? reinterpret_cast<SetGpuPriority>(
+                                          reinterpret_cast<void *>(GetProcAddress(gdi, "D3DKMTSetProcessSchedulingPriorityClass")))
+                                    : nullptr;
+                LONG r = -1;
+                int cls = 4; // D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH
+                if (fn)
+                {
+                    r = fn(GetCurrentProcess(), cls);
+                    if (r != 0)
+                    {
+                        cls = 3; // ABOVE_NORMAL
+                        r = fn(GetCurrentProcess(), cls);
+                    }
+                }
+                note("GPU scheduling priority %s (%s)", r == 0 ? (cls == 4 ? "high" : "above normal") : "unchanged",
+                     fn ? (r == 0 ? "D3DKMTSetProcessSchedulingPriorityClass" : "refused") : "no D3DKMT entry point");
+            }
         }
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
@@ -1126,6 +1155,22 @@ namespace t4net
             if (now - s.lastSendMs >= 15)
                 sendInputsLocked();
             s.rx.wait_for(lk, std::chrono::milliseconds(2));
+        }
+    }
+
+    uint32_t waitRemoteUs(uint32_t frame, uint32_t us)
+    {
+        State &s = S();
+        const uint64_t end = qpcUs() + us;
+        std::unique_lock<std::mutex> lk(s.mu);
+        for (;;)
+        {
+            if (s.remoteContig > frame || s.lost)
+                return s.remoteContig;
+            const uint64_t now = qpcUs();
+            if (now >= end)
+                return s.remoteContig;
+            s.rx.wait_for(lk, std::chrono::microseconds(std::min<uint64_t>(end - now, 1000u)));
         }
     }
 

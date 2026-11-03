@@ -9,6 +9,50 @@ results unchanged: rollback self-test 0 mismatches (sound off and on), live-fram
 changes on and off. 14 commits on PS2Recomp branch `t4-perf`, exported as `docs/perf/patches/43..56-*.patch` (against
 t4-us 239c212 = patches 01-42; checked: t4-us + 43..56 gives exactly the tree of t4-perf).
 
+## 2026-10-30: Building to 60, smoothness (patches docs/perf/patches/80-82 against t4-us 702a93a)
+
+**Building 57 -> 60.0 fps (min second 60, two runs), every stage 60.0 fps; fight present p99 16.9-17.2 ms, no frame
+repeated or skipped.** PS2Recomp branch `t4-perf80` = t4-us 702a93a + 80-82 (applies cleanly; the measurements below
+are from `t4-perf` = the previous t4-us + the same changes + the presenter-on-tick commit 344b8f7, which t4-us's own
+"present 2 ms after each guest vblank" presenter supersedes, so it is not exported). Game override (uncommitted, not
+a PS2Recomp patch): `runtime/tekken4_perf2_overrides.cpp`.
+
+What it was: the main loop's vsync wait FUN_0022a140 polls 0x1ccafb7 at 0x22a150; the vblank fires by EE cycles, so
+the wait burned ~4.0 M of the 4.9 M EE cycles per frame in 32-cycle checkpoints (each advancing EE timers + IOP).
+- `runtime/tekken4_perf2_overrides.cpp`: normal play uses the scheduler's idle-loop skip (the one the rollback modes
+  use since phase 2) for 0x22a150 (`TEKKEN4_PERF_IDLE=0` off). Building EE 17.6 -> 15.1 ms/frame (`idle0_building` vs
+  `idle1_building`, `p3_building1/2`).
+- patch 81: the skip caches the thread record (it runs at every checkpoint now; ~1.6% of the game thread); the vblank
+  host chain keeps at most `PS2X_VBLANK_CATCHUP` (2) frames of backlog in normal play: after a stage load the game ran
+  unpaced (61-80 fps for seconds) until it had caught up the boot-anchored chain.
+- patch 82: pacing waits sleep to 1.5 ms before the deadline and yield to it (`PS2X_PACING_SPIN_US`, 0 = old); guest
+  frames were 15.7-17.5 ms apart (1 ms timer). The window thread's message wait also wakes on each guest vblank.
+- patch 80: `[frames]` line per second (PS2X_PERF_STATS): every present / guest vblank interval, repeated / skipped
+  guest frames; `tools/perf_smooth.py` summarises (fight window, or `--from/--to` for boot/menus).
+
+| stage (Practice, Kazuya vs Yoshimitsu, seconds 3..28 of the fight) | fps (min) | EE ms/f | present p50/p95/p99/max ms | repeated/skipped per min | guest frames > 25 ms |
+|---|---|---|---|---|---|
+| building before (`p3off_building`, all switches off) | 56.5 (55) | 17.1 | 16.7/17.7/18.2/20.3 | 219 / 9 | 0 |
+| building (`p3_building1`, `p3_building2`) | 60.0 (60), 60.0 (60) | 15.1, 15.1 | 16.6/16.7/16.9/21.9, -/-/17.1/21.7 | 0 / 0 | 0 |
+| laboratory before / after (`p3off_laboratory`, `p3_laboratory_b`) | 60.0 / 60.0 | 11.0 / 9.0 | 16.6/17.7/18.1/19.0 -> 16.6/16.7/17.0/17.7 | 0 / 0 | 0 |
+| airport, mall_a, mall_b, shinjuku, beach, laboratory, parking, underground, arena (`p3_*`) | 60.0 each (min 59-60) | 9.0-14.7 | p99 16.9-17.2, max 17.6-25.4 | 0 / 0 | 1 (beach, 25.3 ms, one EE stall mid-fight) |
+
+Boot -> menus -> char select (stats seconds 9..30 of the same runs): guest frames steady (p99 16.9-17.1), no
+repeats/skips with the tick present, but presents 12-20 ms apart in 9 of 11 runs (p95 ~20 ms): the window-thread latch
+races the guest's buffer swap after vblank. Before (paced clock): p99 19-20 ms and 6-11 repeat+skip pairs per minute.
+Uncommitted experiment (`logs/perf/p80/WIP-ee-latch-at-vblank.diff`, PS2X_EE_LATCH): the EE thread latches the picture
+at VBlankStart; parking menus present p95 20.4 -> 16.9 ms, p99 22.6 -> 17.6 (`p4_parking` vs `p4_parking_nolatch`);
+determinism and other stages not checked, and t4-us's new presenter may make it moot.
+Not hitches: no first-use shader compiles (one ubershader built at GS init), no GS drains in fights, no blocking waits
+in the IOP/audio path; stage loads run the EE at 100% for ~2 s (33-43 vsyncs/s, a loading screen).
+
+Determinism (`logs/perf/rb/*5`, `logs/perf/p3_results.md`): rollback self-test sound off 232 rollbacks / 514 frames /
+**0 mismatches**, sound on 202 / 447 / **0**; measure-mode state hashes switches on vs off **0 of 5945** frames differ,
+this build vs the previous perf build 0 of 5945. Measure mode already used the idle skip; measured against iterating
+(TEKKEN4_RB_IDLE=0) the skip shifts EE cycles by up to 24 (scheduler/timer state) and RDRAM differs in 7 of 5925
+frames (transient): normal play now follows the same timeline as rollback/netplay, not the old 32-cycle interleaving.
+Environment: other agents' game instances ran during most runs (contention column "BUSY 1-2").
+
 ## Stage sweep
 
 Practice, Kazuya vs CPU Yoshimitsu, each stage, sound on, the fight's seconds 3..28 (`tools\perf_fight.ps1`,
@@ -102,7 +146,7 @@ Final build (patch 56) check runs: arena 60.0 fps (GL 9.5, EE 13.3), airport 59.
 
 ## Not done / next
 
-- Building is EE-bound at ~17 ms (57 fps). The EE time is spread over VU1 (timing simulation per native block, the
+- (done 2026-10-30, see above) Building was EE-bound at ~17 ms (57 fps). The EE time is spread over VU1 (timing simulation per native block, the
   scheduler reset per MSCAL), VIF1 unpack, the IOP/SPU2 advanced per checkpoint and game code. Next candidates: VU1
   `resetScheduler` / block timing, the IOP advanced per 32-cycle checkpoint in the vsync wait loop (batching it changes
   the IOP/EE interleaving: needs care for determinism), SPU2 mixing off the game thread.

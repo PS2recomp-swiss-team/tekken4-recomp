@@ -151,3 +151,68 @@ sections as above; "before" = `music_ab_fix_full`, the state after the BGM fix a
 - **FPS** (fight, perf seconds 36-58): 56.5 (`music_v2a`) and 55.0 (`music_v2b`), the same range as before.
   The machine is still not reaching a clean 60 tonight in any variant (see above).
 - **Tests:** IOP tests 18/18 + smoke/import, ps2x_tests 482/482 (tree D:\tekken4-fork-music at `e3349b1`).
+
+## Intro movie (fixed 2026-10-30, override movie code + fork commits `dac4e50`, `d578f3c` = patches 90/91)
+
+**Symptom (user).** The intro FMV's sound was "garbage": choppy and broken, high-pitched.
+
+**Cause: the sound played at the wrong rate, with a gap after every unit.** The movie file (DATA.BIN sector
+67289, 1536 units of 0x27 video sectors + 2 audio sectors) carries SPU ADPCM stereo, left and right alternating
+every 16-byte block, 3584 frames per unit. The local HLE (`queueMovieAudio`, the movie calls 0x3000/0x3200/0x3100
+never reach zsiopdrv) queued them as 48 kHz. The data is **44.1 kHz**. The MPEG sequence header says 29.97 fps,
+there are 3675 pictures = 122.6 s, and the 1519 units that carry sound last 123.4 s at 44.1 kHz but only 113.4 s at
+48 kHz. So the sound ran 8.8 % fast and high. Because a unit is read only when the player needs the next video,
+the queue ran dry after every unit. Measured on the old path (`TEKKEN4_MOVIE_AUDIO_HZ=48000`, `logs\movie_full3_old`):
+7.1 s of gaps in the 121 s intro, the sound 5.8 s behind the picture at 102 s, and the WAV uncorrelated with the
+disc's audio (0.06).
+
+**Fix (movie parts of `runtime\tekken4_overrides.cpp`):**
+- Decode at the source rate and resample it to the mixer's 48 kHz with a streaming 4-point (Catmull-Rom) resampler
+  that carries over between units.
+- The runtime hands the pictures out on its 60.000 Hz vsync, i.e. at 30.000 fps, not 29.97. The sound is consumed
+  at the same rate: 44100 x 30/29.97 = 44144 Hz, +1.7 cents, inaudible. Without this it falls 0.1 % (120 ms)
+  behind over the intro.
+- The first unit is read about 80 ms before the decoder hands out the first picture, so the sound is held until
+  then and starts with the picture.
+- `TEKKEN4_MOVIE_AUDIO_HZ=<rate>` overrides the source rate (48000 = the old behaviour, for A/B runs).
+  `TEKKEN4_MOVIE_SYNC=1` logs, once a second, pictures vs sound played (A/V offset), gaps and queue, and a summary
+  at the close (picture intervals, fps).
+
+Runtime (fork):
+- `ps2MoviePcmStats()` = movie PCM played/missing/queued (patch 90).
+- `ps2_stubs::mpegPicturesServed()` / `mpegServeStats()` = pictures handed out and their wall-clock intervals
+  (patch 91). The player FUN_00227bd8 runs the whole movie inside one call, so the game side has no per-picture
+  hook.
+
+**Evidence** (full 140 s runs without key presses, so the whole intro plays):
+
+| | before (48 kHz, `logs\movie_full3_old`) | **after** (`logs\movie_full4`) |
+|---|---|---|
+| sound gaps in the movie (runtime count) | 7096 ms | **0 ms** |
+| A/V offset (sound minus picture) | +82 ms -> -5.8 s at 102 s | **-33 ms at the start -> -6 ms at the end** |
+| WAV vs the disc's audio (`tools\movie_audio_check.py`, 1 s windows every 10 s) | corr 0.06, lag wandering +-60 ms (40 s check, `logs\movie_old`) | **corr 0.964-1.000 (mean 0.986), lag constant -1.50 ms, drift 0.00 ms over 121 s** |
+| pictures | 3643 at 30.000 fps, intervals 28-38 ms: 3639/3642, max 43 ms | 3643 at 30.04 fps, 28-38 ms: 3636/3642 (6 < 20 ms), **max 35.5 ms** |
+
+- Pitch and duration are right: the WAV matches the disc's audio decoded at 44144 Hz with a constant lag over the
+  whole movie. At a wrong rate the lag would drift by 8.8 % (10.6 s over the movie).
+- The checker's only digital-silence runs fall after 121.4 s. The player closes on the last picture, while the
+  audio sectors hold about 2 s more; the game stops its sound there as well. Inside the movie there are none, and
+  2 of 1229 100 ms windows show a step above 4x the reference's.
+- Video: no stutter (every interval within one frame of 33.4 ms). 3643 of the file's 3675 pictures are handed
+  out, before and after the fix alike: the player ends about 1 s before the file does. The 30.000 vs 29.97 fps
+  pacing is the runtime's 60 Hz vsync; the sound now follows it.
+- In-game sound unchanged (standard path, `logs\movie_ingame_fix_full`): title/mode/charsel/prologue/fight rms
+  0.039/0.225/0.232/0.206/0.212, clipping at most 0.08 %. This is in the range of `music_v2a`/`music_v2b`; mode
+  select varies with when the menu music starts.
+- Nothing that runs in a fight changed guest state. The mixer reads one host flag (movie open), and the MPEG stub
+  and movie code only run during movies. So no rollback re-test was needed.
+- Tests: IOP tests 18/18 + smoke/import, ps2x_tests 482/482 (D:\tekken4-fork-music at `d578f3c` = t4-us + patches 90/91).
+
+Reproduce:
+```
+set TEKKEN4_SRC=D:\tekken4-fork-music & set TEKKEN4_BUILD_DIR=music & set TEKKEN4_SOUND=1 & set TEKKEN4_MOVIE_SYNC=1
+set TEKKEN4_SOUND_WAV=D:\tekken4-us\logs\movie_full4\mix.wav
+powershell -File tools\run_capture.ps1 -RunDir logs\movie_full4 -Shots "30,60,90,120,140"     (no keys: the intro plays)
+external\pytools\Scripts\python.exe -I tools\movie_audio_check.py "Tekken 4 (USA).iso" logs\movie_full4\mix.wav --to 121 --step 10 --hz 44144.14
+```
+Old behaviour for comparison: `set TEKKEN4_MOVIE_AUDIO_HZ=48000`.
