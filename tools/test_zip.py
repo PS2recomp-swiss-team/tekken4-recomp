@@ -25,7 +25,7 @@ TOOLS = (
     "run_game.cmd", "run_lock.ps1", "set_window_title.ps1", "iso_extract.py", "vu1_micro_from_elf.py",
     "t4_buildid.py", "toolchain_env.cmd", "t4_toolchain_clangcl.cmake", "fetch_msvc_sysroot.py",
     "release_payload.py", "net_play.ps1", "net_preflight.ps1", "collect_test_logs.ps1",
-    "make_test_zip.ps1", "test_zip.py", "publish_source.py",
+    "make_test_zip.ps1", "test_zip.py", "publish_source.py", "us_tree.ps1", "us_tree.cmd",
 )
 MAX_FILE_SIZE = 32 * 1024 * 1024
 
