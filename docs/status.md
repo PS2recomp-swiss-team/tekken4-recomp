@@ -1,9 +1,16 @@
 # Status
 
-_Last updated: 2026-10-30 afternoon (Grok review of the morning queue)_
+_Last updated: 2026-11-03 (review of TheWishin's US work)_
 
 ## Resume here
 To continue, open Claude Code in this folder and say: "read docs/status.md and continue".
+- **2026-11-03: TheWishin's US work reviewed** (us-slus20328 c7f13d6..caf10f5, patches 57-86, launcher, unlock-all).
+  User: his branch `us-slus20328` is the main US line; `us-iso` merged it (7875481, one trivial conflict) so he can
+  fast-forward. Findings for him: H:\tekken4-recomp_usa\docs\REVIEW_WISHIN.md (unlock setting can desync netplay,
+  portable scripts default to the PAL tree on this PC, readback shear above native, patch 82 spin). For PAL: he found
+  the intro movie PCM is 44.1 kHz; ours queues it as 48 kHz (`runtime/tekken4_overrides.cpp:212`), so the PAL intro may
+  play ~9 % fast: compare with PCSX2 (sound is low priority). Worth taking from him later: fullscreen (his 83),
+  vblank-phase present (64/65, without the 82 spin), pad read at the game's pad read (60).
 - Done in session 1: toolchain installed, PS2Recomp tools built, analyzer seed + full recompile with 0 errors,
   Ghidra project (`ghidra/Tekken4`, non-shared) analysed with SDK names applied, Ghidra export recompiled.
 - Done in session 2: Ghidra MCP tools approved and working in Claude Code. **Runtime base decided: upstream
