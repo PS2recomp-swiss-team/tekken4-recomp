@@ -93,6 +93,7 @@
 // TEKKEN4_NET_SUBFRAME_SYNC=1  correct filtered leads of 0.25..<1 frame with fractional waits (default off).
 // TEKKEN4_NET_FULL_SYNC=1  give up the measured lead from 1 frame, capped at four, without whole-frame rounding (default off).
 // TEKKEN4_NET_SYNC_CAP_ONE=1  cap each correction pause at one vblank; retain its original settling hold (default off).
+// TEKKEN4_NET_SYNC_GAP_RESET=1  refill lead samples after a >50 ms gap between live sync visits (default off).
 // TEKKEN4_NET_ATOMIC_INPUT=1  recheck a missing remote input and select its prediction under one lock (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
@@ -1156,6 +1157,11 @@ namespace tekken4_rollback
         bool subframeSync = false;
         bool fullSync = false;
         bool syncCapOne = false;
+        bool syncGapReset = false;
+        // Host-only sample lifetime experiment, observed in both arms; never restored with guest state.
+        std::chrono::steady_clock::time_point syncVisit{};
+        uint64_t syncGapEvents = 0, syncGapEligible = 0, syncGapResets = 0, syncGapDiscarded = 0;
+        double syncGapMaxMs = 0;
         // Applied corrections in both arms; pre-cap durations also define the unchanged settling hold.
         uint64_t syncCapActions = 0, syncCapEligible = 0, syncCapChanged = 0;
         double syncCapBaseMs = 0, syncCapRequestedMs = 0, syncCapActualMs = 0, syncCapMaxMs = 0;
@@ -1833,6 +1839,35 @@ namespace tekken4_rollback
         const int peerFrame = static_cast<int>(rc) - 1 - g_np.delay;
         const int mine = static_cast<int>(f) - peerFrame;
         t4net::setLead(mine);
+        // Called once per new live frame. A long wall gap can leave the window spanning a producer hitch.
+        // Expire it BEFORE this evaluation, including after early replay, rather than at the later pacing guard.
+        const auto now = std::chrono::steady_clock::now();
+        const bool hadVisit = g_np.syncVisit.time_since_epoch().count() != 0;
+        const auto gap = hadVisit ? now - g_np.syncVisit : std::chrono::steady_clock::duration::zero();
+        const double gapMs = std::chrono::duration<double, std::milli>(gap).count();
+        g_np.syncVisit = now;
+        if (g_np.timeSync && f >= g_np.tsFrom && hadVisit && gap > std::chrono::milliseconds(50))
+        {
+            ++g_np.syncGapEvents;
+            g_np.syncGapMaxMs = std::max(g_np.syncGapMaxMs, gapMs);
+            const int samples = std::min(g_np.leadN, g_np.leadWindow);
+            if (samples > 0)
+                ++g_np.syncGapEligible;
+            const bool reset = g_np.syncGapReset && samples > 0;
+            if (reset)
+            {
+                g_np.leadN = 0;
+                ++g_np.syncGapResets;
+                g_np.syncGapDiscarded += static_cast<uint64_t>(samples);
+            }
+            if (g_np.diag)
+                std::fprintf(g_log, "NETSYNCGAP_EVENT steady_ms=%.3f slot=%d f=%" PRIu64
+                                    " sync_gap_reset=%d gap_ms=%.3f samples_before=%d reset=%d"
+                                    " mine=%d peer_lead=%d rc=%" PRIu64 " hold_until=%" PRIu64 "\n",
+                             std::chrono::duration<double, std::milli>(now.time_since_epoch()).count(),
+                             g_np.slot, f, g_np.syncGapReset ? 1 : 0, gapMs, samples, reset ? 1 : 0,
+                             mine, t4net::peerLead(), rc, g_np.tsHold);
+        }
         // (after the lockstep both sides' inputs run up to lockDelay - delay frames further ahead for a few frames:
         // no samples before tsFrom)
         if (f < g_np.tsFrom)
@@ -2125,6 +2160,11 @@ namespace tekken4_rollback
                      g_np.syncCapOne ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncCapActions,
                      g_np.syncCapEligible, g_np.syncCapChanged, g_np.syncCapBaseMs,
                      g_np.syncCapRequestedMs, g_np.syncCapActualMs, g_np.syncCapMaxMs);
+        std::fprintf(g_log, "; NETSYNCGAP sync_gap_reset=%d time_sync=%d gap_events=%" PRIu64
+                            " eligible_resets=%" PRIu64 " resets=%" PRIu64 " discarded_samples=%" PRIu64
+                            " max_gap_ms=%.3f threshold_ms=50",
+                     g_np.syncGapReset ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncGapEvents,
+                     g_np.syncGapEligible, g_np.syncGapResets, g_np.syncGapDiscarded, g_np.syncGapMaxMs);
         std::fprintf(g_log, "; NETATOMICINPUT atomic_input=%d misses_live=%" PRIu64 " misses_replay=%" PRIu64
                             " recovered_live=%" PRIu64 " recovered_replay=%" PRIu64
                             " advanced_live=%" PRIu64 " advanced_replay=%" PRIu64
@@ -2262,6 +2302,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_FULL_SYNC=1: continuous measured lead from 1 frame, cap 4; settling hold rounds up\n");
         if (g_np.syncCapOne)
             std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_CAP_ONE=1: correction pauses capped at one vblank; pre-cap settling hold retained\n");
+        if (g_np.syncGapReset)
+            std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_GAP_RESET=1: discard lead samples after >50 ms between live sync visits; refill normal window\n");
         if (g_np.atomicInput)
             std::fprintf(g_log, "NET TEKKEN4_NET_ATOMIC_INPUT=1: locked exact-input recheck and held prediction\n");
         if (g_np.replayBatch)
@@ -2840,6 +2882,8 @@ namespace tekken4_rollback
             g_np.fullSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SYNC_CAP_ONE"))
             g_np.syncCapOne = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_SYNC_GAP_RESET"))
+            g_np.syncGapReset = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_ATOMIC_INPUT"))
             g_np.atomicInput = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_REPLAY_BATCH"))

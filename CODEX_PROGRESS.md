@@ -1,5 +1,117 @@
 # T4 beta progress, 2026-11-03
 
+## Current: expire time-sync feedback after a long live-frame gap
+
+Latest supplied real verify finished 2026-11-03T01:13:56. SYNC_CAP_ONE really
+acted: join changed 53 corrections, reducing requested pauses from 3666.740
+to 1516.697 ms, max 16.667 ms. Yet ON host/join rollbacks are 286/1019 (3.56x)
+and replay frames 489/3706 (7.58x), aggregate 1305/4195. Mean depths are
+1.71/3.64. Large pause size is insufficient to explain the imbalance. Keep
+cap-one default-off. OFF host is truncated; no controlled aggregate benefit
+or regression is established. Join stall+sync 3492.850 ms and host excess
+rebase 3461 ms fit coupled pacing accounting, not an initiating cause.
+
+Done: 24 independent read-only area agents read AGENTS.md/current progress.
+Safe in-tree inventory again found eight .log files, all ZIP/scanner output;
+no paired runtime arrival/advantage/wait chronology. First unique arrivals,
+advantage sequence and first-wait order remain UNKNOWN. No fixed role/sign,
+publication index, ACK, snapshot or scheduler-restore defect was found.
+Positive advantage estimates the waiting peer AHEAD. Do not invent chronology
+from totals. Latest switch activation disproves the inference that a repeated
+historical build ID necessarily means no runtime changed; exact executed
+bytes remain unproved. Identity hashes staged modules, not executable bytes.
+
+One new hypothesis: a long replay/producer interruption leaves the 20-live-
+frame time-sync window holding feedback from before the interruption. Its
+next evaluation can mix different producer phases and select an obsolete
+correction. Source has no wall-age expiry. This is a source-supported
+opportunity, NOT a demonstrated cause. FAST_SYNC already tried a shorter
+window; this experiment retains the normal length and resets only at gaps.
+A later pacing-guard reset would miss the current evaluation, so this check
+runs at npTimeSync before sampling/evaluation, once per new live frame.
+
+Root changed runtime/tekken4_rollback_overrides.cpp behind literal default-off
+TEKKEN4_NET_SYNC_GAP_RESET=1. In time-sync-enabled evaluations at/after tsFrom,
+a steady-clock gap strictly >50 ms from the preceding live sync visit clears
+a nonempty lead window when ON. The current sample then starts the refill;
+20 fresh samples are needed with FAST_SYNC off. No added settling hold:
+tsHold, lastCorrection, duration/threshold/gain, replay order, pacing and
+input/wire/snapshot policy are retained. OFF leaves the filter unchanged.
+Both arms add clock/counter/log overhead; no zero-overhead claim is made.
+This check measures live controller visits, not individual input arrivals.
+
+Both arms append NETSYNCGAP to retained NETSUMMARY: sync_gap_reset, time_sync,
+gap_events (>50 ms eligible visits), eligible_resets (nonempty windows),
+resets (actual ON clears), discarded_samples (valid entries, capped at window
+length per clear), max_gap_ms (long-gap maximum), threshold_ms=50. Counts
+cover all qualifying visits, including empty windows after a correction.
+DIAG=1 logs NETSYNCGAP_EVENT: steady time, slot/frame, gap, samples before,
+reset flag, raw mine/peer lead, frontier and existing hold. Peer lead is an
+observation under its own transport lock, not an atomic paired estimate.
+These observations do not recover unique input first-arrival times.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_SYNC_GAP_RESET=1
+
+Open / owner-only REAL-ENTRY TEST: stage/build this exact reviewed runtime
+module and run actual paired Mode::Net games OFF/ON through the external
+verify wrapper. Forward VERIFY_ENV.txt via -Env in ON; net_pair clears
+inherited settings and does not read this file. Common settings in BOTH arms:
+TEKKEN4_NET_DELAY=3;TEKKEN4_NET_LOCKDELAY=7;TEKKEN4_NET_DIAG=1;TEKKEN4_NET_LOCALPAD=0
+RBSTART=600, TIMESYNC=1, normal 20-sample filter, RB_MODE unset/net,
+RTT150/jitter5/loss3, 6000 frames, matching workload/foreground conditions.
+Keep SYNC_CAP_ONE and every other experiment equal/off, especially FAST_SYNC,
+FULL_SYNC, SUBFRAME_SYNC, REPLAY_BEFORE_SYNC, REPLAY_BATCH, ATOMIC_INPUT,
+SIM_NORMAL_PRIORITY, SIM_SAFE_WAIT, LIVE_LEAD, ORDERED_LEAD, REFRESH_RC,
+SEND_FIRST, REBASE_CATCHUP, EARLY_DEADLINE and PRED_HEADROOM. Retain effective
+parameters, paired full rb_frames/transport logs, stdout/stderr and timings.
+Compare reviewed/staged SHA-256, refresh identity after staging, clear BUILD
+overrides and record successful build plus each launched executable SHA-256.
+No build/identity refresh occurred here; equal seeds do not control arrivals.
+
+Require OFF sync_gap_reset=0 and resets=discarded_samples=0; ON literal banner,
+sync_gap_reset=1, resets=eligible_resets>0, discarded_samples>=resets, each
+reset event samples_before>0 and gap_ms>=50.000 (rounded display; the branch
+requires strictly >50 ms). No nonempty resets means
+UNEXERCISED. Compare full paired first recorded waits, publication/frontier
+gaps and advantage around reset/refill/correction sequences. Success requires
+lower absolute aggregate replay/depth with acceptable sustained advantage,
+stalls, total waits, FPS and frame tails. Fewer sync corrections alone is
+not success: frequent resets can starve this controller. Reject increased
+lead/stalls/repeated replay or benefit obtained only by worsening the other
+peer. Require zero hash mismatches/NETDESYNC; repeat same roles, swap roles,
+then use two physical PCs. Default stays OFF; release acceptance stays OPEN.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+Inventory only. Selftest/SelfNet dispatch to different boundaries; neither
+runs paired npBoundary. Root checked exact env bytes and source changes.
+Compilation, activation, safety and benefit are UNRUN: AGENTS.md forbids
+builds, games and tools/net_* here. No changed runtime entry ran; this has
+NOT met the requested real-entry-test requirement. Only the owner's actual
+paired verify can close it. No source check is represented as runtime proof.
+
+Original bytes of all three changed files are retained under
+logs/runtime-sync-gap-reset/originals. Root alone edits runtime/progress/env;
+all area agents are read-only. No Git command, outside-tree access, deletion,
+patch edit, build, game, forbidden helper, server, push or release occurred.
+
+Area agents: pair_logs, verify_metrics, advantage_sign, sync_filter,
+prediction_cap, vblank_pacing, input_sampling, publication_guard,
+transport_send, transport_receive, resend_coalesce, arrival_observability,
+simulated_network, early_replay, replay_scheduler, snapshot_state, hash_locks,
+startup_roles, switch_history, build_identity, tests_catalogs, experiment_design,
+runtime_entry_route, fresh_feedback. Separate final_diff_review_sync_gap
+completed the final three-file review with no blocking source issue. Checked
+chrono/format arguments, OFF filter policy, ON reset/refill/hold lifecycle,
+exact env bytes, LF-only additive runtime diff and retained history suffix.
+Review corrected proof wording for three-decimal gap_ms rounding. Source
+review proves no compilation, runtime activation, safety or benefit.
+
+Reviewed runtime SHA-256: 3d1476c8c11282a5f01a99c26090b22e889888658117900ea8aa1fc42436ad50
+
+# T4 beta progress, 2026-11-03
+
 ## Current: test one-frame time-sync pauses with the original settling hold
 
 Latest supplied real verify finished 2026-11-03T00:57:33. SIM_NORMAL_PRIORITY
