@@ -1160,6 +1160,12 @@ namespace tekken4_rollback
         bool syncCapOne = false;
         bool syncGapReset = false;
         bool syncWallHold = false;
+        bool syncProgressOnly = false;
+        // Host-only sample watermark; retained across corrections and guest restores.
+        bool syncProgressSeen = false;
+        uint64_t syncProgressRc = 0, syncProgressCandidates = 0, syncProgressRepeated = 0,
+                 syncProgressSkipped = 0, syncProgressSamples = 0, syncProgressEvals = 0,
+                 syncProgressCorrections = 0;
         // Host-only settling deadline, measured from correction end; never restored with guest state.
         std::chrono::steady_clock::time_point syncHoldEnd{};
         bool syncHoldReleased = false;
@@ -1852,6 +1858,7 @@ namespace tekken4_rollback
         g_np.leadN = 0;
         g_np.lastCorrection = f;
         ++g_np.corrections;
+        ++g_np.syncProgressCorrections;
         g_np.correctionMs += ms;
     }
 
@@ -1897,9 +1904,11 @@ namespace tekken4_rollback
         const bool wallEligible = g_np.timeSync && f < g_np.tsHold &&
                                   g_np.syncHoldEnd.time_since_epoch().count() != 0 && now >= g_np.syncHoldEnd;
         const bool wallSample = g_np.syncWallHold && wallEligible;
+        const bool repeated = g_np.syncProgressSeen && rc <= g_np.syncProgressRc;
+        const bool admit = !g_np.syncProgressOnly || !repeated;
         if (wallEligible)
             ++g_np.syncHoldEligible;
-        if (wallSample)
+        if (wallSample && admit)
         {
             ++g_np.syncHoldSamples;
             if (!g_np.syncHoldReleased)
@@ -1915,13 +1924,35 @@ namespace tekken4_rollback
                          std::chrono::duration<double, std::milli>(now.time_since_epoch()).count(),
                          g_np.slot, f, g_np.syncWallHold ? 1 : 0, g_np.tsHold,
                          std::chrono::duration<double, std::milli>(g_np.syncHoldEnd.time_since_epoch()).count(),
-                         wallSample ? 1 : 0, mine, t4net::peerLead(), rc);
+                         wallSample && admit ? 1 : 0, mine, t4net::peerLead(), rc);
         if (f >= g_np.tsHold || wallSample)
         {
+            // Observe the SAME rc used for mine. Input progress does not guarantee fresh peer-lead metadata:
+            // peerLead remains the existing separately locked cached observation in both arms.
+            const int theirs = t4net::peerLead();
+            ++g_np.syncProgressCandidates;
+            if (repeated)
+                ++g_np.syncProgressRepeated;
+            if (!admit)
+                ++g_np.syncProgressSkipped;
+            if (g_np.diag)
+                std::fprintf(g_log, "NETSYNCPROGRESS_SAMPLE steady_ms=%.3f slot=%d f=%" PRIu64
+                                    " sync_progress_only=%d rc=%" PRIu64 " last_rc=%" PRIu64
+                                    " seen=%d repeated=%d admitted=%d mine=%d peer_lead=%d samples_before=%d\n",
+                             std::chrono::duration<double, std::milli>(now.time_since_epoch()).count(),
+                             g_np.slot, f, g_np.syncProgressOnly ? 1 : 0, rc, g_np.syncProgressRc,
+                             g_np.syncProgressSeen ? 1 : 0, repeated ? 1 : 0, admit ? 1 : 0, mine, theirs,
+                             std::min(g_np.leadN, g_np.leadWindow));
+            // Do not evaluate the unchanged full window on a skipped visit either.
+            if (!admit)
+                return false;
             g_np.leadMine[g_np.leadN % g_np.leadWindow] = mine;
-            g_np.leadTheirs[g_np.leadN % g_np.leadWindow] = t4net::peerLead();
+            g_np.leadTheirs[g_np.leadN % g_np.leadWindow] = theirs;
             g_np.leadWallSample[g_np.leadN % g_np.leadWindow] = wallSample;
             ++g_np.leadN;
+            g_np.syncProgressSeen = true;
+            g_np.syncProgressRc = rc;
+            ++g_np.syncProgressSamples;
         }
         if (!g_np.timeSync || g_np.leadN < g_np.leadWindow || t4net::peerLost())
             return false;
@@ -1943,6 +1974,13 @@ namespace tekken4_rollback
         for (int i = cut; i < g_np.leadWindow - cut; ++i)
             sum += d[i];
         const double adv = sum / (2.0 * (g_np.leadWindow - 2 * cut)); // frames this side is ahead
+        ++g_np.syncProgressEvals;
+        if (g_np.diag)
+            std::fprintf(g_log, "NETSYNCPROGRESS_EVAL steady_ms=%.3f slot=%d f=%" PRIu64
+                                " sync_progress_only=%d rc=%" PRIu64 " adv=%.6f samples=%d\n",
+                         std::chrono::duration<double, std::milli>(now.time_since_epoch()).count(),
+                         g_np.slot, f, g_np.syncProgressOnly ? 1 : 0, rc, adv,
+                         std::min(g_np.leadN, g_np.leadWindow));
         if (wallSamples > 0)
         {
             ++g_np.syncHoldEvals;
@@ -2230,6 +2268,12 @@ namespace tekken4_rollback
                             " window_evals=%" PRIu64 " window_corrections=%" PRIu64,
                      g_np.syncWallHold ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncHoldEligible,
                      g_np.syncHoldReleases, g_np.syncHoldSamples, g_np.syncHoldEvals, g_np.syncHoldCorrections);
+        std::fprintf(g_log, "; NETSYNCPROGRESS sync_progress_only=%d time_sync=%d candidates=%" PRIu64
+                            " repeated=%" PRIu64 " skipped=%" PRIu64 " samples=%" PRIu64
+                            " evals=%" PRIu64 " corrections=%" PRIu64 " last_rc=%" PRIu64,
+                     g_np.syncProgressOnly ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncProgressCandidates,
+                     g_np.syncProgressRepeated, g_np.syncProgressSkipped, g_np.syncProgressSamples,
+                     g_np.syncProgressEvals, g_np.syncProgressCorrections, g_np.syncProgressRc);
         std::fprintf(g_log, "; NETATOMICINPUT atomic_input=%d misses_live=%" PRIu64 " misses_replay=%" PRIu64
                             " recovered_live=%" PRIu64 " recovered_replay=%" PRIu64
                             " advanced_live=%" PRIu64 " advanced_replay=%" PRIu64
@@ -2371,6 +2415,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_GAP_RESET=1: discard lead samples after >50 ms between live sync visits; refill normal window\n");
         if (g_np.syncWallHold)
             std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_WALL_HOLD=1: release settling hold at original frame or nominal wall deadline from correction end\n");
+        if (g_np.syncProgressOnly)
+            std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_PROGRESS_ONLY=1: sample/evaluate time sync only on advancing confirmed remote input frontier\n");
         if (g_np.atomicInput)
             std::fprintf(g_log, "NET TEKKEN4_NET_ATOMIC_INPUT=1: locked exact-input recheck and held prediction\n");
         if (g_np.replayBatch)
@@ -2953,6 +2999,8 @@ namespace tekken4_rollback
             g_np.syncGapReset = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SYNC_WALL_HOLD"))
             g_np.syncWallHold = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_SYNC_PROGRESS_ONLY"))
+            g_np.syncProgressOnly = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_ATOMIC_INPUT"))
             g_np.atomicInput = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_REPLAY_BATCH"))

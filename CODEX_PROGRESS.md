@@ -1,5 +1,130 @@
 # T4 beta progress, 2026-11-03
 
+## Current: sample time sync only when confirmed remote input advances
+
+Latest supplied real verify finished 2026-11-03T01:47:36. WALL_HOLD acted:
+host/join released holds 5/44, early samples 15/145, affected windows 15/65,
+corrections from those windows 0/38. Yet rollbacks are 358/917 (2.56x),
+replay frames 737/3334 (4.52x), mean depth 2.06/3.64; combined 1275 rollbacks
+and 4071 replay frames. Wall expiry is insufficient; keep it default-off.
+OFF host is truncated, so a controlled OFF/ON aggregate comparison is absent.
+Join excess stall+sync is 5203 ms; host excess rebase is 5206 ms. This is
+coupled timing accounting, not evidence of the initiating side. Predictions
+include replay: join 7000 = 4996 live + 2004 replay, not 7000 live misses.
+
+Done: 24 independent area agents read AGENTS.md/current progress. Safe
+in-tree inventory found only eight ZIP/scanner .log files. Latest-verify
+pointers contain source-check/refusal evidence, not paired game logs. Input
+first-arrival timing, advantage history and first-wait order remain UNKNOWN.
+No outside folder was opened. Do not infer a fixed role defect from totals.
+New WALL_HOLD counters prove that behavior ran despite the historical repeated
+build ID; exact reviewed/staged/executed bytes remain unproved. Direct runtime
+build does not itself stage modules or refresh the identity stamp.
+
+One hypothesis: time-sync filtering can over-weight a stationary remote-input
+frontier. npTimeSync inserts one sample per local live frame, even when rc
+has not advanced since the last admitted sample and peerLead is cached. A
+peer producer/replay pause can occupy multiple filter slots with this phase.
+This is a source-supported opportunity, NOT a demonstrated cause. Genuine
+peer stalls also require correction: rejecting repeated-frontier samples
+can starve useful feedback and worsen lead/stalls. Earlier ORDERED_LEAD and
+LIVE_LEAD alter metadata order/refresh; neither changes local sample weighting.
+
+Changed runtime/tekken4_rollback_overrides.cpp behind literal default-off
+TEKKEN4_NET_SYNC_PROGRESS_ONLY=1. After the original startup/hold guard,
+ON admits a sample only on the first admission or rc > last admitted rc.
+A skipped visit returns before BOTH insertion and evaluation, including a
+full window. The host-only watermark updates on admission only and survives
+correction resets and guest restores. OFF admits every originally eligible
+sample. Keep window length, trimmed mean, gain, threshold, correction spacing,
+pause size, hold, replay order, prediction/input/wire and snapshot policy.
+
+The gate uses the same validated contiguous-input rc used to compute mine.
+This is ARRIVAL progress, not proof of a new peer publication or fresh lead.
+peerLead retains the original separate-lock cached observation in both arms;
+no atomic paired observation or new lead provenance is claimed. Resends may
+advance rc and reordered metadata may still be stale. Normal contiguous
+retransmission batches undermine a sparse/highest-input-hole experiment, so
+no prediction finality or accepted-frontier rule was relaxed.
+
+Both arms append NETSYNCPROGRESS to retained NETSUMMARY: sync_progress_only,
+time_sync, candidates (after original guards), repeated (rc <= last admitted
+rc), skipped, samples, evals, corrections and last_rc. Candidates = skipped +
+samples; ON skipped = repeated; OFF skipped = 0. Counters are cumulative,
+including original sample visits when time_sync=0; compare with time_sync=1.
+DIAG=1 writes NETSYNCPROGRESS_SAMPLE with steady time, slot, frame, rc,
+last_rc, seen, repeated, admitted, raw lead and pre-insertion sample count.
+NETSYNCPROGRESS_EVAL records each full-window filtered advantage. Existing
+correction/wait/replay/transport diagnostics remain available. These records
+are NOT unique input first-arrival timestamps. Both arms add logging and
+counter cost; no zero-overhead or numerical counterfactual claim is made.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_SYNC_PROGRESS_ONLY=1
+
+Open / owner-only REAL-ENTRY TEST: stage/build these exact runtime bytes and
+run actual paired Mode::Net games OFF/ON through the external verify wrapper.
+Forward this file explicitly via -Env for ON; net_pair clears inherited
+settings and does not read VERIFY_ENV itself. Common BOTH arms: DELAY=3,
+LOCKDELAY=7, DIAG=1, LOCALPAD=0 (all TEKKEN4_NET_ prefix), RBSTART=600,
+TIMESYNC=1, normal 20-sample window, RB_MODE unset/net, RTT150/jitter5/loss3,
+6000 frames, matching workload and foreground conditions. Keep WALL_HOLD,
+GAP_RESET, CAP_ONE, FAST_SYNC, FULL_SYNC, SUBFRAME_SYNC, REPLAY_BEFORE_SYNC,
+REPLAY_BATCH, ATOMIC_INPUT, SIM_NORMAL_PRIORITY, SIM_SAFE_WAIT, LIVE_LEAD,
+ORDERED_LEAD, REFRESH_RC, SEND_FIRST, REBASE_CATCHUP, EARLY_DEADLINE,
+PRED_HEADROOM and other experiments equal/off. Record actual seed/script
+streams: the helper assigns different seeds by role; same seeds do not control
+per-input delivery histories. Repeat same roles, swap roles/streams, then two PCs.
+
+Require OFF sync_progress_only=0 and skipped=0. Require ON literal banner,
+sync_progress_only=1, skipped=repeated>0, samples>0 and evals>0. Each ON
+repeated SAMPLE must have admitted=0; after the first admitted SAMPLE,
+admitted=1 requires rc>last_rc, and a skipped visit must not emit EVAL at
+that frame. No skips means UNEXERCISED; no evaluations suggests starvation,
+not success. Corrections count actual applied corrections in both arms,
+including a pending REPLAY_BEFORE_SYNC correction if another experiment is
+combined; keep that switch OFF here. Full paired logs must show the sample,
+advantage and first recorded wait sequences, plus publication/frontier gaps.
+Unique first arrivals still need separate evidence; totals cannot supply it.
+
+Success requires lower absolute combined replay work/depth with acceptable
+sustained lead, stalls, total waits, FPS and displayed-frame tails, and zero
+hash mismatches/NETDESYNC. Fewer corrections alone is not benefit. Reject a
+ratio improvement obtained by worsening the other peer or starving feedback.
+Compare reviewed/staged runtime SHA-256, refresh identity after staging,
+clear explicit BUILD overrides, retain successful build output and the SHA-256
+of EACH launched executable. Build identity hashes staged inputs, not exe bytes.
+
+Ran: tests_catalogs executed actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+Source inventory only. Test/SelfNet use different boundaries and do not run
+paired npBoundary/npTimeSync. Root checked exact switch-file bytes and source
+changes against retained originals. Compilation, activation, safety and
+benefit are UNRUN: AGENTS.md forbids builds, games and tools/net_* here.
+No changed runtime entry ran. The requested real-entry-test requirement is
+NOT met here; only the owner's real paired verify can close it. Release
+acceptance remains OPEN. No source/catalog check is represented as game proof.
+
+Original bytes of the three changed files are retained under
+logs/runtime-sync-progress-only/originals. Root alone edits runtime/progress/env;
+all area agents are read-only. No Git command, outside-tree access, deletion,
+patch edit, build, game, forbidden helper, server, push or release occurred.
+
+Area agents: pair_logs, verify_metrics, advantage_sign, sync_filter,
+prediction_cap, vblank_pacing, input_sampling, publication_guard,
+transport_send, transport_receive, resend_coalesce, arrival_observability,
+simulated_network, early_replay, replay_scheduler, snapshot_state, hash_locks,
+startup_roles, switch_history, build_identity, tests_catalogs, experiment_design,
+runtime_entry_route, fresh_feedback. Separate final_diff_review_progress_only
+completed with no blocking source issue. It independently checked the OFF
+gate, watermark/reset lifecycle, format arguments, hold interaction, exact env
+bytes, LF-only runtime diff, historical suffix and runtime SHA-256. Review is
+source-only, not compilation or runtime proof.
+
+Reviewed runtime SHA-256: 2de51b0813f8ebda2fa182ac3b9e3f47d98b5960b454b97796233fe8a57899af
+
+# T4 beta progress, 2026-11-03
+
 ## Current: bound the settling hold by its nominal wall duration
 
 Latest supplied real verify finished 2026-11-03T01:30:39. SYNC_GAP_RESET
