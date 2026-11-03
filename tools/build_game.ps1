@@ -178,7 +178,7 @@ function Files([string]$Dir, [string]$Filter, [switch]$Recurse) {
     if (-not (Test-Path -LiteralPath $Dir)) { return @() }
     return @(Get-ChildItem -LiteralPath $Dir -Filter $Filter -File -Recurse:$Recurse | ForEach-Object { $_.FullName })
 }
-function Get-TreeHead { $h = & git -C $Tree rev-parse HEAD 2>$null; if ($LASTEXITCODE -eq 0) { return "$h".Trim() }; return '' }
+function Get-TreeHead { if (-not (Test-Path -LiteralPath (Join-Path $Tree '.git'))) { return '' }; $h = & git -C $Tree rev-parse HEAD 2>$null; if ($LASTEXITCODE -eq 0) { return "$h".Trim() }; return '' }
 
 # ---------------------------------------------------------------- step runner
 $Timings = New-Object System.Collections.ArrayList
