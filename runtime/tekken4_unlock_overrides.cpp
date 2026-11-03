@@ -1,8 +1,8 @@
 // Tekken 4 (SLUS-20328, NTSC-U v1.00): all fighters (and costumes) selectable from the start.
 //
-// ON by default; TEKKEN4_UNLOCK_ALL=0 turns it off (the game's own unlock rules apply again). Netplay: the setting
-// is read once at startup, so both peers must run with the same value (unset on both = unlocked; the launcher and
-// netplay never need to set it, only 0 differs and must then be set on both sides).
+// ON by default; TEKKEN4_UNLOCK_ALL=0 turns it off (the game's own unlock rules apply again) offline only. Online
+// (TEKKEN4_NET set) it is always on and TEKKEN4_UNLOCK_ALL is ignored: the selectable-fighter mask is guest RAM, so a
+// peer with the game's own unlocks would desync after character select, and the build id / HELLO do not carry it.
 //
 // How the game decides (found with headless Ghidra, tools\ghidra_decomp.cmd):
 //   0x30e100 is a table of 112 entries x 28 bytes, one per (fighter, costume): +0 u16 fighter, +2 u16 costume,
@@ -33,14 +33,21 @@ namespace tekken4_unlock
 
     void apply(PS2Runtime &runtime)
     {
+        const char *net = std::getenv("TEKKEN4_NET");
+        const bool online = net && *net;
         const char *env = std::getenv("TEKKEN4_UNLOCK_ALL");
-        if (env && *env && std::strcmp(env, "0") == 0)
+        const bool off = env && *env && std::strcmp(env, "0") == 0;
+        if (off && !online)
         {
             RUNTIME_LOG("[tekken4] TEKKEN4_UNLOCK_ALL=0: the game's own unlocks apply\n");
             return;
         }
         runtime.registerFunction(kAvailableCheck, alwaysAvailable);
-        RUNTIME_LOG("[tekken4] all fighters unlocked (override of 0x1ec350; TEKKEN4_UNLOCK_ALL=0 turns it off)\n");
+        if (online)
+            RUNTIME_LOG("[tekken4] all fighters unlocked: always on online (TEKKEN4_NET)"
+                        << (off ? ", TEKKEN4_UNLOCK_ALL=0 ignored" : "") << "\n");
+        else
+            RUNTIME_LOG("[tekken4] all fighters unlocked (override of 0x1ec350; TEKKEN4_UNLOCK_ALL=0 turns it off)\n");
     }
 }
 
