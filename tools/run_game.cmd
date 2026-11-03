@@ -5,8 +5,12 @@ rem The line to look at is usually the last "[guest-branch:...]" or crash line n
 setlocal
 set "ROOT=%~dp0.."
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=runtime"
+rem A release bundle (toolchain\toolchain.json) carries its own tree; a checkout finds it through tools\us_tree.cmd,
+rem which never picks the PAL cousin project's tree.
+if exist "%ROOT%\toolchain\toolchain.json" (set "TREE=%ROOT%\deps\ps2recomp" & goto :tree_found)
 call "%~dp0us_tree.cmd" || exit /b 1
 set "TREE=%TEKKEN4_SRC%"
+:tree_found
 set "EXE=%TREE%\out\%TEKKEN4_BUILD_DIR%\ps2xRuntime\ps2EntryRunner.exe"
 if not exist "%EXE%" (echo ps2EntryRunner.exe not built: run tools\build_runtime.cmd & exit /b 1)
 if not exist "%ROOT%\logs" mkdir "%ROOT%\logs"

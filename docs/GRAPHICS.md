@@ -14,7 +14,7 @@ resolutions, anti-aliased, settings like T5DR Online. All switches are environme
 | Anti-aliasing | `TEKKEN4_AA` | off, **fxaa**, smaa, ssaa2, ssaa3, ssaa4, msaa2, msaa4, msaa8; `+` combines (e.g. `ssaa2+fxaa`); 1/on = fxaa, 0 = off | fxaa = FXAA 3.11 (quality preset) on the presented picture. ssaaN = the scene drawn N times larger per axis and averaged down (true supersampling; costs N^2 the fill rate). msaaN = N samples per pixel done as SSAA (sqrt N per axis), see "Why no MSAA". The drawn size is capped at 8x native (4K + msaa4 draws at 8x = 1.66x per axis). smaa = FXAA (SMAA needs its precomputed lookup textures, not in this tree). `TEKKEN4_FXAA_SUBPIX` = FXAA sub-pixel amount 0..1 (**0.5**). |
 | Anisotropic filtering | `TEKKEN4_ANISO` | 1/off, 2, **4**, 8, 16 | filtered taps along the long axis of each pixel's texture footprint for filtered 3D draws (the game has no mipmaps): sharper, less shimmering floors at a distance. 8 cost the 4K step 3.4 fps on the Arena stage (56.6 vs 60.0), hence 4. |
 | 2D / HUD | `TEKKEN4_HUD` | **soft**, sharp | sharp = "sharp bilinear" for magnified 2D sprites of game textures (HUD, menus, fonts, portraits): each texel keeps its colour with a one-pixel smooth edge instead of the GS's bilinear blur stretched over several pixels. Only above native. |
-| Fullscreen | `TEKKEN4_FULLSCREEN` | **0**, 1/borderless, exclusive | 1 = borderless fullscreen on the window's monitor; exclusive = exclusive fullscreen at the monitor's resolution (no desktop compositor in between: about one refresh less latency than a window). **F11** toggles while playing (Alt+Enter is not used: Enter is the pad's Start). |
+| Fullscreen | `TEKKEN4_FULLSCREEN` | **0**, 1/borderless, exclusive | 1 = borderless fullscreen on the window's monitor; exclusive requests exclusive fullscreen at the monitor's resolution. **F11 or Alt+Enter** toggles while playing (patch 83); Enter alone is the pad's Start. No latency saving is established for a player's setup. |
 | Window scaling | `TEKKEN4_WINDOW_FILTER` | **area**, sharp, bilinear, nearest | how the picture is scaled to the window: area = averages all picture pixels under a window pixel when the picture is larger (a 4K picture in a 1080p window = supersampling), bilinear when it is smaller; sharp = sharp bilinear when enlarging (native in a big window). |
 
 Developer switches: `PS2X_GL_SPRITE_SNAP=0` (old sprite edges), `PS2X_GL_REGION_LINEAR=0` (CLAMP region modes point
@@ -23,6 +23,13 @@ sampled as before), `PS2X_GS_NATIVE_LINES` (picture height the steps are compute
 Suggested: a strong graphics card at a 1440p screen: `TEKKEN4_INTERNAL_RES=auto` (= 1440p), AA fxaa; for the best
 picture `TEKKEN4_INTERNAL_RES=1440p` + `TEKKEN4_AA=ssaa2+fxaa` (draws at 2880 lines; fps not measured yet). Integrated graphics: auto
 (1080p at most) or native.
+
+## Online boot input
+
+| setting | switch | values | notes |
+|---|---|---|---|
+| Automatic Versus menu input | `TEKKEN4_NET_AUTO_VS` | **off** (unset or anything except 1), 1 | Opt-in netplay boot script through the normal pad path. Both players receive the same agreed presses; real pads are neutral during the bounded boot window. `TEKKEN4_RB_INPUT`, when set, supplies the shared finite script in this window. The deadline logs an unverified handoff: no select/mode address is assumed. Fresh and existing saves may need different menu timing. See `docs/DIRECTFIGHT_T4.md` for the script, limits and required pair checks. Unbuilt and untested in this source copy. |
+| Automatic Versus deadline | `TEKKEN4_NET_AUTO_VS_END` | **1200**, integer 1..3600 | Shared logical input frame: neutral release at this frame, normal input after it. Used only with automatic Versus input; peers must agree on the schedule and deadline. This timeout restores control even if a dialog or menu takes a different path. |
 
 ## What was wrong and what changed
 

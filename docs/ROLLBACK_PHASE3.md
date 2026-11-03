@@ -15,10 +15,11 @@ both rounds with KOs, win poses/replays, then the next match on Underground), bo
 | `n50b` | 50 (48) | 1 | 727 / 1327 | 927 / 1655 | 3 / 4 | 16.9 / 26.4 / 41.3; 22.2 / 28.3 / 43.6 | 409 / 417 (2.4 s, the lockstep boot) | 3 / 4 | 39.0 / 36.8 | 26.0 / 45.7; 26.2 / 53.3 | 416 (+ ref 416) | **0** |
 | `n150b` | 150 (148-151) | 3 (auto) | 808 / 1148 | 1416 / 1955 | 5 / 6 | 19.7 / 30.6 / 48.0; 21.2 / 31.2 / 56.9 | 423 / 410 (3.7 s) | 1 / 26 | 38.9 / 36.9 | 27.1 / 46.0; 27.2 / 52.8 | 402 (+ ref 402) | **0** |
 
-- **0 desyncs**: host and joiner agree on the final-state hash (RDRAM + scratchpad + VU0, IOP RAM + SPU2 RAM + IOP
+- **0 sampled hash mismatches**: host and joiner agree on the final-state hash (RDRAM + scratchpad + VU0, IOP RAM + SPU2 RAM + IOP
   threads, EE cycle) of every 30th frame from frame 30 to 12 000+, and both agree with `nref`, a single-process
-  measure run fed the same inputs on time (`docs/rollback/net_compare.py`). So the netplay timeline, with its
-  rollbacks, is bit-identical to playing the same inputs offline, sound included.
+  measure run fed the same inputs on time (`docs/rollback/net_compare.py`). This establishes agreement of the
+  covered state at those sampled frames. It does not check every frame or prove identical presented pictures,
+  heard audio or smooth play; the separate picture, sound and timing observations below have their own limits.
 - **Pictures** (`net_shot_f*.bmp` at frames 2400 ... 12000, `logs/net/n*b/contact.png`, host row over joiner row):
   the same scene on both at every shot (fight start, rounds, "PAUL WINS", "KAZUYA WINS", the next match's intro and
   fight); about half of the pairs are pixel-identical, the others one presented frame apart (the shot takes the
@@ -93,9 +94,10 @@ Optional `TEKKEN4_NET_KEY`: SipHash-2-4 tag on every packet. The peer is lost af
 3 levels, so stick noise is no new input).
 
 **Build id** (`tools/t4_buildid.py`, run by `net_build.cmd`, written to `out\net\ps2xRuntime\t4net_build.txt`):
-`sha1("t4dr-build:<SLUS_203.28 sha1>:<code_id>:<net version>")[:16]`, code_id = SHA-1 over the PS2Recomp tree's commit
-and uncommitted diff, `patches/*.patch`, `config/*.toml|*.csv`, the staged game modules (`*_overrides.cpp`,
-`tekken4_net*`). The games take it from `TEKKEN4_NET_BUILD` (the scripts set it from the stamp) or
+`sha1("t4dr-build:<SLUS_203.28 sha1>:<code_id>:<net version>")[:16]`, code_id = SHA-1 over the PS2Recomp tree's id
+(not the commit, which differs per PC) and uncommitted diff, `patches/*.patch`, `config/*.toml|*.csv`, the staged game
+modules (`*_overrides.cpp`, `tekken4_net*`; line endings normalised) and the toolchain of the CMake build (compiler id and
+exact version, build type, flags, PS2X_* options, native VU1 or interpreter; no paths). The games take it from `TEKKEN4_NET_BUILD` (the scripts set it from the stamp) or
 `t4net_build.txt` in the run dir; unset = no check (tests only).
 
 **Session seed**: the host's (`TEKKEN4_NET_SEED`, else its session id) is mixed into the game's srand
@@ -141,10 +143,20 @@ pads the frame ran with; `NETHASH`, `NETTS` (time sync), `NETSUMMARY` every 600 
 ## 4. Reproduce
 
 Build (stages generated code, the HEAD versions of the shared overrides, the working rollback/netplay driver and
-`runtime/tekken4_net*`; builds `D:\tekken4-fork-net\out\net`; writes `t4net_build.txt`):
+`runtime/tekken4_net*`; builds `<TEKKEN4_SRC>\out\<TEKKEN4_BUILD_DIR>`; writes `ps2xRuntime\t4net_build.txt` there):
 ```
 docs\rollback\net_build.cmd
 ```
+The project root is resolved from the script location, independent of the current directory. Defaults:
+the sibling `..\tekken4-fork-net` worktree and build directory `net` (still `D:\tekken4-fork-net\out\net`
+when this project is at `D:\tekken4-us`). To override them in cmd.exe before calling the script:
+```
+set "TEKKEN4_SRC=C:\work\tekken4-fork-net"
+set "TEKKEN4_BUILD_DIR=net"
+docs\rollback\net_build.cmd
+```
+Paths with spaces are supported. The same source and build directory are used for staging, building and the build id stamp.
+
 Pairs (PowerShell; `net_pair.ps1` holds `logs\run.lock` for both games, closes them when both logged `NETEND`):
 ```
 $v = 'TEKKEN4_RAND_SEED=1;TEKKEN4_RB_INPUT=500:Start,800:Start,960:Down,1020:Down,1080:Cross,1320:Cross,1560:Cross,1800:Cross;TEKKEN4_RB_INPUT2=1320:Cross,1560:Cross,1800:Cross;TEKKEN4_RB_FUZZ=2400;TEKKEN4_RB_FUZZ2=2400;TEKKEN4_SOUND=1;TEKKEN4_NET_LOCALPAD=0;TEKKEN4_NET_DESYNC_DUMP=1'
@@ -234,6 +246,6 @@ This repo (not committed by me):
   NETHASH lines (also in measure mode), session seed in srand. Header lists every switch.
   The netplay code is guarded by `__has_include("tekken4_net.h") && PS2X_ROLLBACK_IOP_STATE`: the file still builds in
   trees without patches 41/42 (stage_generated copies it everywhere), netplay is then simply absent.
-- `docs/rollback/net_build.cmd` (build `D:\tekken4-fork-net\out\net` + build id stamp), `tools/net_pair.ps1` (two
+- `docs/rollback/net_build.cmd` (build the sibling `tekken4-fork-net\out\net` by default + build id stamp), `tools/net_pair.ps1` (two
   instances, network simulator, run lock), `tools/t4_buildid.py`, `docs/rollback/net_compare.py`,
   `docs/rollback/net_desync_diff.py`, `docs/rollback/net_contact.py`, `tools/net_play.ps1` (one game by hand).

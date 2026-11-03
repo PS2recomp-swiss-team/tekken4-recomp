@@ -1,7 +1,7 @@
 param([int[]]$DumpAt = @(70, 80))
 # (tools/mfifo) PCSX2 ground truth for the fight stall: runs to the first fight (PAL60, Yes, Start, Medium, Arcade, Kazuya) and, at
 # the given seconds, dumps the VIF1 MFIFO ring (D_RBOR 0x100000, 512 KB), the scratchpad and the DMA registers.
-$root = "F:\claude troubleshoot\tekken 4 recomp"
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $out = Join-Path $root "logs\pcsx2_ring_probe"
 New-Item -ItemType Directory -Force $out | Out-Null
 $job = Start-Job -ScriptBlock {

@@ -1,5 +1,5 @@
 param([string]$RunDir = "", [string]$Stage = "arena", [double]$Fight = 32, [string[]]$Shots = @(), [string[]]$Env = @(),
-      [string]$Build = "perf", [string]$Src = "D:\tekken4-fork-perf")
+      [string]$Build = $env:TEKKEN4_BUILD_DIR, [string]$Src = $env:TEKKEN4_SRC)
 # US (SLUS-20328) fixed Practice fight for perf work (docs\PERF.md): Kazuya (1P) vs CPU Yoshimitsu on -Stage, then
 # -Fight seconds of the fight. Copy of run_fixed_fight.ps1 (PAL timings) with the US menu path checked in
 # logs\perf\cal1: 8 Start (skip movie), 13 Start (MEDIUM), MODE SELECT on STORY BATTLE: 4x Down = PRACTICE (VS BATTLE
@@ -9,6 +9,8 @@ param([string]$RunDir = "", [string]$Stage = "arena", [double]$Fight = 32, [stri
 # frames from the per-frame sound call) in stdout.txt; tools\perf_table.py summarises the fight window.
 #   powershell -ExecutionPolicy Bypass -File tools\perf_fight.ps1 -Stage underground -RunDir logs\perf\base_underground
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-perf" }
+if (-not $Build) { $Build = "perf" }
 if (-not $RunDir) { $RunDir = Join-Path $root ("logs\perf\fight_" + $Stage + "_" + (Get-Date -Format "yyyyMMdd_HHmmss")) }
 $env:TEKKEN4_SRC = $Src
 $env:TEKKEN4_BUILD_DIR = $Build

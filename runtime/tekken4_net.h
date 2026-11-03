@@ -1,3 +1,26 @@
+/*
+ * Adapted from T5DR Online's src/netplay/netplay_core.cpp.
+ * MIT License
+ * Copyright (c) 2026 TheWishin and the T5DR Online contributors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 // Tekken 4 netplay transport (rollback phase 3, docs/ROLLBACK_PHASE3.md): UDP session between two game instances.
 // Game-agnostic: it knows frames, pad inputs and state hashes, nothing about the game. The rollback loop that uses
 // it is Mode::Net of runtime/tekken4_rollback_overrides.cpp. Wire design from T5DR Online's src/netplay/netplay_core.cpp
@@ -13,6 +36,13 @@
 namespace t4net
 {
     constexpr uint8_t kNetVersion = 1;
+    // TEKKEN4_NET_STRICT_HELLO=1 changes compatibility/identity rules, so it uses a separate wire version.
+    constexpr uint8_t kNetVersionStrict = 2;
+    // Delay-policy combinations must also agree before input is sampled; packet layouts are unchanged.
+    constexpr uint8_t kNetVersionDelayMatch = 3;
+    constexpr uint8_t kNetVersionStrictDelayMatch = 4;
+    // Auto-VS changes the boot input contract; enabled peers use the corresponding policy version + 4.
+    constexpr uint8_t kNetVersionAutoVsOffset = 4;
 
     // One player's pad for one frame: buttons active-HIGH in libpad bit order (bit 3 Start, 4 Up, ... 14 Cross,
     // 15 Square), axes rx ry lx ly (0x80 centre).
@@ -44,6 +74,7 @@ namespace t4net
         int delaySetting = -1;         // -1 = auto (by round trip), else frames
         uint64_t buildId = 0;          // a peer with another build id is refused at HELLO
         uint32_t seed = 0;             // host: the session seed (0 = the session id)
+        uint64_t autoVsFingerprint = 0; // 0 = off; nonzero normalized boot script/window contract, checked at HELLO
         std::string key;               // optional match secret: SipHash-2-4 tag on every packet
         int timeoutS = 20;             // peer silent this long = lost
         int connectTimeoutS = 120;     // no handshake within this = failed
@@ -70,6 +101,8 @@ namespace t4net
     int rttMs(int *samples = nullptr);
     // Input delay: the host decides (auto: 1 frame up to 60 ms round trip, 2 above, 3 above 150, 4 above 250, or
     // its own setting), the joiner waits for the host's pick. Collects round-trip samples first (up to waitMs).
+    // TEKKEN4_NET_DELAY_MATCH=1: only equal explicit settings win; otherwise the same measured-RTT auto policy.
+    // Chosen once before input priming and retained for the session. The switch defaults OFF.
     int agreeDelay(uint32_t waitMs);
 
     // Frames < base are neutral for both players (before the first sampled frame + delay).
@@ -79,6 +112,9 @@ namespace t4net
     bool local(uint32_t frame, PadInput *out);
     uint32_t localMax();      // local inputs known for frames < this
     bool remote(uint32_t frame, PadInput *out);
+    // Recheck exact input and choose a held prediction under one lock. Always fills out/contig;
+    // true means exact confirmed input, false means the last confirmed input at/before frame (or neutral).
+    bool remoteOrPredict(uint32_t frame, PadInput *out, uint32_t *contig);
     uint32_t remoteContig();  // the peer's inputs are known for every frame < this
     uint32_t peerAck();       // the peer has our inputs for frames < this
     // Waits until the peer's input for `frame` is here, the session is lost, or ms passed (UINT32_MAX = no limit
@@ -102,6 +138,16 @@ namespace t4net
     struct Stats
     {
         uint64_t packetsOut = 0, packetsIn = 0, simDropped = 0, bytesOut = 0, resends = 0;
+        // UDP payload bytes for the counted packets, including tags, excluding IP/UDP headers.
+        // Out counts sendTo attempts before simulated loss; in follows packetsIn (no HELLO/REJECT).
+        uint64_t bytesIn = 0;
+        // TEKKEN4_NET_COALESCE=1: identical boundary INPUT calls not sent (not send attempts, not in packetsOut).
+        uint64_t coalesced = 0;
+        // Simulator scheduling experiment, host-only. Spin time is wall time, not CPU time or another wait total.
+        bool simActive = false, simNormalPriority = false, simPriorityReady = false, simPriorityOk = false;
+        int simThreadPriority = 0; // Windows relative priority; meaningful only when simPriorityReady.
+        uint64_t simSpinCalls = 0, simSpinUs = 0, simSpinMaxUs = 0, simSendCalls = 0,
+                 simLateMaxUs = 0, simLateOver2ms = 0;
     };
     Stats stats();
 

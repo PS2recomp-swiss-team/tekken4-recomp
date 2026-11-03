@@ -6,11 +6,18 @@
 #
 # -Env: "K=V;K=V" for both; -HostEnv / -JoinEnv for one side. -End: logical frame both stop at (TEKKEN4_NET_END);
 # the script closes both once both logs say NETEND (or -Seconds passed). -Shots: logical frames for net_shot_f*.bmp.
+# -TimingDiag: TEKKEN4_NET_DIAG=1 on both sides, plus timing_process.log (2 s CPU/priority/affinity/focus samples).
+# -AutoVs: TEKKEN4_NET_AUTO_VS=1 on both sides; report the bounded boot-input log alongside the hash summary.
+# Supply the usual -Env scripts for character confirms/fight input after the automatic boot window.
+# Repeat with fresh and existing run-directory saves; zero mismatches alone does not prove the visible screen.
 # Output: logs\net\<Name>\{host,join}\ (rb_frames.log, net.log, stdout/stderr, shots) and a summary on stdout.
 param([string]$Name = "", [int]$Rtt = 0, [double]$Jitter = 0, [double]$Loss = 0, [int]$End = 9000, [int]$Seconds = 1800,
       [string]$Env = "", [string]$HostEnv = "", [string]$JoinEnv = "", [string]$Shots = "", [int]$Port = 7400,
-      [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net", [switch]$NoLock)
+      [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net", [switch]$NoLock, [switch]$TimingDiag,
+      [switch]$AutoVs)
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-net" }
+if (-not $BuildDir) { $BuildDir = "net" }
 if (-not $Name) { $Name = "pair_" + (Get-Date -Format "yyyyMMdd_HHmmss") }
 $base = Join-Path $root "logs\net\$Name"
 $exe = Join-Path $Src "out\$BuildDir\ps2xRuntime\ps2EntryRunner.exe"
@@ -23,6 +30,10 @@ public static class NetPairWin {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SetWindowText(IntPtr h, string s);
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool repaint);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 }
 "@
 function Set-EnvList([string]$list) {
@@ -30,6 +41,20 @@ function Set-EnvList([string]$list) {
 }
 function Clear-NetEnv {
     Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_)' } | ForEach-Object { Remove-Item "env:$($_.Name)" }
+}
+function Write-TimingProcess($x) {
+    if (-not $TimingDiag -or $x.p.HasExited) { return }
+    try {
+        $x.p.Refresh()
+        [uint32]$foregroundPid = 0
+        [void][NetPairWin]::GetWindowThreadProcessId([NetPairWin]::GetForegroundWindow(), [ref]$foregroundPid)
+        $h = $x.p.MainWindowHandle
+        "utc={0} elapsed_ms={1} pid={2} cpu_ms={3} priority={4} affinity=0x{5:X} foreground_pid={6} window={7} minimized={8} visible={9}" -f `
+            ([DateTime]::UtcNow.ToString('o')), ([long]((Get-Date) - $t0).TotalMilliseconds), $x.p.Id, `
+            ([long]$x.p.TotalProcessorTime.TotalMilliseconds), $x.p.PriorityClass, $x.p.ProcessorAffinity.ToInt64(), `
+            $foregroundPid, ($h -ne [IntPtr]::Zero), [NetPairWin]::IsIconic($h), [NetPairWin]::IsWindowVisible($h) |
+            Add-Content -Encoding utf8 (Join-Path $x.dir "timing_process.log")
+    } catch { Write-Warning "timing process sample failed for $($x.side): $_" }
 }
 $buildId = ""
 $stamp = Join-Path (Split-Path $exe) "t4net_build.txt"
@@ -55,6 +80,8 @@ try {
         $env:TEKKEN4_SOUND = "0"
         Set-EnvList $Env
         Set-EnvList $s.extra
+        if ($TimingDiag) { $env:TEKKEN4_NET_DIAG = "1" }
+        if ($AutoVs) { $env:TEKKEN4_NET_AUTO_VS = "1" }
         $env:TEKKEN4_NET = $s.net
         $env:TEKKEN4_NET_END = "$End"
         if ($sim) { $env:TEKKEN4_NET_SIM = "$sim,seed=$($s.seed)" }
@@ -66,6 +93,7 @@ try {
         $p = Start-Process -FilePath $exe -ArgumentList "`"$elf`"" -WorkingDirectory $dir `
             -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -PassThru
         $procs += @{ side = $s.side; p = $p; dir = $dir; titled = $false }
+        Write-TimingProcess $procs[-1]
         Start-Sleep -Milliseconds 500
     }
     Clear-NetEnv
@@ -76,6 +104,7 @@ try {
         $i = 0
         foreach ($x in $procs) {
             $x.p.Refresh()
+            Write-TimingProcess $x
             if (-not $x.titled -and $x.p.MainWindowHandle -ne [IntPtr]::Zero) {
                 [void][NetPairWin]::SetWindowText($x.p.MainWindowHandle, "TEKKEN 4 - Claude: $Name $($x.side) ($(if ($x.side -eq 'host') {'P1'} else {'P2'}))")
                 [void][NetPairWin]::MoveWindow($x.p.MainWindowHandle, 20 + 660 * $i, 40, 640, 520, $true)
@@ -114,4 +143,9 @@ foreach ($x in $procs) {
     "$($x.side): $($sum.Line)"
     $d = @(Select-String -Path $log -Pattern '^NETDESYNC').Count
     "$($x.side): NETDESYNC lines $d"
+    if ($AutoVs) {
+        $auto = @(Select-String -Path $log -Pattern '^NETAUTO_VS\b')
+        if ($auto.Count -eq 0) { "$($x.side): no NETAUTO_VS evidence; auto-VS not verified" }
+        else { $auto | ForEach-Object { "$($x.side): $($_.Line)" } }
+    }
 }

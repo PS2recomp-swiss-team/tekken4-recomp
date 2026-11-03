@@ -1,5 +1,11 @@
 # Tekken 4 Recomp
 
+## Clean source copy
+
+Read `AGENTS.md` first. It controls work in this copy: stay in this folder, do not build or run,
+do not use Git to write anything, and do not copy T5DR code here. The machine paths and maintainer
+commands below describe the original checkout; they are not permission to access it.
+
 Static recompilation of Tekken 4 (PS2) to a native Windows executable using PS2Recomp.
 
 ## Folders on the user's PC (since 2026-10-29)
@@ -32,34 +38,34 @@ Static recompilation of Tekken 4 (PS2) to a native Windows executable using PS2R
 - Goals (user): players need no BIOS, only their ISO; rollback online as good as T5DR Online
   (TheWishin/T5DROnline-Source, `src/rollback`, `docs/ROLLBACK.md`); plan in `docs/ROLLBACK_PLAN.md`.
 
+## Where to read next
+`docs/PROJECT_MAP.md` (where everything is), `docs/SESSIONS.md` (which session owns what, start prompts),
+`docs/status.md` (current state, newest first). Update status.md at the end of a session.
+
 ## Layout
-- `game/` - files extracted from the disc (gitignored, never commit)
-- `ghidra/` - Ghidra project (gitignored; contains game code)
-- `../tekken4-fork-ps2recomp` (H:\tekken4-fork-ps2recomp) - DEFAULT PS2Recomp tree of all build/run scripts since 2026-10-28
-  (user's choice): branch = pinned upstream commit + patches/*.patch committed one by one; `TEKKEN4_SRC` overrides.
-- `external/PS2Recomp` - old toolchain tree (ran-j/PS2Recomp), gitignored; holds Grok's uncommitted WIP, kept, not built
-- `external/God-Of-War-Native-Port` - reference port (GS/VU1/IOP/sound solutions to study)
-- `external/ghidra_12.1.4_PUBLIC` - Ghidra (needs JDK 21) with `ghidra-emotionengine-reloaded` v2.1.38 and
-  GhidraMCP 2.0 in `Ghidra/Extensions`. GhidraMCP serves on http://127.0.0.1:8080/ only while a CodeBrowser
-  has the plugin enabled; bridge is `external/ghidramcp-venv/Scripts/ghidra-mcp.exe`
-- `external/pcsx2` - PCSX2 v2.8.2 portable (needs a BIOS dumped from the user's own console; the user's dumps are
-  in `E:\God Hand + Emulator\bios`, PAL SCPH-70004 v12 fits this game; never copy them into the repo)
-- `config/` - our PS2Recomp TOML + function maps (`function_map.csv` = Ghidra + `extra_functions.csv`; no game code)
-- `patches/` - our changes to PS2Recomp itself (hardware behaviour), applied by `tools\build_runtime.cmd`
-- `runtime/` - our game overrides (`*_overrides.cpp`), staged into ps2xRuntime by `tools\stage_generated.cmd`
-- `tools/` - our own helper scripts
-- `docs/status.md` - current state and next steps; read it first, update it at the end of a session
+- `launcher/` launcher | `runtime/` game overrides, staged by `tools\stage_generated.cmd` | `patches/` changes to PS2Recomp, applied
+  in name order by `tools\build_runtime.cmd` | `config/` function maps, TOML (no game code) | `tools/` scripts
+- Local only (gitignored): `game/`, `ghidra/`, `external/` (JDK 21, Ghidra 12.1.4 + EE plugin + GhidraMCP, `pytools` with Capstone,
+  God-of-War reference port), `generated/`, `logs/`, `dist/`, `to clean/`, the ISO. `lobby/` is git-excluded (T5DR-derived).
+- `../tekken4-fork-ps2recomp` = default PS2Recomp tree of all scripts (branch `t4-us`); `TEKKEN4_SRC` / `TEKKEN4_BUILD_DIR` override.
 
 ## Rules
-- Never commit or publish game files, Ghidra databases, or generated C++ from the ELF.
-  Only configs, function maps, patches, runtime code and docs go in git.
-- Per-game fixes go in game overrides (`PS2_REGISTER_GAME_OVERRIDE`), not the global runtime.
-- PCSX2 is ground truth: compare behaviour against PCSX2's debugger before "fixing" anything.
-- One goal per session (one crash, one syscall, one subsystem). Commit after each working step.
-- Addresses on this branch are for SLUS-20328 v1.00 only (PAL SCES-50878 v2.00 lives on `master`); map with tools/map_pal_to_us.py.
-- Run Python on anything under `game/` with `python -I`.
-- Push after every commit (private remote Lautreck/tekken4-recomp): git is the only copy of tools/docs/config/patches/runtime. 
-  NOBODY deletes (Claude, subagents, Grok): user rule 2026-10-27, only the user removes files, each step authorised by them. Deny rules in tools/grok_task.ps1 and ~/.claude/settings.json.
-  tools/backup_local.ps1 copies ghidra/, logs/, external/PS2Recomp and the fork tree (+ its git bundle) to ~/tekken4-backup (run by grok_start.ps1).
-
-- Clearing away (user, 2026-10-28): only `powershell -File tools\to_clean.ps1 -Path <item>` = MOVE into `to clean\` (gitignored, logged in logs\to_clean.log), never delete; the user inspects it.
+- **Repository visibility:** do not assume `swiss` is private. `docs/status.md` records a public-visibility observation
+  on 2026-10-30; visibility was not checked for this source audit. The owner must verify the destination and settle
+  provenance before publication. T5DR-derived code (`lobby/`) must never reach `origin`. Pushes to `swiss` were blocked by the auto-mode classifier: the user
+  pushes by hand (`git -C D:\tekken4-us push swiss us-slus20328`).
+- Never commit or publish game files, BIOS, Ghidra databases, generated C++ or the built exe (it contains recompiled game code).
+- `C:\T5DROnline` is read-only from here: read and copy into this project, never edit. Never connect to, deploy to or change the
+  server (VPS) and never use T5DR keys: the T5DR coordinator does the server side.
+- Before every heavy build or game run check `C:\T5DROnline\build\int115\HEAVY.lock` and wait while it exists (unless the user says otherwise).
+- Respect the budget: check usage between steps and stop at the limit the user set; save the state before it.
+- NOBODY deletes (user rule): `powershell -File tools\to_clean.ps1 -Path <item>` moves into `to clean\`; only the user removes files.
+- Runtime changes: per-game fixes go in overrides, not the global runtime. Anything running in a fight must keep the rollback
+  self-test at 0 mismatches (`docs/ROLLBACK_PHASE2.md`, `tools\perf_rb_run.ps1`).
+- Patches: two-digit numbers only (name order is the apply order; `100-` would sort before `57-`). PS2Recomp clones need
+  `core.autocrlf=false`; some patches need `--ignore-whitespace` (build scripts handle it).
+- Testing: one game run at a time (`logs\run.lock`, `tools\run_lock.ps1`). Never compile while the user plays or while measuring:
+  background builds cause stutter and false fps. `tools\run_capture.ps1` presses F1 at start, so do not combine it with
+  `PS2X_DEBUG_PANEL=0`. A check that decodes with the same assumptions as the code proves nothing about those assumptions.
+- No PCSX2 or BIOS on this PC: optional dev comparison only, never a runtime dependency. Players need only their ISO.
+- Addresses on this branch are for SLUS-20328 v1.00 only (PAL lives on `master`). Run Python on anything under `game/` with `python -I`.

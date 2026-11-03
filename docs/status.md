@@ -1,8 +1,451 @@
 # Status
 
-_Last updated: 2026-10-30 ~05:40 (night with 7 agents)_
+_Last updated: 2026-11-02 (App still unrun; supplied draft b13f80b4da; NO-GO)_
 
 ## Resume here
+
+- **Current release gate:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records sixteen area agents and a
+  separate final diff reviewer. Actual App/portable acceptance remains blocked:
+  private Python, reviewed locks and portable toolchain marker are absent;
+  App discovery also leaves this permitted tree. The existing
+  [owner checklist](RELEASE_PATH_B.md) requires exact candidate identity,
+  responsive actual App/process identity, exit/reopen/settings, licence
+  cancel/accept and build/play/return. Actual starter refusal, both 23-tool
+  catalogs and three readiness cases passed; readiness remains 2 / BLOCKED.
+  The App never started here.
+  Latest supplied draft `b13f80b4da`: clean 188-second build
+  `943fc4631acf2c13`, finished `2026-11-02T14:27:59`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 48.1/48.1 FPS, stalls 0/136
+  (0/5629 ms), displayed-frame p99 161.6/117.1 ms, actual delay 3.
+  Restore-and-resim maximum was 200.68/62.93 ms.
+  Cause and usable pacing
+  remain unproved. Supplied, not reproduced here; no App, enabled
+  GUI-profile or two-PC acceptance.
+  Owner next: provide the reviewed complete candidate, matching complete
+  source and locks/notices, then run the existing checklist in the authorized
+  environment. Full content/privacy/licence, Python suites and exact
+  build/game acceptance remain open. Real scanner entries reproduced
+  unreviewed URI schemes and credential-named directory bypasses; the
+  shared tree/ZIP scanner and new entry regressions address those cases.
+- **Earlier launcher acceptance gate and evidence completion:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the actual starter refusal
+  and readiness result: private Python is absent, GUI never started, readiness
+  remains 2 / BLOCKED. No production or test code changed. Source inspection
+  confirms neither launcher selftest, the packager's small Tk probe nor mocked
+  core tests construct the actual App. The owner must start the exact complete
+  package through `Tekken4.cmd`, verify a responsive App, close and reopen,
+  then prove portable first-run/build/play. A detached starter exit alone is
+  insufficient. Complete source/player/privacy/licence review, Python suites,
+  exact build/game, enabled GUI switches and two physical PCs remain open.
+  The prior ZIP aggregate did finish: exit 0 in 523.412 seconds, empty stderr,
+  27 sources parsed and 18 suites plus catalog; 226 tool/patch names and hashes
+  remained unchanged. The stale pending statement below is historical.
+  Latest supplied draft `59c7379771`: clean 218-second build
+  `943fc4631acf2c13`, finished `2026-11-02T07:25:58`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.2/52.2 FPS, stalls 0/82
+  (0/2530 ms), displayed-frame p99 105.8/100.1 ms. This was not reproduced
+  here and proves neither this edited tree nor the enabled GUI profile.
+
+- **Earlier unexpected worker-exit follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records new real-entry
+  [tree](../tools/test_public_tree_worker_interrupt.ps1) and
+  [ZIP](../tools/test_public_zip_worker_interrupt.ps1) tests. The frozen
+  standalone tests passed 195 assertions / six entries and 155 / four.
+  Independently identified actual workers were killed; their unchanged
+  supervisors naturally refused with exit 1, empty stderr and no completion
+  claim. Unchanged controls passed before and after; source/test/helper and
+  fixture hashes stayed unchanged. Both tests are registered in their actual
+  aggregates; aggregate verification and separate final review are pending.
+  This covers premature worker death, not failed termination, watchdog failure,
+  interruption inside a write or every descendant. Production behavior is
+  unchanged. Real `Tekken4.cmd` still refuses missing private Python; GUI
+  never started. Actual readiness remains 2 / BLOCKED.
+  Latest supplied draft `47167233c6`: clean 168-second build
+  `943fc4631acf2c13`, finished `2026-11-02T06:56:13`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/79
+  (0/2886 ms), displayed-frame p99 114.1/101.1 ms. It was not reproduced
+  here and proves neither this edited tree nor the enabled GUI profile.
+  Complete-package GUI/portable first-run, Python suites, exact build/game,
+  source/player/licence review and two physical PCs remain owner gates.
+
+- **Earlier source-check inventory follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the corrupt-ZIP checker
+  fix and [real-entry regression](../tools/test_beta_source_entry.ps1).
+  A corrupt archive now retains a failure and an incomplete-archive count
+  while later files/archives are inspected. The final inventory and
+  UNRUN/NO-GO statements appear; no logs or findings are excluded.
+  The actual in-place regression failed 12 assertions before the fix, then
+  passed 34 assertions through two real checker subprocesses. Each checker
+  still exited 1, with empty stderr and unchanged test/helper/fixture hashes.
+  The first green run attempted 3,280 archives, with 70 incomplete and 158
+  findings. This is completed inventory reporting, not complete archive or
+  public-source validation. Actual catalogs and readiness contract passed;
+  normal readiness remains 2 / BLOCKED. Real `Tekken4.cmd` again refused
+  missing private Python; GUI never started.
+  Latest supplied draft `caf985c7fd`: clean 167-second build
+  `943fc4631acf2c13`, finished `2026-11-02T06:39:31`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.1 FPS, stalls 0/79
+  (0/2368 ms), displayed-frame p99 103.0/100.4 ms. This was not reproduced
+  here and proves neither this edited tree nor the GUI's enabled profile.
+  Complete-package GUI/portable first-run, Python suites, exact build/game,
+  source/player/licence review and two physical PCs remain owner gates.
+  Separate final reviewer `final_diff_review_source_completion` found no
+  blocker and independently passed 34 regression assertions / two entries
+  and both catalogs. Its four-document checker covered 129 local links and
+  307 PowerShell parses without document/link/syntax findings; exit 1
+  retained 71 incomplete archives and 160 findings. Stderr was empty and
+  six changed-source hashes stayed unchanged during those entries.
+
+- **Earlier scanner process lifecycle follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records independent observations
+  through the actual tree export/scan and ZIP scanner entries. The new tests
+  require a real worker linked by parent PID and process creation time, then
+  check its identity is absent after completion or timeout. Usable Windows
+  `Process` counters are required; missing counters or missed observations
+  fail. The frozen tree suite passed 550 assertions through eight entries:
+  scan/export controls before and after two scan and two export deadlines.
+  The frozen ZIP suite passed 77 assertions through four entries, with the
+  same archive passing before and after two deadlines. Fixtures and helper
+  hashes stayed unchanged and stderr was empty.
+  Both actual aggregates passed with empty stderr: tree 13 suites / 11,377
+  checks and assertions; ZIP 17 suites / 3,596 assertions. All 144 tool files
+  and 79 patch names/hashes stayed unchanged. Separate review found no code
+  blocker and independently passed tree lifecycle 544 / eight entries,
+  ZIP 77 / four and catalogs, with 229 source names/hashes unchanged.
+  The actual document checker covered all four changed docs: 129 local
+  links and 304 PowerShell parses, no document/link/syntax findings and empty
+  stderr. Overall exit 1 remains on retained text-only image-name fixtures
+  and a corrupt ZIP; no completed whole-tree check is claimed.
+  Production behavior is unchanged. This evidence covers observed workers;
+  termination-error/watchdog branches and unobserved descendants remain open.
+  The actual starter still refuses missing private Python and the GUI never
+  started. Complete-package GUI/portable first-run, Python suites, exact
+  build/game, enabled GUI switches and two physical PCs remain owner gates.
+  Latest supplied verification remains the draft `38a164ddec` report below;
+  it was not reproduced here.
+
+- **Earlier Windows ZIP device-name follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records the real-entry work on
+  reserved COM/LPT superscript digits. The pre-fix regression ran 28 scanner
+  subprocesses and failed 72 of 306 assertions: all 24 superscript cases
+  passed unexpectedly, while ASCII refusals and clean controls worked.
+  The scanner now refuses those names and ambiguous non-ASCII unflagged
+  ZIP names. The expanded regression caught the encoding bypass too, then
+  passed frozen: 393 assertions through 35 real entries, zero failures and
+  empty stderr. ASCII and explicit UTF-8 controls passed before and after;
+  source/fixture hashes and inventory stayed unchanged, with no extraction.
+  The frozen full ZIP aggregate passed 16 suites / 3,519 assertions,
+  exit 0 with empty stderr; 142 tool files and all 79 patch names/hashes
+  stayed unchanged. Separate review independently passed the 393 / 35
+  device suite and catalogs, with 227 source names/hashes unchanged.
+  The actual document checker covered all six changed docs: 161 local
+  links and 297 PowerShell parses, no document/link/syntax findings.
+  Overall exit 1 remains on retained image-name fixtures and a corrupt ZIP;
+  no completed whole-tree check is claimed. Ordinary non-ASCII legacy ZIP
+  names require UTF-8 metadata under the new conservative policy.
+  The retained LICENSE/79-patch subset exported and scanned unchanged.
+  The real starter still refuses missing private Python; GUI never started,
+  and readiness exits 2 / BLOCKED. Exact complete-package GUI/portable
+  first-run and enabled GUI profile on two physical PCs remain owner gates.
+  Latest supplied draft `38a164ddec`: clean 168-second build
+  `943fc4631acf2c13`, finished `2026-11-02T05:44:41`; OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.1/52.2 FPS, stalls 0/68
+  (0/2385 ms), displayed-frame p99 111.5/99.7 ms. This was not reproduced
+  here and does not prove the edited tree or GUI profile.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier path privacy follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records a demonstrated public
+  export/tree/ZIP filename and private-directory bypass, now fixed through
+  shared name checks and directory-aware scans. Findings conceal rejected
+  names. The new suite first failed 70 assertions through 37 real entries;
+  the frozen expanded suite passed 440 assertions through 47 entries.
+  The retained LICENSE/79-patch subset exported and scanned unchanged.
+  The frozen tree aggregate passed 12 suites / 10,555 checks/assertions;
+  ZIP passed 15 suites / 3,126 assertions. Both ran the privacy suite and
+  exited 0 with empty stderr; all 141 tool files and 79 patches stayed
+  unchanged during tests. Separate review independently passed the
+  440-assertion / 47-entry suite and catalogs with 224 source hashes unchanged.
+  The actual document checker covered all six changed documents: 153 local
+  links checked and 288 PowerShell parses, with no link/syntax findings.
+  Overall exit 1 remains on retained image-name fixtures and a corrupt ZIP;
+  no complete whole-tree pass is claimed.
+  The actual starter still refuses missing private Python; GUI never started.
+  Packaging's Tk probe and launcher selftest do not start the real App.
+  Exact complete-package GUI/portable first-run and enabled GUI profile on
+  two physical PCs remain owner gates. Latest supplied draft `7ecf7f2b8f`:
+  clean 182-second build `943fc4631acf2c13`, finished
+  `2026-11-02T05:10:52`; OFF same-PC pair, 199 hashes each, zero mismatches
+  and NETDESYNC, 52.1/52.1 FPS, stalls 0/83 (0/2496 ms), displayed-frame p99
+  116.3/96.4 ms. This was not reproduced here. Release remains **NO-GO**.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md); the Windows ZIP
+  device-name finding is addressed in the current follow-up above.
+
+- **Earlier write interruption follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records bounded real-entry work on
+  the remaining export timeout after staging begins. No production behavior
+  changed. The frozen interruption suite passed 4,678 assertions through six
+  actual entries: two confirmed deadline refusals retained 691/851 of 1,501
+  files, retries left them unchanged, and fresh complete controls passed.
+  This locates interruption in the write loop or its path checks, not inside
+  one write call. The process-start suite passed 51 assertions through four
+  actual entries, including two oversized-command refusals with no staging.
+  The retained LICENSE/patch subset exported/scanned successfully with all
+  79 patch diff ranges unchanged; this is not complete corresponding source.
+  The frozen aggregate passed 11 suites with 11,429 checks/assertions and
+  19 syntax parses; all 116 tool hashes and 79 patch names/hashes stayed
+  unchanged. Its interruption rerun retained 884/938 files; assertion counts
+  vary with the retained file count.
+  Separate review independently passed both new suites and catalogs; all 121
+  recursive tool-script hashes and 79 patch names/hashes stayed unchanged.
+  The actual document checker resolved 111 local links across four changed
+  documents and parsed 278 PowerShell files; overall exit 1 remains on retained
+  image-name fixtures and a corrupt ZIP, with no completed whole-tree check.
+  The actual starter still refuses missing private Python; actual
+  readiness exits 2 / BLOCKED. The GUI never started. The main release gate
+  remains the exact complete package's real launcher and portable first-run,
+  followed by the enabled GUI profile on two physical PCs. Latest supplied
+  draft `15b0d73c9c`: clean 167-second build `943fc4631acf2c13`, finished
+  `2026-11-02T04:45:22`; OFF same-PC pair, 199 hashes each, zero mismatches
+  and NETDESYNC, 52.1/52.1 FPS, stalls 0/60 (0/2102 ms), displayed-frame p99
+  101.3/94.6 ms. This is supplied evidence and does not prove this edited tree.
+  See [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier export failure coverage follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records new actual-entry tests for
+  partial staging after a filesystem write error and worker/helper load failure.
+  No production behavior changed. Failed export output stays unapproved even
+  if its content later passes a scan; fresh complete export is required.
+  Worker-load tests intentionally hold source read locks, so run the aggregate
+  alone. The frozen aggregate passed nine suites with 5,860 checks/assertions:
+  85 / eight actual entry processes for partial writes and 84 / seven for
+  worker-load failures. All 114 tool hashes and 79 patch names/hashes stayed
+  unchanged. Separate review independently passed both new suites and catalogs;
+  no code blocker was found. The document checker covered all four changed
+  documents and 103 local links; overall exit 1 remains on retained image-name
+  fixtures and a corrupt ZIP, so no completed whole-tree check is claimed. The actual
+  starter still refuses missing private Python; readiness exits 2 / BLOCKED,
+  GUI never started. Latest supplied draft `31924ed524`, clean 231-second build
+  `943fc4631acf2c13`, finished `2026-11-02T04:27:40`: OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, 52.2/52.2 FPS, stalls 0/83
+  (0/2778 ms), displayed-frame p99 111.0/99.8 ms. This does not prove this
+  edited tree, the enabled GUI profile or physical two-PC play. See
+  [export scope](PUBLIC_SOURCE_EXPORT.md) and [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier public-tree process deadline follow-up:**
+  [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records supervised export and scan,
+  with a default 120-second worker deadline and `-TimeoutSeconds` from 1-600.
+  Timeout refuses and retains unapproved partial staging; it is not a completed
+  scan. Preflight and OS cleanup are outside the worker budget. See
+  [export scope](PUBLIC_SOURCE_EXPORT.md). The existing category suite caught
+  a lost sanitized error message; the same unchanged fixture now refuses with
+  the expected message. The independent corrected review passed 5,135 / 13
+  deadline assertions / entry processes, 78 / 8 compatibility and 120 / 20
+  category regressions. All 126 tool-script hashes and all 79 patch names/hashes
+  stayed unchanged. The corrected aggregate passed seven suites with 5,691
+  checks/assertions; its 112 PowerShell/Python tool hashes and 79 patch
+  names/hashes stayed unchanged. The 80-file test subset matched the original
+  export byte-for-byte; this is not complete corresponding source. Whole-tree
+  source checking remains red on retained fixtures and a corrupt ZIP; nothing
+  was removed or weakened. The actual launcher refusal test ran again: missing
+  private Python, GUI never started; readiness exits 2 / BLOCKED.
+  Latest supplied draft `23d21774fe`, clean 167-second build
+  `943fc4631acf2c13`, finished `2026-11-02T03:59:55`: OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, host/join 52.1/52.1 FPS,
+  stalls 0/77 (0/2698 ms), displayed-frame p99 110.3/99.4 ms. This is supplied
+  evidence, not a run of this edited tree. GUI profile and two-PC proof remain
+  open. See [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier ZIP process deadline follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records the supervised scanner and real-entry tests. The default worker
+  deadline is 120 seconds; `-TimeoutSeconds` accepts 1-600. A timeout refuses
+  without a completed scan claim. The independent reviewer passed both new
+  suites: 1,094 assertions / eight scanner processes and 63 / seven. Review
+  reproduced and fixed a smart-apostrophe path refusal; the unchanged ZIP now
+  passes through the actual entry. The corrected frozen aggregate passed
+  2,686 assertions through 173 real scanner processes; all 70 tool-script
+  hashes and all 79 patch names/hashes stayed unchanged. All four
+  retained-input scans completed with unchanged input/source hashes: the
+  Sunday archives kept 138 mail findings each and the 80-file test subset
+  passed. Independent orphan-process enumeration was unavailable. See
+  [scanner scope](PUBLIC_ZIP_SCAN.md). The independent launcher recheck
+  observed the actual starter's missing-private-Python refusal and readiness
+  exit 2 / BLOCKED; the GUI never started. Owner-only acceptance remains open.
+  Latest supplied draft `d56a1ab337`, clean 164-second build
+  `943fc4631acf2c13`, finished `2026-11-02T03:22:35`: OFF same-PC pair,
+  199 hashes each, zero mismatches/NETDESYNC, host/join 52.2/52.2 FPS,
+  stalls 0/78 (0/2907 ms), displayed-frame p99 112.9/98.8 ms. This does not
+  prove this edited tree, enabled GUI profile or two-PC play. See
+  [switch evidence](ONLINE_SWITCH_EVIDENCE.md). Release remains **NO-GO**.
+
+- **Earlier text scanner timeout follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records reproduced long-word/newline hangs and the fix. The same retained
+  ZIPs now complete with unchanged hashes. New tests passed 383 assertions
+  through 47 real ZIP/tree processes, including sanitized immediate and lazy
+  regex timeout refusals. The independent frozen ZIP aggregate passed 1,529
+  assertions through 158 processes; the public-tree aggregate passed 478
+  checks/assertions. All 79 patch names/hashes stayed unchanged. The separate
+  reviewer found no blocking issue. Two seconds is a regex search timeout,
+  not a deadline for a collection or process. GUI/portable first-run, Python
+  suites, exact
+  build/game, enabled GUI switches, complete source/player/licence review and
+  two-PC acceptance remain open. Latest supplied draft `87e585cc4f`, clean
+  162-second build `943fc4631acf2c13`, finished `2026-11-02T02:58:01`: OFF
+  same-PC pair, 199 hashes each, zero mismatches/NETDESYNC, host/join 52.1/52.2
+  FPS, stalls 0/95 (0/3387 ms), displayed-frame p99 122.3/98.9 ms. It does not
+  prove this edited tree, enabled GUI profile or two-PC play. Release remains
+  **NO-GO**. See [scanner scope](PUBLIC_ZIP_SCAN.md) and
+  [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier DEFLATE work-budget follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records archive-wide limits of 1,024 blocks, 2,097,152 symbols and 1,048,576
+  Huffman lookup slots. The frozen aggregate passed 1,146 assertions through
+  111 actual scanner processes; all 79 patch names/hashes stayed unchanged.
+  Exact boundaries and cumulative member work ran. All four retained inputs
+  kept completed results and unchanged hashes. The separate reviewer independently
+  passed the same frozen aggregate and found no blocking code/test issue. No hard wall-time bound or speed improvement is claimed; two
+  180-second fixture timeouts remained open at that stage. Latest supplied draft `8676b7430f`,
+  clean 214-second build `943fc4631acf2c13`, finished `2026-11-02T02:35:39`:
+  OFF same-PC pair, 199 hashes each, zero mismatches/NETDESYNC, host/join
+  52.1/52.1 FPS, stalls 0/70 (0/2298 ms), displayed-frame p99 106.3/97.9 ms.
+  This does not prove this edited tree, enabled GUI profile or two-PC play.
+  Release remains **NO-GO**. See [scanner scope](PUBLIC_ZIP_SCAN.md) and
+  [switch evidence](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier DEFLATE completion follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records the unchanged truncated-empty stream that previously passed and now
+  refuses through the actual scanner. Complete empty controls pass. New valid
+  and malformed-stream suites ran through the actual scanner. The separate
+  reviewer's frozen aggregate passed 804 assertions / 96 scanner processes;
+  all 79 patch names/hashes stayed unchanged. Final retained archives kept
+  expected results and hashes, but scans took about 40-42 seconds versus about
+  4 seconds previously under different concurrent load. Those runs predate the work
+  budget above; no hard time limit was established. See [audit](PUBLIC_ZIP_AUDIT.md).
+  Latest owner-supplied draft `8f27d7f6be`, clean 161-second build
+  `943fc4631acf2c13`, finished `2026-11-02T02:17:42`, reports a switches-OFF
+  same-PC pair: 199 hashes per side, zero mismatches/NETDESYNC, host/join
+  run-average 52.0/52.0 FPS, stalls 0/88 (0/3052 ms), displayed-frame p99
+  109.4/102.0 ms. It does not prove this edited tree, the enabled GUI profile
+  or two-PC play. Release remains **NO-GO**. See
+  [ONLINE_SWITCH_EVIDENCE.md](ONLINE_SWITCH_EVIDENCE.md).
+
+- **Earlier ZIP integrity follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md)
+  records an actual false pass for matching but incorrect ZIP CRC fields and
+  the unchanged-fixture after-fix refusal. The reader now checks actual member
+  CRCs and stored lengths; known-vector and corruption tests invoke the real
+  scanner command. The aggregate passed 421 assertions / 59 scanner processes;
+  retained archives kept their expected results and unchanged hashes. At that
+  stage, the truncated-empty-DEFLATE false pass remained open; see above.
+  Separate final review found no blocker in the scoped CRC changes. These checks do not prove a
+  complete source/player candidate, launcher, build or game.
+  Latest owner-supplied verification is draft `9cdebb4f93`, clean 167-second
+  build `943fc4631acf2c13`, finished `2026-11-02T02:06:00`: switches OFF,
+  same-PC pair, 199 hashes per side and zero mismatches/NETDESYNC; host/join
+  run-average 52.0/52.1 FPS, stalls 0/71 (0/2411 ms), displayed-frame p99
+  107.5/100.0 ms. It does not prove this tree, the GUI profile or two-PC play.
+  See [ONLINE_SWITCH_EVIDENCE.md](ONLINE_SWITCH_EVIDENCE.md).
+- **Earlier ZIP content follow-up:** [CODEX_PROGRESS.md](../CODEX_PROGRESS.md) records
+  the real PowerShell [ZIP content entry](PUBLIC_ZIP_SCAN.md). Prior filename
+  checks and missing-Python attempts did not read payload contents. Both real
+  suites passed (60 and 171 assertions; 10 and 33 subprocesses). Independent
+  review reproduced two false passes, fixed and verified with the same ZIPs.
+  All three retained source archives were read and refused for 46 patch-mail
+  members each; hashes stayed unchanged. A sanitized LICENSE/79-patch subset
+  with portable member paths passed; it is not a complete source/player
+  candidate. See [PUBLIC_ZIP_AUDIT.md](PUBLIC_ZIP_AUDIT.md). Whole-tree source
+  checking remains red on retained image-name/unsafe/corrupt ZIP test fixtures.
+  Latest supplied verification is draft `477105a109`, clean 164-second build
+  `943fc4631acf2c13`, finished `2026-11-02T01:50:45`: switches OFF, same-PC
+  pair, 199 hashes per side, zero mismatches, run-average 52.3 FPS, host/join
+  stalls 0/78 (0/2862 ms). It proves neither this edited tree nor the GUI's
+  enabled profile or two-PC play. See
+  [ONLINE_SWITCH_EVIDENCE.md](ONLINE_SWITCH_EVIDENCE.md). No build, game or
+  network helper runs are permitted in this copy.
+- **Latest asymmetry evidence (2026-11-02, documentation only):** all 17 requested
+  verify summaries were read. Latest `all4`, draft `ce8072b92f`, build
+  `943fc4631acf2c13`, finished 01:39:52: switches OFF, rollbacks H/J 311/931,
+  prediction stalls 0/78 (0/2905 ms), 199 hashes per side and zero mismatches.
+  No report contains raw NETDIAG; no exact run proves a cause or cure. No new
+  runtime change was made under the real-entry proof rule. Existing guarded
+  corrections remain unproved as a cure. See `docs/ROLLBACK_ASYMMETRY.md` for
+  the repeated results and required external evidence. Source readiness,
+  catalogs and real starter-refusal checks passed; Python suites, GUI, build,
+  selftest and game pair stayed unrun. `docs/VU1_PROVENANCE.md` records the
+  generator's GoW main/b76921c origin and unresolved licence; the existing
+  source-archive provenance record remains `docs/THIRD_PARTY.md`.
+- **Package 5 follow-up (2026-11-02, source copy only):** current decisions
+  supersede historical separate-login proposals in `SERVER_HANDOFF_T4.md` and
+  `docs/LOBBY.md`. Account/kicked, coexistence, rank-text and switch evidence
+  records are linked from [CODEX_PROGRESS.md](../CODEX_PROGRESS.md).
+  `tools/check_online_readiness.ps1` runs actual catalog and starter-refusal
+  entries but exits 2 / BLOCKED: the real starter refuses missing private Python;
+  no GUI or game starts. Its three subprocess entry tests ran. No production
+  behavior changed. Latest supplied draft `42c131551e`, build `943fc4631acf2c13`,
+  has 199 hashes per side, zero mismatches, 52.2 FPS run average and join
+  73 stalls / 2411 ms on one PC with experiment switches OFF. This does not prove
+  the helper's COALESCE=1/DIAG=1 launcher profile or two-PC play. Shared-launcher,
+  private protocol, kicked/reconnect, shared game guard and authoritative results
+  remain owner work. Build/game/net-tool execution stayed forbidden here.
+- **Verify evidence follow-up (2026-11-02, documentation only):** `away312043`, build
+  `943fc4631acf2c13`, still has join-side prediction stalls: OFF 117/5421 ms,
+  COALESCE+DIAG 113/4745 ms. No supplied report includes raw NETDIAG records or
+  proves a cause/cure. No runtime change was made under the owner's real-entry-point
+  proof requirement. `docs/ROLLBACK_ASYMMETRY.md` records the missing evidence,
+  wrapper/zero-comparison false-green gaps, existing guarded corrections and agents.
+  No build, game or network run here; Python tests could not start. A real verify
+  with both endpoints' full logs is required before selecting and proving a fix.
+  VU1 generator licence remains unresolved; see `docs/THIRD_PARTY.md`.
+- **Asymmetry measurements and Sunday settings (2026-10-31, source copy only):** supplied `sun0005` reports
+  all have zero compared-hash mismatches, but several OFF pairs still show one-sided depth-9 rollback and
+  seconds of input waiting. Coalescing cuts packets/payload about 48%; only it is recommended ON as a behavior
+  experiment for Sunday. DIAG stays ON for evidence, other experiments OFF, simulator disabled, delay auto,
+  sound on. Exact settings, per-switch numbers and one-PC limits: `docs/ROLLBACK_ASYMMETRY.md` and
+  `TEST_ONLINE_DE.txt`. New default-OFF `TEKKEN4_NET_REFRESH_RC=1` refreshes input progress after time-sync
+  sleep before the prediction wait/late scan; this avoids a known stale frontier and possible false stall
+  count, not seconds of measured waiting. No build, game or tests run here. The supplied builds predate this
+  edit; a real build, zero-mismatch rollback self-test, isolated refresh A/B and two-PC runs remain required.
+- **Sunday internet test preparation (2026-10-31, unbuilt):** `TEST_ONLINE_DE.txt` covers each player's local ISO build,
+  router forwarding or VPN, a 15-minute menu/Versus/rematch check and returning evidence. `tools/make_test_zip.ps1`
+  packages scanned source; `tools/net_play.ps1` adds peer build/compiler/ISO comparison, UDP preflight and default-on
+  transport diagnostics for manual tests. `tools/collect_test_logs.ps1` selects netplay/NETSUMMARY text and PC/build facts.
+  No build, game or network run here. Python guard tests were extended but could not run: no Python interpreter is
+  available in this copy's environment. A real build, rollback self-test with 0 mismatches and the actual two-PC internet
+  run must establish compatibility, reachability, pacing and the usefulness of the returned logs.
+- **Asymmetric rollback investigation (2026-10-30, unbuilt):** `TEKKEN4_NET_DIAG=1` adds transport and live-boundary
+  timing/lead/rebase/simulator samples; `tools/net_pair.ps1 -TimingDiag` also records process CPU/priority/affinity/focus.
+  All diagnostics default off. Separate default-OFF `TEKKEN4_NET_SIM_SAFE_WAIT=1` repairs an unlocked simulator
+  deque-reference read. No time-sync or pacing policy change. Ranked causes, exact maintainer run and two-PC limits:
+  `docs/ROLLBACK_ASYMMETRY.md`. Static review only; no build, game or network run. A real build, rollback self-test
+  with 0 mismatches, and instrumented pair/two-PC runs remain required.
+- **Rollback source follow-up (2026-10-30, unbuilt):** two default-OFF switches in `runtime/`:
+  `TEKKEN4_NET_COALESCE=1` skips identical boundary INPUT sends within 15 ms while preserving sampled inputs
+  and retries; `TEKKEN4_NET_HASH_PROFILE=1` reports worker queue/collection age and snapshot reader waits.
+  Hash coverage, wire layout and protocol version unchanged. Static review only; no build/game/network run.
+  Switches, limits and required rollback self-test (0 mismatches) then pair checks: `docs/ROLLBACK_NEXT.md`.
+- **NETSUMMARY payload bytes (2026-10-30, source copy only):** expose the existing sent-byte count and add received bytes
+  for the counted packets, including authentication tags, excluding IP/UDP headers. Sends count before simulated loss;
+  receives follow packetsIn (HELLO/REJECT excluded). Wire format, protocol version, scheduling and state hashes unchanged.
+  Neither compiled nor run. A real build and game run must verify the summaries; rollback self-test must still pass with 0 mismatches.
+- **Start with `docs/PROJECT_MAP.md` and `docs/SESSIONS.md` (2026-10-30).** Entries below are a log, newest first; older ones describe the PAL build and old paths (F:, H:).
+- **PABLO'S WORK REVIEWED 2026-10-30 (Lautreck/PS2Recomp `ebae275`, swiss `us-iso`).** His patches 33-44 are not our 33-44: only 01-32
+  are shared. Taken: **patch 87** (from his 44: readback fallback after 90 latches without a picture; a short forced readback fails) and
+  netplay in one-step builds (from `us-iso` `aff2a4c`: `stage_generated.cmd` stages `tekken4_net*`, `build_game.ps1` writes
+  `t4net_build.txt`). Before this, one-step builds and the mini releases built from them had no netplay. **Build id fix:** `t4_buildid.py`
+  hashed the tree's commit (different on every PC, because `build_game.ps1` commits the patches at build time) and raw bytes (checkout
+  CRLF vs zip); it now hashes the tree id and normalises line endings. Not taken: his no-interlace (PAL addresses, CT16 row 6; ours is
+  `TEKKEN4_PROGRESSIVE`, CT24 row 5), the rest of 44 (our patch 49 does it). Later, if 16:9 is wanted: his patch 39 + the emitter part of 43.
+  **Toolchain in the build id (his finding):** compiler id and exact version, build type, flags, PS2X_* options and native VU1 or
+  interpreter now count, paths do not. Consequence: players on different MSVC updates (`19.44.35229.0` here) are refused at the
+  handshake until the release pins the compiler (`docs/RELEASE_PLAN_T4.md` option B). Id after this change: `66667604060267d0`.
+  The ids in the evidence below are from before it. Handshake and pair not re-run with this id, the runtime did not change.
+  Evidence: ps2x_tests 482/482; rollback self-test 202 rollbacks, 447 frames, 0 mismatches (`logs\perf\rb\fb_p2c`); fallback forced with a
+  temporary hook: message once, picture back (`logs\perf\rb\fb_noshared`); one-step build from a clean export (`D:\t4-net87`, 362 s) and
+  `D:\tekken4-fork-fb` give the same id `f86af146de8e9636` with different commits; pair from that build at RTT 150, 3 % loss, 6000 frames:
+  199 hashes, 0 mismatches, fps window 59.3/59.7 (`logs\net\n87`). Still one PC. `out\runtime` of the default tree was not rebuilt.
+- **`swiss` IS PUBLIC (checked 2026-10-30 without login: `visibility=public`), although `CLAUDE.md` calls it private.** Its `us-slus20328`
+  holds T5DR-derived code (`runtime/tekken4_net.*`, `launcher/COPIED_FROM_T5DR.txt`). `lobby/` is not there. Owner decision pending;
+  do not put `lobby/` there until it is private.
 - **MINI RELEASE 2026-10-30 (dist\T4-Mini-Release-2026-10-30, local only):** Tekken4.cmd (resolution menu, fullscreen
   J/E/N) + Launcher.cmd + LIESMICH.txt, exe = patches 01-84 + unlock override (all fighters unlocked by default,
   runtime/tekken4_unlock_overrides.cpp: callback 0x1ec350 -> 1). Intro movie fixed at high resolution (patch 84:

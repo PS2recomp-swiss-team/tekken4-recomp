@@ -1,5 +1,51 @@
 # Server handoff: Tekken 4 online (for the T5DR coordinator)
 
+## Package 5 decisions (owner, 2026-10-31; recorded 2026-11-02)
+
+These decisions supersede the separate-login and deployment proposals below.
+Package 5 starts after the planned 2026-11-03 reset; this document does not
+claim that reset or a deployment has happened.
+
+- OpenRecomp-FGC and the existing T5DR launcher must keep working beside each
+  other against the same lobby protocol and matching game builds. Protocol
+  version stays **1** unless Main agrees otherwise. T4 players on either
+  launcher must be able to meet; T4 must never match T5DR.
+- One account, same name and password; existing T5DR accounts carry over
+  without registering again. T4 keeps its own sessions, matches and ratings,
+  not its own logins. The owner's target permits both games online at once.
+  Account work follows the T4 release; `codex/accounts` is a draft needing
+  review against these decisions. **No server change is authorized here.**
+- Today's reported same-account launcher takeover sends `kicked` with
+  "logged in from another place". The new launcher must show it and stop
+  automatic login; the old launcher's reconnect behavior still needs checking.
+  Cross-game sessions need the later account design; do not assume today's
+  takeover behavior implements them.
+- T4 ranks use Tekken 8 names as client text only, with no game changes or
+  rank artwork. Ranked results still need an authoritative game match result.
+  The existing optional `TEKKEN4_NET_RESULT` session report writes
+  `winner: null`, `score: null`, `match_result_proven: false`; it is diagnostic
+  and has no game match-end detector. See [rank/result limits](docs/ONLINE_RANKS.md).
+- Implement and prove login/search, then match/ready/result, then
+  rooms/friends, then tournaments/spectating. Each stage needs a real launcher
+  run with the existing launcher beside it.
+
+The shared launcher and private lobby source are absent from this copy.
+Exact outgoing fields and capability flags still need comparison with the
+authorized T5DR protocol source and real entry-point tests. The historical
+`hello`, ports, magics and private-copy test claims below are not a verified
+package-5 specification. A common lobby protocol does not make T4 and T5DR
+game packets interchangeable: T4's game wire and build identity remain
+game-specific. The standalone T4 launcher's Host/Join starts the direct-IP
+helper; it does not log in to a shared server. No lobby, server, launcher GUI
+or game was run for this update.
+
+## Historical handoff (2026-10-29)
+
+Historical 2026-10-29 handoff. The private `lobby/` code, logs and external checkout paths below are absent
+from this clean source copy. Follow `AGENTS.md`; these paths and deployment examples do not authorize access
+or deployment. This is a proposed lobby route, not a tested public beta service. Current release scope is in
+`docs/BETA_RELEASE_NOTES.md`; local test claims below were not reproduced during this source audit.
+
 From the Tekken 4 port (repo Lautreck/tekken4-recomp, branch `us-slus20328`, folder `D:\tekken4-us`), 2026-10-29.
 Details: `docs/LOBBY.md` (lobby integration), `docs/ROLLBACK_PHASE3.md` (netplay), `lobby/` (the code).
 **`lobby/` is a copy of the private T5DR lobby code and is NOT in the git repo** (the T4 repo is public): it exists only
@@ -28,7 +74,8 @@ No other message, field or rule was added or changed. The `match_start` the serv
 peer, path, rtt, key, seed, build, input_delay, ...); the T4 client maps it to the T4 game's environment itself
 (`lobby/t4lobby/t4game.py`, table in `docs/LOBBY.md`). Server settings keep T5DR's `T5L_*` environment variable names.
 The UDP and game magics live in `proto.py` only, so one code base can be configured for either game; running **one
-server process per game** (two systemd units, own ports, own database) is the simple way and is what was tested.
+server process per game** (two systemd units, own ports, own database) was the historical proposal/test setup.
+Its independent database must not become a separate T4 account store; the account decision above supersedes that interpretation.
 
 ## (2) Build identity
 
@@ -82,9 +129,12 @@ live frames / run fps; two processes on one PC, network simulator with 3 % loss)
 | `n150b` | 148 | 115.8 / 115.7 | 35 / 34 | 38.9 |
 | `smoke1` | 48 | 137.6 / 139.8 | 27 / 29 | 53.8 |
 
-- Bytes per packet (computed from the wire format, `runtime/tekken4_net.cpp`; NETSUMMARY counts packets, not bytes):
+- Bytes per packet for these historical runs (computed from the wire format, `runtime/tekken4_net.cpp`):
   INPUT = 16 header + 12 + 6 x max(8, unacknowledged inputs) + 12 x 8 latest state hashes (+ 8 tag with a match key) =
   **172-200 bytes of payload** (180-208 keyed), +28 IP/UDP; PING 33 bytes (rare during play).
+- `NETSUMMARY` now prints cumulative `payload bytes out` / `in` for the counted packets (source change, not yet built or run).
+  These include authentication tags and exclude IP/UDP headers. Out counts sendTo attempts before simulated loss;
+  in follows packetsIn (HELLO/REJECT excluded). These are transport counters, not a measured on-wire bandwidth rate.
 - So at the full 60 fps expect **~150 packets/s and ~250 kbit/s per direction per player** on the wire (lower at the
   current 38-54 fps); a relayed match costs the relay about **2 x 150 packets/s in and out, ~0.5 Mbit/s each way**.
   T5DR's game sends ~60 packets/s / ~85 kbit/s; T4 sends more (an INPUT per frame plus resends every 15 ms while
@@ -138,7 +188,11 @@ Also: the port runs 38-54 fps on the VS stages on this PC (not yet a steady 60),
   releases signed like T5DR's), separate from T5DR's channel so neither updater can install the other game.
   Owner's decision.
 
-## What the coordinator must set up
+## Historical coordinator checklist (not deployment instructions for package 5)
+
+Do not execute this checklist before the later account review. Its separate
+database, optional-account and private-copy assumptions need reconciliation
+with the current decisions above.
 
 - [ ] Pick T4's ports (proposal TCP 7791, UDP 7791-7792, local status 7790) and open them in the cloud firewall and
       host firewall (T5DR's `HOSTING.md` "Firewall rules" with the T4 numbers).
@@ -158,6 +212,6 @@ Also: the port runs 38-54 fps on the VS stages on this PC (not yet a steady 60),
 - Game-side **result file** (winner, score, final hash, fps, reason) -> ranked and leaderboard.
 - Direct fight (lobby-chosen characters/stage, T4 ids in `data/fighters.json`), persistent game, rematch in session,
   no-pause online, online save (unlocks).
-- A byte counter in `NETSUMMARY` (bandwidth is computed from the format today) and fewer redundant hashes per packet.
+- Fewer redundant hashes per packet; validate the new `NETSUMMARY` byte counters in a real build/run.
 - T4 Online tab (Tk) and T4 texts/art; the copied i18n catalogs mention T5DR in places.
 - Regional relay nodes for T4 (the code is there; secrets/ids would be T4's own).

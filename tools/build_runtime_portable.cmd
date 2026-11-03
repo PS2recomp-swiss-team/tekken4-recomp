@@ -10,17 +10,16 @@ rem CMake/Ninja are used (tools\toolchain_env.cmd); otherwise it is the same Vis
 set "T4_PORTABLE="
 call "%~dp0toolchain_env.cmd"
 if errorlevel 2 (
-  for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
-  if not defined VSDIR (echo MSVC not found, and this folder has no toolchain\ & exit /b 1)
-  call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
+  call :developer_env
 ) else if errorlevel 1 (
   exit /b 1
 )
 if errorlevel 1 exit /b 1
-set "PATH=%ProgramFiles%\CMake\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
+if not defined T4_PORTABLE set "PATH=%ProgramFiles%\CMake\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
 rem Default PS2Recomp tree: the fork clone ..\tekken4-fork-ps2recomp (user, 2026-10-28: the only tree that holds
 rem exactly the committed patches; external\PS2Recomp keeps Grok's uncommitted WIP). TEKKEN4_SRC=<tree> overrides it.
 if defined TEKKEN4_SRC (set "SRC=%TEKKEN4_SRC%") else set "SRC=%~dp0..\..\tekken4-fork-ps2recomp"
+if defined T4_PORTABLE set "SRC=%~dp0..\deps\ps2recomp"
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=runtime"
 set "BUILD=%SRC%\out\%TEKKEN4_BUILD_DIR%"
 rem A Grok build is CPU-heavy side work: it waits while a timed game / PCSX2 run holds logs\run.lock
@@ -30,6 +29,7 @@ rem Our runtime patches (patches\*.patch, against the pinned PS2Recomp commit, a
 rem so when the last one is already in the tree they all are (an earlier one alone may not reverse any more, its
 rem context changed by a later one); otherwise already-applied ones are skipped.
 rem PORTABLE: a vendored tree (release zip) is shipped with patches\*.patch already applied and has no Git history.
+if defined T4_PORTABLE if not exist "%SRC%\.t4-vendored.json" (echo Incomplete release: vendored source marker missing & exit /b 1)
 if exist "%SRC%\.t4-vendored.json" goto :patches_done
 set "PATCHFAIL="
 set "LASTPATCH="
@@ -53,7 +53,7 @@ rem /Z7: debug info in each object, no shared mspdbsrv. With several builds at o
 rem failed with C1090 "PDB API call failed" (0x6BA / 23) whenever one build's PDB server went away mid-compile.
 rem RelWithDebInfo with full inlining (/Ob2 like Release; CMake's default /Ob1 kept the GS's per-pixel helpers as calls).
 set "TCARG="
-if defined T4_PORTABLE set "TCARG=-DCMAKE_TOOLCHAIN_FILE=%T4_TOOLCHAIN_FILE%"
+if defined T4_PORTABLE set TCARG="-DCMAKE_TOOLCHAIN_FILE=%T4_TOOLCHAIN_FILE%"
 cmake -S "%SRC%" -B "%BUILD%" -G Ninja %TCARG% -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
   "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG" "-DCMAKE_C_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG" ^
   -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF ^
@@ -82,3 +82,9 @@ if errorlevel 1 (
 )
 echo applied %~nx1
 exit /b 0
+
+:developer_env
+for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+if not defined VSDIR (echo MSVC not found, and this folder has no toolchain & exit /b 1)
+call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
+exit /b %errorlevel%

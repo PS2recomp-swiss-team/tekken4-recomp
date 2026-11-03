@@ -3,14 +3,18 @@
 Status 2026-10-30. Follows `docs/ROLLBACK_PHASE3.md` (protocol, `tools/net_pair.ps1`, NETSUMMARY). T5DR reference:
 its `docs/ROLLBACK.md` sections 22-34 ("T5 sec. n").
 
+Historical same-PC measurements. Later one-sided stalls remain unresolved; see `ROLLBACK_ASYMMETRY.md`.
+The results below do not establish the current source's performance or two-PC play and were not rerun here.
+
 ## Result in one paragraph
 
 The pair's "stalls" were the lockstep boot (frames < 600): gone (411/427 -> 0-5 waits). The fight's hitches have two
 causes. (1) **GPU saturation**: two games on this PC drive the RTX 3090 to 99 % in the cage fight (one game alone
 ~40-50 %); the game that gets less GPU time has its GS worker wait 35-200 ms for a vertex-ring fence every ~6
 frames (~370 frames per 100 s), that game falls behind, the pacing guard "rebases", the other side runs ahead,
-predicts deeper and time-syncs. This is renderer GPU cost, not netplay, and stays: fights are capped at ~48-55
-fps in this two-games-on-one-GPU harness. (2) **Rollback cost**: the drawn tail frame, 1.6 ms full copies per
+predicts deeper and time-syncs. These runs associate hitches with renderer GPU waits; they do not rule out
+netplay causes in other runs. Fights measured ~48-55 fps in this two-games-on-one-GPU harness.
+(2) **Rollback cost**: the drawn tail frame, 1.6 ms full copies per
 snapshot/restore and the 4 ms hash on the game thread. Fixed: rollback p50 host 14.9 -> 6.6 ms at RTT 100, fight
 48 -> 55 fps, displayed p99 107 -> 70-79 ms, rebases halved. **0 desyncs in every pair** (host = joiner = offline
 reference `nref` at every 30th frame). The goal (p99 <= 20 ms, stalls ~0 in the fight) is not reached on one PC;

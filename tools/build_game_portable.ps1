@@ -26,7 +26,7 @@
 .PARAMETER Force
   Ignore the up-to-date checks and redo every step (the PS2Recomp tree is never re-cloned).
 .PARAMETER WhatIf
-  Dry run: do the read-only checks (prerequisites, ISO verification), print which steps would run, change nothing.
+  Dry run: check prerequisites and the ISO, and print which steps would run. Writes the build log only.
 .PARAMETER Steps
   Run only these steps (names above), e.g. -Steps fork. Default: all.
 .PARAMETER LogDir
@@ -40,7 +40,8 @@ param(
     [switch]$Force,
     [switch]$WhatIf,
     [string[]]$Steps,
-    [string]$LogDir
+    [string]$LogDir,
+    [switch]$AcceptMicrosoftLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,7 +68,7 @@ $VendoredTree = Join-Path $Root 'deps\ps2recomp'
 $IsVendored = Test-Path -LiteralPath (Join-Path $VendoredTree '.t4-vendored.json')
 $Bundle = Join-Path $Root 'toolchain'
 $Portable = Test-Path -LiteralPath (Join-Path $Bundle 'toolchain.json')
-$Tree = if ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC } elseif ($IsVendored) { $VendoredTree } else { Join-Path $Root '..\tekken4-fork-ps2recomp' }
+$Tree = if ($Portable) { $VendoredTree } elseif ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC } elseif ($IsVendored) { $VendoredTree } else { Join-Path $Root '..\tekken4-fork-ps2recomp' }
 $Tree = [IO.Path]::GetFullPath($Tree).TrimEnd('\')
 $BuildDirName = if ($env:TEKKEN4_BUILD_DIR) { $env:TEKKEN4_BUILD_DIR } else { 'runtime' }
 $RecompExe  = Join-Path $Tree 'out\tools\ps2xRecomp\ps2_recomp.exe'
@@ -104,6 +105,9 @@ function Invoke-Logged {
     $ErrorActionPreference = 'Continue'
     Push-Location -LiteralPath $WorkDir
     try {
+        # A command that cannot start must not inherit an earlier successful exit code.
+        # Native commands update the global variable; a local sentinel would shadow it.
+        $global:LASTEXITCODE = 1
         & $File @ArgList 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $s = $_.Exception.Message } else { $s = [string]$_ }
             $s = $s.TrimEnd()
@@ -115,7 +119,7 @@ function Invoke-Logged {
                 if ($Label) { Write-Progress -Activity $Label -Status ($s.Substring(0, [Math]::Min(110, $s.Length))) }
             }
         }
-        $code = $LASTEXITCODE
+        $code = $global:LASTEXITCODE
     } finally {
         Pop-Location
         $ErrorActionPreference = $old
@@ -186,6 +190,7 @@ function Get-TreeHead {
 $Timings = New-Object System.Collections.ArrayList
 $Changed = @{}      # step -> $true when it ran (or would run in a dry run); later steps depend on that
 $Script:Tools = @{}
+if ($Portable) { $Script:Tools['py'] = @{ Exe = (Join-Path $Root 'python\python.exe'); Pre = @(); Version = 'bundled' } }
 $StepNo = 0
 function Step([string]$Name, [string]$Title, [scriptblock]$Body) {
     if ($Steps -notcontains $Name) { return }
@@ -216,11 +221,20 @@ Step 'prereq' 'Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja' {
 
     # PORTABLE: the release zip's own toolchain. Nothing is looked up through vswhere / the registry / PATH.
     if ($Portable) {
+        if ($AcceptMicrosoftLicense -and -not $WhatIf) {
+            if (-not (Test-Path -LiteralPath (Join-Path $Root 'python\python.exe') -PathType Leaf)) {
+                throw 'Bundled Python is missing: python\python.exe. Extract the whole release zip again before fetching the Microsoft sysroot.'
+            }
+            $code = Invoke-Logged -File (Join-Path $Root 'python\python.exe') -ArgList @('-I', (Join-Path $PSScriptRoot 'fetch_msvc_sysroot.py'), '--accept-license', '--root', $Root) -Label 'Microsoft headers and libraries'
+            if ($code -ne 0) { throw "Microsoft sysroot fetch failed (exit $code). See the log; no build was started." }
+        }
         $parts = @(
             @('Python (python\python.exe)', (Join-Path $Root 'python\python.exe')),
             @('clang-cl',                   (Join-Path $Bundle 'llvm\bin\clang-cl.exe')),
             @('lld-link',                   (Join-Path $Bundle 'llvm\bin\lld-link.exe')),
             @('llvm-lib',                   (Join-Path $Bundle 'llvm\bin\llvm-lib.exe')),
+            @('llvm-rc',                    (Join-Path $Bundle 'llvm\bin\llvm-rc.exe')),
+            @('llvm-mt',                    (Join-Path $Bundle 'llvm\bin\llvm-mt.exe')),
             @('CMake',                      (Join-Path $Bundle 'cmake\bin\cmake.exe')),
             @('Ninja',                      (Join-Path $Bundle 'ninja\ninja.exe')))
         foreach ($p in $parts) {
@@ -231,7 +245,7 @@ Step 'prereq' 'Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja' {
         $sysroot = (Test-Path -LiteralPath (Join-Path $Bundle 'msvc\include\vector')) -and (Test-Path -LiteralPath (Join-Path $Bundle 'winsdk\include\um\windows.h')) -and (Test-Path -LiteralPath (Join-Path $Bundle 'winsdk\lib\um\x64\kernel32.lib'))
         if ($sysroot) { Say "    MSVC STL/CRT + Windows SDK: $Bundle\msvc, $Bundle\winsdk" }
         else { [void]$missing.Add("The MSVC headers/libraries and the Windows SDK are not in toolchain\msvc and toolchain\winsdk`n      Run: python\python.exe -I tools\fetch_msvc_sysroot.py   (downloads them from Microsoft; you accept Microsoft's licence there)") }
-        if (-not $IsVendored -and -not (Test-Path -LiteralPath (Join-Path $Tree '.git'))) { [void]$missing.Add("deps\ps2recomp is missing (the PS2Recomp source is part of the release zip)") }
+        if (-not $IsVendored) { [void]$missing.Add("deps\ps2recomp is missing (the PS2Recomp source is part of the release zip)") }
         if ($missing.Count -gt 0) {
             Say ''
             Say 'Missing parts of the bundled toolchain:'
@@ -325,7 +339,7 @@ if (-not $Iso) {
 }
 $IsoInfo = $null
 if (($Steps -contains 'verify') -or ($Steps -contains 'extract')) {
-    if (-not $Iso) { Fail 'verify' "no ISO given and no *.iso in $Root. Usage: powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso `"C:\path\Tekken 4 (USA).iso`"" }
+    if (-not $Iso) { Fail 'verify' "no ISO given and no *.iso in $Root. Usage: powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso `".\Tekken 4 (USA).iso`"" }
     if (-not (Test-Path -LiteralPath $Iso -PathType Leaf)) { Fail 'verify' "ISO not found: $Iso" }
     $IsoInfo = Get-Item -LiteralPath $Iso
     $IsoFp = '{0}|{1}|{2}' -f $IsoInfo.FullName.ToLower(), $IsoInfo.Length, $IsoInfo.LastWriteTimeUtc.Ticks
@@ -397,11 +411,25 @@ Step 'extract' 'SYSTEM.CNF, SLUS_203.28, IRX\IOPRP243.IMG, TEKKEN\DATA.BIN -> ga
 
 # ================================================================ PS2Recomp tree
 Step 'fork' "PS2Recomp tree at $PinnedCommit + patches\*.patch ($Tree)" {
-    if (Test-Path -LiteralPath (Join-Path $Tree '.t4-vendored.json')) {   # PORTABLE: shipped pre-patched, no Git
+    if (-not $Portable -and (Test-Path -LiteralPath (Join-Path $Tree '.t4-vendored.json'))) {
         Say "    vendored PS2Recomp source (patches already applied): $Tree"
         return 'vendored'
     }
     $patches = @(Get-ChildItem -LiteralPath (Join-Path $Root 'patches') -Filter '*.patch' -File | Sort-Object Name)
+    if ($Portable) {
+        $markerPath = Join-Path $Tree '.t4-vendored.json'
+        if (-not (Test-Path -LiteralPath $markerPath)) { throw 'The release is missing its vendored PS2Recomp marker.' }
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+        if ([string]$marker.head -ne 'eb8688b2fd191129f103a39543002c005b33409c') { throw 'Wrong vendored PS2Recomp revision.' }
+        if ($patches.Count -eq 0 -or @($marker.patches).Count -ne $patches.Count) { throw 'Incomplete vendored patch receipt.' }
+        foreach ($patch in $patches) {
+            $entry = @($marker.patches | Where-Object { $_.name -eq $patch.Name })
+            if ($entry.Count -ne 1 -or $entry[0].sha256 -ne (Get-FileHash -LiteralPath $patch.FullName -Algorithm SHA256).Hash.ToLower()) {
+                throw "Vendored patch receipt does not match $($patch.Name). Extract the release again."
+            }
+        }
+        return 'vendored (no Git)'
+    }
     if ($patches.Count -eq 0) { throw 'patches\*.patch not found (incomplete checkout of this repo?)' }
     $inProgress = [bool](Get-StateValue 'fork' 'inProgress') -and ((Get-StateValue 'fork' 'tree') -eq $Tree)
     $exists = Test-Path -LiteralPath (Join-Path $Tree '.git')
@@ -479,7 +507,7 @@ Step 'tools' 'PS2Recomp host tools (ps2_recomp.exe)' {
     if (-not (Test-Path -LiteralPath (Join-Path $Tree 'CMakeLists.txt'))) { throw "$Tree is not a PS2Recomp tree" }
     $env:TEKKEN4_SRC = $Tree
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'build_ps2recomp_tools_portable.cmd') -Label 'Building PS2Recomp tools'
-    if ($code -ne 0) { throw "tools\build_ps2recomp_tools.cmd failed (exit $code)" }
+    if ($code -ne 0) { throw "tools\build_ps2recomp_tools_portable.cmd failed (exit $code)" }
     if (-not (Test-Path -LiteralPath $RecompExe)) { throw "build finished but $RecompExe is missing" }
     Set-StateValues 'tools' @{ head = $head; adopted = $false }
     $Changed['tools'] = $true
@@ -506,8 +534,8 @@ Step 'recomp' 'ps2_recomp.exe config\ghidra_export.toml -> generated\' {
 # ================================================================ stage
 Step 'stage' 'tools\stage_generated.cmd' {
     $gen = (Files (Join-Path $Root 'generated') '*.cpp') + (Files (Join-Path $Root 'generated') '*.h')
-    $fp = Sha1Text ((Get-StatFingerprint $gen) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead))
-    if (-not $Force -and -not $Changed.ContainsKey('recomp') -and -not $Changed.ContainsKey('fork') -and (Get-StateValue 'stage' 'fingerprint') -eq $fp -and (Test-Path -LiteralPath (Join-Path $Tree 'ps2xRuntime\src\runner\register_functions.cpp'))) { return 'up to date' }
+    $fp = Sha1Text ((Get-StatFingerprint $gen) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.h' -Recurse)) + '|' + (Get-TreeHead))
+    if (-not $Force -and -not $Changed.ContainsKey('recomp') -and -not $Changed.ContainsKey('fork') -and (Get-StateValue 'stage' 'fingerprint') -eq $fp -and (Test-Path -LiteralPath (Join-Path $Tree 'ps2xRuntime\src\runner\register_functions.cpp')) -and (Test-Path -LiteralPath (Join-Path $Tree 'ps2xRuntime\src\runner\tekken4_net.cpp'))) { return 'up to date' }
     if ($WhatIf) { Plan 'run tools\stage_generated.cmd'; $Changed['stage'] = $true; return 'would run' }
     $env:TEKKEN4_SRC = $Tree
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'stage_generated.cmd') -Label 'Staging generated code'
@@ -517,12 +545,24 @@ Step 'stage' 'tools\stage_generated.cmd' {
     'staged'
 }
 
+# The online launcher needs the build id beside the executable, including after an up-to-date build.
+function Write-NetBuildId {
+    $py = $Script:Tools['py']
+    if (-not $py) { $c = Get-Command python, py -ErrorAction SilentlyContinue | Select-Object -First 1; $py = @{ Exe = $c.Source; Pre = @() }; if ($c.Name -ieq 'py.exe') { $py.Pre = @('-3') } }
+    $a = @($py.Pre) + @('-I', (Join-Path $PSScriptRoot 't4_buildid.py'), '--src', $Tree, '--out', (Split-Path -Parent $RunnerExe))
+    $code = Invoke-Logged -File $py.Exe -ArgList $a -Label 'Netplay build id (t4_buildid.py)'
+    if ($code -ne 0) { Say '    NOTE: the netplay build id could not be written: online matches will refuse this build.' }
+}
+
 # ================================================================ runtime
-Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
-    $vu1 = Files (Join-Path $Root 'game\vu1\micro') '*.bin'
+Step 'runtime' "tools\build_runtime_portable.cmd -> $RunnerExe" {
+    $vu1 = @(Files (Join-Path $Root 'game\vu1\micro') '*.bin')
     $fp = Sha1Text ((Get-StateValue 'stage' 'fingerprint') + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'patches') '*.patch')) + '|' +
                     (Get-StatFingerprint $vu1) + '|' + (Get-StatFingerprint (Files (Join-Path $Root 'runtime') '*.cpp' -Recurse)) + '|' + (Get-TreeHead) + '|' + $BuildDirName)
-    if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) { return 'up to date' }
+    if (-not $Force -and -not $Changed.ContainsKey('stage') -and (Test-Path -LiteralPath $RunnerExe) -and (Get-StateValue 'runtime' 'fingerprint') -eq $fp) {
+        if (-not $WhatIf) { Write-NetBuildId }
+        return 'up to date'
+    }
     if ($WhatIf) { Plan 'run tools\build_runtime_portable.cmd (cmake + ninja, 10-40 minutes the first time)'; $Changed['runtime'] = $true; return 'would run' }
     if ($vu1.Count -eq 0) {
         # The VU1 micro memory image (native VU1 = full speed) is assembled from the player's own ELF.
@@ -538,8 +578,9 @@ Step 'runtime' "tools\build_runtime.cmd -> $RunnerExe" {
     $env:TEKKEN4_BUILD_DIR = $BuildDirName
     Say '    this is the long step (several hundred C++ files); progress is in the log'
     $code = Invoke-Logged -File (Join-Path $PSScriptRoot 'build_runtime_portable.cmd') -Label 'Building the game runtime (ninja)'
-    if ($code -ne 0) { throw "tools\build_runtime.cmd failed (exit $code)" }
+    if ($code -ne 0) { throw "tools\build_runtime_portable.cmd failed (exit $code)" }
     if (-not (Test-Path -LiteralPath $RunnerExe)) { throw "build finished but $RunnerExe is missing" }
+    Write-NetBuildId
     Set-StateValues 'runtime' @{ fingerprint = $fp; exe = $RunnerExe }
     $Changed['runtime'] = $true
     'built'
@@ -553,19 +594,19 @@ foreach ($t in $Timings) { Say "  $t" }
 Say ('  total    {0:N1}s' -f $PipelineClock.Elapsed.TotalSeconds)
 Say ''
 if ($WhatIf) {
-    Say 'Dry run only: nothing was changed (steps marked "would run" are what a real run does).'
+    Say 'Dry run only: the build log was written; steps marked "would run" were not run.'
 } elseif ($Steps -contains 'runtime') {
-    Say 'Ready. Start the game with:'
+    Say 'Ready. In Command Prompt, start the game with:'
     Say ''
     $inRoot = $IsoInfo -and ($IsoInfo.DirectoryName.TrimEnd('\') -ieq $Root)
     $rootIso = @(Get-ChildItem -LiteralPath $Root -Filter '*.iso' -File -ErrorAction SilentlyContinue).Count -gt 0
     if ($IsoInfo -and -not $inRoot -and -not $rootIso) {
-        Say "    set TEKKEN4_ISO=$($IsoInfo.FullName)"
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    set `"TEKKEN4_ISO=$($IsoInfo.FullName)`""
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
         Say ''
         Say '(the runtime reads the game data and sound from the ISO: TEKKEN4_ISO points it at yours, or copy the ISO into the repo root)'
     } else {
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
     }
     Say ''
     Say 'Close the game window to stop it; the console output goes to logs\run.log.'
