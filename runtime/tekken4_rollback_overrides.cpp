@@ -94,6 +94,7 @@
 // TEKKEN4_NET_FULL_SYNC=1  give up the measured lead from 1 frame, capped at four, without whole-frame rounding (default off).
 // TEKKEN4_NET_SYNC_CAP_ONE=1  cap each correction pause at one vblank; retain its original settling hold (default off).
 // TEKKEN4_NET_SYNC_GAP_RESET=1  refill lead samples after a >50 ms gap between live sync visits (default off).
+// TEKKEN4_NET_SYNC_WALL_HOLD=1  cap the frame-count settling hold with its nominal wall duration (default off).
 // TEKKEN4_NET_ATOMIC_INPUT=1  recheck a missing remote input and select its prediction under one lock (default off).
 // TEKKEN4_NET_REFRESH_RC=1  refresh confirmed remote input after time sync, before the wait/late scan (default off).
 // TEKKEN4_NET_REBASE_CATCHUP=1  retain two vblank periods of deadline debt at live pacing rebases (default off).
@@ -1158,6 +1159,12 @@ namespace tekken4_rollback
         bool fullSync = false;
         bool syncCapOne = false;
         bool syncGapReset = false;
+        bool syncWallHold = false;
+        // Host-only settling deadline, measured from correction end; never restored with guest state.
+        std::chrono::steady_clock::time_point syncHoldEnd{};
+        bool syncHoldReleased = false;
+        uint64_t syncHoldEligible = 0, syncHoldReleases = 0, syncHoldSamples = 0;
+        uint64_t syncHoldEvals = 0, syncHoldCorrections = 0;
         // Host-only sample lifetime experiment, observed in both arms; never restored with guest state.
         std::chrono::steady_clock::time_point syncVisit{};
         uint64_t syncGapEvents = 0, syncGapEligible = 0, syncGapResets = 0, syncGapDiscarded = 0;
@@ -1172,6 +1179,7 @@ namespace tekken4_rollback
         struct SyncCorrection
         {
             bool active = false, subframe = false;
+            int wallSamples = 0;
             uint64_t frame = 0, rc = 0;
             double adv = 0;
             int frames = 0;
@@ -1261,6 +1269,7 @@ namespace tekken4_rollback
         static constexpr int kLeadWin = 20;
         int leadWindow = kLeadWin;
         int leadMine[kLeadWin]{}, leadTheirs[kLeadWin]{};
+        bool leadWallSample[kLeadWin]{};
         int leadN = 0;
         uint64_t syncEvals = 0, syncEarlyEvals = 0, syncEvalFrame = 0, syncEarlyCorrections = 0;
         uint64_t lastCorrection = 0, tsHold = 0;
@@ -1793,6 +1802,19 @@ namespace tekken4_rollback
         }
         const int rtt = t4net::rttMs();
         g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u;
+        // Keep the original nominal post-sleep hold. Wall expiry may only admit samples EARLIER.
+        g_np.syncHoldEnd = sleepEnd + kVblank * static_cast<int64_t>(g_np.tsHold - f);
+        g_np.syncHoldReleased = false;
+        if (selected.wallSamples > 0)
+            ++g_np.syncHoldCorrections;
+        if (g_np.diag)
+            std::fprintf(g_log, "NETSYNCHOLD_SET end_steady_ms=%.3f slot=%d f=%" PRIu64
+                                " sync_wall_hold=%d hold_until=%" PRIu64 " deadline_ms=%.3f"
+                                " window_wall_samples=%d\n",
+                         std::chrono::duration<double, std::milli>(sleepEnd.time_since_epoch()).count(),
+                         g_np.slot, f, g_np.syncWallHold ? 1 : 0, g_np.tsHold,
+                         std::chrono::duration<double, std::milli>(g_np.syncHoldEnd.time_since_epoch()).count(),
+                         selected.wallSamples);
         if (g_np.diag)
             std::fprintf(g_log, "NETSYNCCAP_EVENT steady_ms=%.3f end_steady_ms=%.3f slot=%d f=%" PRIu64
                                 " sync_cap_one=%d adv=%.6f base_us=%" PRId64 " give_us=%" PRId64
@@ -1872,10 +1894,33 @@ namespace tekken4_rollback
         // no samples before tsFrom)
         if (f < g_np.tsFrom)
             return false;
-        if (f >= g_np.tsHold)
+        const bool wallEligible = g_np.timeSync && f < g_np.tsHold &&
+                                  g_np.syncHoldEnd.time_since_epoch().count() != 0 && now >= g_np.syncHoldEnd;
+        const bool wallSample = g_np.syncWallHold && wallEligible;
+        if (wallEligible)
+            ++g_np.syncHoldEligible;
+        if (wallSample)
+        {
+            ++g_np.syncHoldSamples;
+            if (!g_np.syncHoldReleased)
+            {
+                g_np.syncHoldReleased = true;
+                ++g_np.syncHoldReleases;
+            }
+        }
+        if (wallEligible && g_np.diag)
+            std::fprintf(g_log, "NETSYNCHOLD_SAMPLE steady_ms=%.3f slot=%d f=%" PRIu64
+                                " sync_wall_hold=%d hold_until=%" PRIu64 " deadline_ms=%.3f"
+                                " admitted=%d mine=%d peer_lead=%d rc=%" PRIu64 "\n",
+                         std::chrono::duration<double, std::milli>(now.time_since_epoch()).count(),
+                         g_np.slot, f, g_np.syncWallHold ? 1 : 0, g_np.tsHold,
+                         std::chrono::duration<double, std::milli>(g_np.syncHoldEnd.time_since_epoch()).count(),
+                         wallSample ? 1 : 0, mine, t4net::peerLead(), rc);
+        if (f >= g_np.tsHold || wallSample)
         {
             g_np.leadMine[g_np.leadN % g_np.leadWindow] = mine;
             g_np.leadTheirs[g_np.leadN % g_np.leadWindow] = t4net::peerLead();
+            g_np.leadWallSample[g_np.leadN % g_np.leadWindow] = wallSample;
             ++g_np.leadN;
         }
         if (!g_np.timeSync || g_np.leadN < g_np.leadWindow || t4net::peerLost())
@@ -1885,14 +1930,28 @@ namespace tekken4_rollback
         if (g_np.leadN < NetplayState::kLeadWin)
             ++g_np.syncEarlyEvals;
         int d[NetplayState::kLeadWin];
+        int wallSamples = 0;
         for (int i = 0; i < g_np.leadWindow; ++i)
+        {
             d[i] = g_np.leadMine[i] - g_np.leadTheirs[i];
+            if (g_np.leadWallSample[i])
+                ++wallSamples;
+        }
         std::sort(d, d + g_np.leadWindow);
         const int cut = g_np.leadWindow / 5;
         double sum = 0;
         for (int i = cut; i < g_np.leadWindow - cut; ++i)
             sum += d[i];
         const double adv = sum / (2.0 * (g_np.leadWindow - 2 * cut)); // frames this side is ahead
+        if (wallSamples > 0)
+        {
+            ++g_np.syncHoldEvals;
+            if (g_np.diag)
+                std::fprintf(g_log, "NETSYNCHOLD_EVAL steady_ms=%.3f slot=%d f=%" PRIu64
+                                    " window_wall_samples=%d adv=%.6f rc=%" PRIu64 "\n",
+                             std::chrono::duration<double, std::milli>(now.time_since_epoch()).count(),
+                             g_np.slot, f, wallSamples, adv, rc);
+        }
         if (g_np.diag)
             g_np.diagAdv = adv;
         const bool subframe = adv >= 0.25 && adv < 1.0;
@@ -1921,6 +1980,7 @@ namespace tekken4_rollback
             g_np.fullSyncLastAdv = adv;
         }
         NetplayState::SyncCorrection selected;
+        selected.wallSamples = wallSamples;
         selected.frame = f;
         selected.rc = rc;
         selected.adv = adv;
@@ -2165,6 +2225,11 @@ namespace tekken4_rollback
                             " max_gap_ms=%.3f threshold_ms=50",
                      g_np.syncGapReset ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncGapEvents,
                      g_np.syncGapEligible, g_np.syncGapResets, g_np.syncGapDiscarded, g_np.syncGapMaxMs);
+        std::fprintf(g_log, "; NETSYNCHOLD sync_wall_hold=%d time_sync=%d eligible_visits=%" PRIu64
+                            " released_holds=%" PRIu64 " early_samples=%" PRIu64
+                            " window_evals=%" PRIu64 " window_corrections=%" PRIu64,
+                     g_np.syncWallHold ? 1 : 0, g_np.timeSync ? 1 : 0, g_np.syncHoldEligible,
+                     g_np.syncHoldReleases, g_np.syncHoldSamples, g_np.syncHoldEvals, g_np.syncHoldCorrections);
         std::fprintf(g_log, "; NETATOMICINPUT atomic_input=%d misses_live=%" PRIu64 " misses_replay=%" PRIu64
                             " recovered_live=%" PRIu64 " recovered_replay=%" PRIu64
                             " advanced_live=%" PRIu64 " advanced_replay=%" PRIu64
@@ -2304,6 +2369,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_CAP_ONE=1: correction pauses capped at one vblank; pre-cap settling hold retained\n");
         if (g_np.syncGapReset)
             std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_GAP_RESET=1: discard lead samples after >50 ms between live sync visits; refill normal window\n");
+        if (g_np.syncWallHold)
+            std::fprintf(g_log, "NET TEKKEN4_NET_SYNC_WALL_HOLD=1: release settling hold at original frame or nominal wall deadline from correction end\n");
         if (g_np.atomicInput)
             std::fprintf(g_log, "NET TEKKEN4_NET_ATOMIC_INPUT=1: locked exact-input recheck and held prediction\n");
         if (g_np.replayBatch)
@@ -2884,6 +2951,8 @@ namespace tekken4_rollback
             g_np.syncCapOne = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SYNC_GAP_RESET"))
             g_np.syncGapReset = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_SYNC_WALL_HOLD"))
+            g_np.syncWallHold = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_ATOMIC_INPUT"))
             g_np.atomicInput = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_REPLAY_BATCH"))

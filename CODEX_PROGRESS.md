@@ -1,5 +1,120 @@
 # T4 beta progress, 2026-11-03
 
+## Current: bound the settling hold by its nominal wall duration
+
+Latest supplied real verify finished 2026-11-03T01:30:39. SYNC_GAP_RESET
+really acted: host/join resets 298/173, discarded samples 2938/1483. Yet
+rollbacks are 257/1016 (3.95x), replay frames 461/4045 (8.77x), mean depth
+1.79/3.98. Aggregate 1273 rollbacks and 4506 replay frames. Expiring old
+windows did not remove the imbalance; keep GAP_RESET default-off. OFF host
+is truncated, so no complete controlled OFF/ON aggregate conclusion follows.
+Join excess stall+sync is 3488 ms, host excess rebase 3483 ms: coupled timing
+accounting, not evidence of the initiating side. Active new counters show
+changed runtime behavior despite a historical repeated build ID; exact
+reviewed/executed bytes remain unproved.
+
+Done: 24 independent area agents read AGENTS.md/current progress. Safe
+in-tree inventory found eight .log files, all ZIP/scanner evidence; latest
+verify pointers contain no paired runtime chronology. Unique first arrivals,
+advantage sequence and first-wait order remain UNKNOWN. No outside folder
+was opened. No fixed role/sign/publication/ACK/snapshot defect established.
+Positive advantage estimates the peer being paused AHEAD. Replay can delay
+its next local publication, but source opportunity is not causal chronology.
+
+One new hypothesis: the post-correction settling hold counts live frames,
+although its nominal duration includes RTT wall time. Replay/producer gaps
+consume wall time without advancing those frames and can prolong controller
+blindness. FAST_SYNC changed refill length; GAP_RESET cleared old samples;
+CAP_ONE shortened pauses while retaining this hold. Those did not test wall
+expiry. The original frame hold may intentionally require input progression:
+elapsed RTT alone does NOT prove that fresh peer feedback has propagated.
+This is an experiment, not a proved cause or release fix.
+
+Changed runtime/tekken4_rollback_overrides.cpp behind literal default-off
+TEKKEN4_NET_SYNC_WALL_HOLD=1. After a correction ends, record a steady-clock
+deadline: sleepEnd + (tsHold - correctionFrame) * 16667 us, using the original
+hold count unchanged. ON admits a sample if the original frame hold OR wall
+deadline expires. It only shortens an overlong hold; it cannot extend the
+original frame guard. tsFrom, 20-sample filter, trimmed mean, thresholds,
+ten-frame correction spacing, pause size, replay order and input/wire policy
+are retained. Deadline and sample flags are host-only, outside guest restore.
+OFF uses the original sample guard; both arms add observations and logging
+cost, with no zero-overhead claim.
+
+Both arms append NETSYNCHOLD to retained NETSUMMARY: sync_wall_hold, time_sync,
+eligible_visits (wall expired while f < tsHold), released_holds (distinct ON
+holds admitting early), early_samples, window_evals and window_corrections
+(windows containing an early sample). The flags follow ring replacement and
+refill; pending replay corrections retain their selected window count.
+DIAG=1 logs NETSYNCHOLD_SET (correction end, nominal deadline, frame hold),
+NETSYNCHOLD_SAMPLE (eligible visits, admitted flag, lead/frontier), and
+NETSYNCHOLD_EVAL (early-sample window, filtered advantage). These are not
+unique arrival timestamps. A flagged window can still trim its early sample
+or choose the same action: counts do not prove a numerical counterfactual.
+
+VERIFY_ENV.txt is exactly one ASCII line plus LF, no BOM:
+TEKKEN4_NET_SYNC_WALL_HOLD=1
+
+Open / owner-only REAL-ENTRY TEST: stage/build these exact reviewed runtime
+bytes and run actual paired Mode::Net games OFF/ON through the external
+verify wrapper. Forward VERIFY_ENV.txt explicitly through -Env for ON;
+net_pair clears inherited settings and does not read this file itself.
+Common BOTH arms: DELAY=3, LOCKDELAY=7, DIAG=1, LOCALPAD=0 (all with
+TEKKEN4_NET_ prefix), RBSTART=600, TIMESYNC=1, normal 20-sample filter,
+RB_MODE unset/net, RTT150/jitter5/loss3, 6000 frames and matching workload/
+foreground conditions. Keep GAP_RESET, CAP_ONE, FAST_SYNC, FULL_SYNC,
+SUBFRAME_SYNC, REPLAY_BEFORE_SYNC, REPLAY_BATCH, ATOMIC_INPUT,
+SIM_NORMAL_PRIORITY, SIM_SAFE_WAIT, LIVE_LEAD, ORDERED_LEAD, REFRESH_RC,
+SEND_FIRST, REBASE_CATCHUP, EARLY_DEADLINE, PRED_HEADROOM and other experiments
+equal/off. Retain effective settings and full paired rb_frames/transport
+logs, stdout/stderr and timings. Reviewed/staged runtime SHA-256 must match;
+refresh identity after staging, clear explicit BUILD overrides, retain build
+success and each launched executable SHA-256. Identity hashes staged inputs,
+not executable bytes. Equal seeds do not control per-input delivery history.
+
+Require OFF sync_wall_hold=0 and released_holds=early_samples=window_evals=
+window_corrections=0. Require ON literal banner, sync_wall_hold=1,
+released_holds>0, early_samples>0 and window_evals>0; otherwise it has not
+exercised the proposed controller mechanism. SAMPLE admitted=1 requires
+f<hold_until and steady_ms>=deadline_ms (display values rounded). SET deadline
+uses the original post-sleep nominal frame duration. Inspect actual windows
+and correction events; window_corrections>0 is stronger exposure evidence,
+not benefit proof. Compare publication/frontier gaps, advantage and first
+recorded waits in paired logs. Existing logs still miss unique arrivals.
+Success requires lower absolute combined replay/depth with acceptable lead,
+stalls, total waits, FPS and frame tails. Reject benefit only from worsening
+the other peer or added lead/stalls. Require zero hash mismatches/NETDESYNC;
+repeat same roles, swap roles, then two physical PCs. Default remains OFF.
+
+Ran: tests_catalogs invoked actual tools/check_online_catalogs.ps1, exit 0:
+both 23-tool catalogs, three root inputs and Host/Join dependencies present.
+Source inventory only. Test and SelfNet dispatch to different boundaries;
+neither exercises paired npBoundary. Root checked exact env bytes and source
+diff against retained originals. Compilation, activation, safety and benefit
+are UNRUN: AGENTS.md forbids builds, games and tools/net_* here. No changed
+runtime entry ran. This has NOT met the requested real-entry-test requirement;
+only the owner's actual paired verify can close it. Release acceptance OPEN.
+
+Original bytes of the three changed files are retained under
+logs/runtime-sync-wall-hold/originals. Root alone edits runtime/progress/env;
+all area agents are read-only. No Git command, outside-tree access, deletion,
+patch edit, build, game, forbidden helper, server, push or release occurred.
+
+Area agents: pair_logs, verify_metrics, advantage_sign, sync_filter,
+prediction_cap, vblank_pacing, input_sampling, publication_guard,
+transport_send, transport_receive, resend_coalesce, arrival_observability,
+simulated_network, early_replay, replay_scheduler, snapshot_state, hash_locks,
+startup_roles, switch_history, build_identity, tests_catalogs, experiment_design,
+runtime_entry_route, fresh_feedback. Separate final_diff_review_wall_hold
+completed the final three-file review with no blocking source issue. It
+independently verified OFF guard, correction-end deadline, ring refill/reset,
+pending metadata, chrono/printf plausibility, exact env bytes, unchanged
+history suffix and runtime SHA-256. No compilation or runtime proof follows.
+
+Reviewed runtime SHA-256: 6dc64f11029414f7d036f99e747ed04895b44e8ba7a7f7997c7fb2ee4db2197c
+
+# T4 beta progress, 2026-11-03
+
 ## Current: expire time-sync feedback after a long live-frame gap
 
 Latest supplied real verify finished 2026-11-03T01:13:56. SYNC_CAP_ONE really
