@@ -1,5 +1,11 @@
 # Tekken 4 Recomp
 
+## Clean source copy
+
+Read `AGENTS.md` first. It controls work in this copy: stay in this folder, do not build or run,
+do not use Git to write anything, and do not copy T5DR code here. The machine paths and maintainer
+commands below describe the original checkout; they are not permission to access it.
+
 Static recompilation of Tekken 4 (PS2) to a native Windows executable using PS2Recomp.
 
 ## Folders on the user's PC (since 2026-10-29)
@@ -36,8 +42,9 @@ Static recompilation of Tekken 4 (PS2) to a native Windows executable using PS2R
 - `../tekken4-fork-ps2recomp` = default PS2Recomp tree of all scripts (branch `t4-us`); `TEKKEN4_SRC` / `TEKKEN4_BUILD_DIR` override.
 
 ## Rules
-- **Public vs private:** `origin` (Lautreck) is PUBLIC, `swiss` (PS2recomp-swiss-team) is private. New work goes to `swiss`, not `origin`.
-  T5DR-derived code (`lobby/`) must never reach `origin`. Pushes to `swiss` were blocked by the auto-mode classifier: the user
+- **Repository visibility:** do not assume `swiss` is private. `docs/status.md` records a public-visibility observation
+  on 2026-10-30; visibility was not checked for this source audit. The owner must verify the destination and settle
+  provenance before publication. T5DR-derived code (`lobby/`) must never reach `origin`. Pushes to `swiss` were blocked by the auto-mode classifier: the user
   pushes by hand (`git -C D:\tekken4-us push swiss us-slus20328`).
 - Never commit or publish game files, BIOS, Ghidra databases, generated C++ or the built exe (it contains recompiled game code).
 - `C:\T5DROnline` is read-only from here: read and copy into this project, never edit. Never connect to, deploy to or change the

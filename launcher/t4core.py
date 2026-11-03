@@ -4,6 +4,8 @@ No GUI in here (t4_launcher.pyw is the window), so everything can be tested from
 Python 3.8+ standard library only. Written new for this project (see COPIED_FROM_T5DR.txt).
 """
 import ctypes
+import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -138,6 +140,8 @@ def read_json(path):
 
 def ps2recomp_tree():
     """Same rule as tools\\build_game.ps1: TEKKEN4_SRC, else a vendored deps\\ps2recomp (release), else ..\\tekken4-fork-ps2recomp."""
+    if bundled_toolchain():
+        return os.path.join(ROOT, "deps", "ps2recomp")
     if os.environ.get("TEKKEN4_SRC"):
         return os.path.abspath(os.environ["TEKKEN4_SRC"])
     vendored = os.path.join(ROOT, "deps", "ps2recomp")
@@ -255,6 +259,9 @@ def check_prereqs():
             p = os.path.normpath(os.path.join(tc, rel))
             add(id_, name, os.path.isfile(p), p if os.path.isfile(p) else "missing: " + p,
                 "Extract the whole release zip again (not from inside the zip viewer).")
+        add("sysroot", "Microsoft headers and libraries", sysroot_ready(),
+            "Ready" if sysroot_ready() else "Downloaded from Microsoft on the first build, after licence acceptance.",
+            "Press BUILD GAME to review Microsoft's licence and download the build libraries.")
         return items
 
     py = None
@@ -300,19 +307,44 @@ def check_prereqs():
 
 # ------------------------------------------------------------------ build script
 def build_script():
-    """The portable script when this folder has its own toolchain, else the normal one."""
-    portable = os.path.join(ROOT, "tools", "build_game_portable.ps1")
-    if bundled_toolchain() and os.path.isfile(portable):
-        return portable
+    """The common entry point selects the bundled toolchain using its marker."""
     return os.path.join(ROOT, "tools", "build_game.ps1")
 
 
-def build_command(iso, dry_run=False):
+def sysroot_ready():
+    tc = os.path.join(ROOT, "toolchain")
+    return all(os.path.isfile(os.path.join(tc, p)) for p in (
+        "sysroot.json", "msvc/include/vector", "msvc/lib/x64/libcmt.lib",
+        "winsdk/include/um/Windows.h", "winsdk/include/ucrt/stdio.h",
+        "winsdk/lib/um/x64/kernel32.lib", "winsdk/lib/ucrt/x64/libucrt.lib"))
+
+
+def microsoft_license_terms():
+    lock = read_json(os.path.join(ROOT, "tools", "msvc_sysroot.lock.json")) or {}
+    if lock.get("license_reviewed") is not True:
+        raise ValueError("This release is missing owner-reviewed Microsoft licence texts. Contact the release owner.")
+    texts = []
+    for name in ("microsoft-build-tools", "microsoft-windows-sdk"):
+        record = lock.get("license_terms", {}).get(name, {})
+        relative = "LICENSES/" + name + ".txt"
+        if record.get("path") != relative:
+            raise ValueError("Missing Microsoft licence record: " + name)
+        with open(os.path.join(ROOT, relative), "rb") as stream:
+            data = stream.read()
+        if hashlib.sha256(data).hexdigest() != record.get("sha256"):
+            raise ValueError("Microsoft licence text has changed: " + name)
+        texts.append(name + "\nSource: " + record.get("url", "") + "\n\n" + data.decode("utf-8-sig"))
+    return "\n\n".join(texts)
+
+
+def build_command(iso, dry_run=False, accept_microsoft_license=False):
     cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", build_script()]
     if iso:
         cmd += ["-Iso", iso]
     if dry_run:
         cmd.append("-WhatIf")
+    if accept_microsoft_license and not dry_run:
+        cmd.append("-AcceptMicrosoftLicense")
     return cmd
 
 
@@ -468,8 +500,13 @@ def graphics_support(exe):
 
 
 def game_env(s, exe=None):
-    """Environment of the game process. Same switches as dist\\...\\Tekken4.cmd, plus the graphics options."""
+    """Environment for Play offline, with the player's graphics and sound options."""
     env = dict(os.environ)
+    # A shell used for an online or rollback test must not turn offline play
+    # into another network session or replace human input with a test script.
+    for name in list(env):
+        if name.startswith(("TEKKEN4_NET", "TEKKEN4_RB_")) or name == "TEKKEN4_RAND_SEED":
+            env.pop(name)
     env["PS2X_GS_BACKEND"] = "gl"
     env["PS2X_GS_THREADS"] = "auto"
     env["PS2X_DEBUG_PANEL"] = "1" if s.get("debug_panel") else "0"
@@ -567,6 +604,60 @@ class GameRun:
             note = "ended with error code 0x%08X" % code32
         return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "seconds": round(secs, 1), "exit": code32,
                 "ok": not crashed, "log": LAST_RUN_LOG, "note": note}
+
+
+def online_command(s, role, peer="", port=7400):
+    """Use the selected local build with the existing identity/UDP preflight."""
+    if role not in ("host", "join"):
+        raise ValueError("Choose Host or Join.")
+    port = int(port)
+    if not 1 <= port <= 65535:
+        raise ValueError("UDP port must be 1..65535.")
+    if role == "join":
+        try:
+            peer = str(ipaddress.IPv4Address(peer.strip()))
+        except ipaddress.AddressValueError:
+            raise ValueError("Enter the host's public or VPN IPv4 address.")
+    problems = play_problems(s)
+    if problems:
+        raise ValueError("\n".join(problems))
+    exe = find_runtime(s)[0]
+    exe_dir = os.path.dirname(exe)
+    build_dir = os.path.dirname(exe_dir)
+    out_dir = os.path.dirname(build_dir)
+    if os.path.basename(exe_dir).lower() != "ps2xruntime" or os.path.basename(out_dir).lower() != "out":
+        raise ValueError("Online needs a local build under <source>/out/<build>/ps2xRuntime. Select that runtime first.")
+    if not os.path.isfile(os.path.join(exe_dir, "t4net_build.json")):
+        raise ValueError("Online build identity is missing. Finish the local build and see TEST_ONLINE_DE.txt.")
+    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+           os.path.join(ROOT, "tools", "net_play.ps1"), "-Port", str(port), "-Iso", effective_iso(s),
+           "-Src", os.path.dirname(out_dir), "-BuildDir", os.path.basename(build_dir), "-Delay", "auto", "-Sound", "1"]
+    return cmd + (["-Host"] if role == "host" else ["-Join", peer])
+
+
+class OnlineRun(GameRun):
+    """One cold online process, including the existing preflight; no lobby."""
+
+    def __init__(self, s, role, peer="", port=7400):
+        super().__init__(s)
+        self.command = online_command(s, role, peer, port)
+
+    def start(self):
+        os.makedirs(LAUNCHER_LOG_DIR, exist_ok=True)
+        self.log = open(LAST_RUN_LOG, "wb")
+        self.started = time.time()
+        try:
+            self.proc = subprocess.Popen(self.command, cwd=ROOT, env=game_env(self.s, self.exe),
+                                         stdout=self.log, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+        except OSError:
+            self.log.close()
+            raise
+
+    def wait(self):
+        record = super().wait()
+        if record["ok"] and not self.stopped_by_user:
+            record["note"] = "online helper finished; see the log for connection and game results"
+        return record
 
 
 # ------------------------------------------------------------------ window screenshot (PrintWindow -> PNG)

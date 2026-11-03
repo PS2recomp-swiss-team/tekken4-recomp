@@ -1,4 +1,4 @@
-"""Stages the game overrides for the graphics worktree (D:\\tekken4-fork-gfx, branch t4-gfx) in isolation.
+"""Stages the game overrides for the graphics worktree (sibling tekken4-fork-gfx, branch t4-gfx) in isolation.
 
 Other agents edit runtime\\*_overrides.cpp in this working tree at the same time; staging their uncommitted work broke
 the graphics build. This writes the COMMITTED (HEAD) version of every tracked runtime\\*_overrides.cpp into

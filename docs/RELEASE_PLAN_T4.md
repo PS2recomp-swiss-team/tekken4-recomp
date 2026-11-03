@@ -1,8 +1,47 @@
 # T4 player release: plan for a zip that needs no Visual Studio
 
+## Sunday beta decision, 2026-10-31
+
+Path B is the chosen beta packaging route: bundled Python/LLVM/CMake/Ninja and
+reviewed source dependencies; Microsoft build headers/libraries are fetched on
+the player's PC after acceptance. Nothing from the game ships. Each player
+builds from their own USA v1.00 ISO, SLUS-20328.
+
+Scope: offline and online by direct IP or VPN inside the new launcher. No lobby,
+ranked, persistent opponent process or instant direct-fight entry. Boot a new
+game for every online match. Shared-launcher integration, clean-PC path-B builds
+and the owner's two-PC sound-on test still need proof.
+
+The maintainer entry point is `tools/make_player_zip.ps1 -Inputs <lock> -Version <version>
+-Stage <new-folder> -Zip <new-zip>`, using the existing path-B packager. Missing
+reviewed payloads stop packaging. The explicit `tools/make_test_zip.ps1` fallback
+is source only and needs installed Python 3 with tkinter, Git, CMake, Ninja,
+VS 2022 C++ Build Tools, MSVC and the Windows SDK. It is not a portable release.
+
+[ROLLBACK_ASYMMETRY.md](ROLLBACK_ASYMMETRY.md) recommends COALESCE ON for measured
+traffic savings and DIAG ON for the Sunday observation run. Other experiments
+stay OFF; no timing/prediction retuning is justified. AUTO_VS stays OFF without
+its own passed pair. No evidence here establishes that the one-PC stalls are fixed.
+
+Use [RELEASE_PATH_B.md](RELEASE_PATH_B.md) for current preparation,
+[BETA_GO_NO_GO.md](BETA_GO_NO_GO.md) for acceptance,
+[BETA_RELEASE_NOTES.md](BETA_RELEASE_NOTES.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
+for player limits, and [BETA_ANNOUNCEMENTS.md](BETA_ANNOUNCEMENTS.md) for posting drafts.
+No build, package or game was run in this copy.
+
+## Historical plan, 2026-10-30
+
+The inventory below records the earlier options and estimates. The Sunday
+decision above and RELEASE_PATH_B.md supersede its implementation TODOs.
+
 Status 2026-10-30: plan plus a working prototype of the switch (nothing downloaded, no zip built yet).
 Goal (owner): download one zip, start the launcher, BUILD GAME from your own ISO (no BIOS), play. Like T5DR Online.
 
+Implementation update 2026-10-30: path B scripts now exist. See [RELEASE_PATH_B.md](RELEASE_PATH_B.md) for the current
+workflow, limits and clean-PC gates, [RELEASE_DOWNLOADS.md](RELEASE_DOWNLOADS.md) for all inputs, and
+[MSVC_SYSROOT.md](MSVC_SYSROOT.md) for the Microsoft fetcher. No download, build or packaging was run here.
+The prototype copies remain behind the marker switch in the common build entry points. The older inventory and
+"still to do" list below describe the original plan; they are not a claim that a portable release has passed testing.
 ## 1. How T5DR ships its toolchain (read from its launcher/tools/docs, measured values from its docs/RELEASE.md)
 
 * `package_release.py --release` stages a folder and a zip. The player needs no Visual Studio, Git or Python:
@@ -53,18 +92,18 @@ Microsoft files, no CMake/Ninja/Git, the 10-40 min runtime build drops to the 48
 of C on 16 cores). Effort: days, and it touches the runtime (other agents' area); cross-DLL cost of
 `dispatchGuestBranch` must be measured (it is already an indirect call).
 
-**B. Bundled clang-cl + fetched Microsoft sysroot (quick, prototype below).** Zip ships LLVM, CMake, Ninja, Python,
+**B. Bundled clang-cl + fetched Microsoft sysroot (prototype below).** Zip ships LLVM, CMake, Ninja, Python,
 the vendored PS2Recomp + FetchContent sources; the launcher downloads the MSVC STL/CRT and Windows SDK headers and
 libs (`toolchain\msvc`, `toolchain\winsdk`, a `tools\fetch_msvc_sysroot.py` in the style of `xwin`, from Microsoft's
-public manifest, player accepts Microsoft's licence in the launcher). Those files must **not** be in our zip (Microsoft's
-terms do not list them as redistributable). Costs the player roughly 0.4-0.8 GB of disk and a 150-300 MB download
-(estimate, not measured) and the full runtime build (10-40 min). Works with today's code, no runtime changes; first run
-needs internet (it already does for the libraries).
+public manifest, player accepts Microsoft's licence in the launcher). The package policy excludes those files from
+our zip; the owner must review the exact selected Microsoft terms. Costs the player roughly 0.4-0.8 GB of disk and a
+150-300 MB download (estimate, not measured) and the full runtime build (10-40 min). Intended to use the existing
+runtime without changes; a complete clean-PC build has not proved it. First run needs internet for the sysroot.
 
 **C. llvm-mingw (clang + libc++ + mingw-w64, all freely redistributable).** No Microsoft files, but the runtime and its
 dependencies (raylib, ffmpeg/SDL import libs, OpenGL) must build and run with the MinGW ABI. Unknown risk; not tried.
 
-Recommendation: ship **B** first (days, no engineering risk), design **A** as the 1.0 goal (it also removes the long
+Earlier recommendation: ship **B** first (requires a full clean-PC build and licence review), design **A** as the 1.0 goal (it also removes the long
 build for the player, the biggest usability problem), keep C as the fallback if Microsoft's terms for B are a problem.
 
 ## 4. Contents of the release zip `T4-<version>.zip` (estimates; T5DR numbers are measured)
@@ -96,8 +135,10 @@ logs, no Ghidra project. Content checks: ELF magic with the SLUS SHA-1, `func_`/
 byte-identical to a file under `game\disc`, any exe over 20 MB outside `toolchain\llvm`.
 
 ## 5. Licensing notes
-* Project is GPL-3.0 (derived from PS2Recomp): shipping the vendored patched PS2Recomp source and our repo files in the
-  zip satisfies the source offer. Keep the licence texts in `LICENSES\`.
+* Project is GPL-3.0 (derived from PS2Recomp). The planned zip includes the vendored patched PS2Recomp source and our
+  repo files. That inventory alone does not establish a complete source offer: the owner must check the exact
+  distributed components, corresponding source and notices. See [THIRD_PARTY.md](THIRD_PARTY.md).
+  Keep the licence texts in `LICENSES\`.
 * LLVM: Apache-2.0 with LLVM exception (redistributable, as T5DR does). CMake BSD-3, Ninja Apache-2.0, Python PSF,
   raylib/rlImGui zlib, imgui/sse2neon MIT, SDL2 zlib, OpenEXR BSD-3, FFmpeg **LGPL** (shared DLLs only, ship licence +
   link to the exact build the CMake uses).

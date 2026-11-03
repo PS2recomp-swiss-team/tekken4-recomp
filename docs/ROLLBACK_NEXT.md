@@ -1,6 +1,7 @@
 # Rollback next: the gaps a player will feel
 
-Status 2026-10-30. The original read-only comparison added only this document. The follow-up source edits below
+Status 2026-10-30. The latest owner-authorized port pass is recorded at the end, after the historical comparison.
+The original read-only comparison added only this document. The earlier follow-up source edits below
 add two opt-in runtime items. No build, game, network test or patch application was run. No T5DR code was copied
 or consulted for those edits. Comparison references below describe the earlier source, not revised line numbers
 or the other worktrees mentioned by old reports.
@@ -16,7 +17,8 @@ This covers the rollback/netplay areas inspected, not uninspected lobby/server o
   results were not inspected here. **Source** means the mechanism is present in this copy. **Inference** means
   an expected benefit or risk, not a demonstrated improvement.
 - `docs/ROLLBACK_PLAN.md:3-6` is explicitly an unbuilt plan. Later implementation and phase reports supersede
-  its full-copy, frozen-IOP, GS-only-cut and reuse-as-code proposals. This work uses T5DR as ideas only.
+  its full-copy, frozen-IOP and GS-only-cut proposals. The original comparison used T5DR as ideas only;
+  the latest owner order explicitly permits MIT source ports from the supplied read-only T5DR tree.
 - T4 phase 3 reports sound-on peers and an offline reference agreeing at sampled, confirmed boundaries through
   12,000 frames (`docs/ROLLBACK_PHASE3.md:7-21,70-77`). Phase 3b reports zero sampled hash mismatches after its
   changes (`docs/ROLLBACK_PHASE3B.md:92-96`). This is strong evidence for those scripts, not every frame,
@@ -529,3 +531,226 @@ The current evidence supports a functioning deterministic local rollback prototy
 improvements. It does not yet establish T4 rollback equal to or better than T5DR for two human players. The
 highest-value missing proof is the current T4 build running one game per PC; the largest code opportunities
 then depend on that profile, followed by confirmed game rules and the session/result features above.
+
+## Owner-authorized MIT port pass (2026-10-30)
+
+This section supersedes the earlier source-work stopping point. The owner explicitly authorized reading
+`C:\OpenRecomp-work\T5DROnline-Source` and porting its MIT code. That tree was read only. Its
+`docs/ROLLBACK.md`, `docs/NETPLAY.md` and `docs/DIRECTFIGHT.md` were reviewed by area, including their later
+bug fixes. Full MIT notices are at the top of both receiving transport files. The new profiling and audio
+code is original T4 code. All new code is in `runtime/`; no patches, addresses or game data were added.
+
+Four source items changed. Every new switch defaults OFF and requires the exact value `1`; unset, `0` and
+`01` retain the old selection. None of the changes puts wall-clock values, host state or thread timing into
+simulated state. Profiling clocks feed logs; RTT selects a transported delay before input priming. This is
+source work, not proof that rollback equals T5DR. No build, game, test executable or network session was run.
+
+### Item-by-item outcome, in plan order
+
+"High, uncompiled" means separate source review found the types, includes, format arguments and ownership
+consistent with this copy. It is not compiler evidence. A dash means no new implementation to compile.
+Tests below are instructions for the maintainer outside this copy, not reported results.
+
+| Item | Outcome and switch | Compile confidence | Test to run |
+|---|---|---|---|
+| 1. Headroom | Profiling done; optimization/drain parity not done. New `TEKKEN4_NET_COST_PROFILE=1`. | High, uncompiled | Sound-on self-test, then two PCs OFF/ON, depths 1/2/4/8, all stages; compare hashes, component costs, actual presents and profiling overhead. |
+| 2. Resim cuts | Deeper cuts not done; existing draw/present/VU1 and optional upload retained. No new switch. | — | Map complete draw functions first; cut/no-cut resim comparisons plus HP bars, shadows, camera, GS readbacks and KO undo. |
+| 3. Cross-machine correctness | Strict HELLO source change done; cross-machine proof pending. New `TEKKEN4_NET_STRICT_HELLO=1`. | High, uncompiled | Matching/nonzero builds, missing/mismatched builds, forged HELLO/REJECT, reordered/lost handshake; then Intel/AMD, direct/WAN/relay. |
+| 4. Pause/predicted KO | Not done: verified T4 phase/decision map missing. No new switch. | — | Map phases, then both pads START in fight/menus, KO undo, double KO, timeout and quit beside KO. |
+| 5. Sound | No-cut/drawn-tail output mute fix done. New `TEKKEN4_RB_AUDIO_TIMELINE=1`. Selective corrected starts not done. | High, uncompiled | Sound-on wrong-input self-test, cuts default/none/draw+VU1, depths 1/2/4/8; WAV samples and two-PC playback. |
+| 6. Input delay | Matching-setting negotiation done. New `TEKKEN4_NET_DELAY_MATCH=1`; ranked policy not done. | High, uncompiled | Equal/unequal/auto settings, RTT boundary vectors below, missing RTT; taps, stalls and fixed delay during RTT drift. |
+| 7. Time sync | Existing trimmed estimator/hold/early rollback retained; new display margin/tick skips not done. No new switch. | — | Two independent displays: lead/hold, actual presents/repeats, correction duration, latency and equal-load OFF/ON comparisons. |
+| 8. Packets | Audit done; existing `TEKKEN4_NET_COALESCE=1` retained, no new change. | Existing source only, uncompiled | Existing OFF/OFF, ON/ON, mixed test above; lost final ACK/hash, loss/reorder, actual direct/relay captures. |
+| 9. Snapshots | Inventory/audit done; representation change not done. No new switch. | — | Full/incremental sound-on verification, ring wraps, depth 1/2/4/8, load/KO/rematch and worker backlog. |
+| 10. Hash/RNG | Coverage/reseed audit done; no new masks or reseeds. Existing hash-profile switch retained. | — | Force differences in declared covered fields; broad restore tests and cold/warm/all-stage RNG caller traces. |
+| 11. Startup | Slow-load/drain audit done; safe phase-based start not done. No new switch. | — | Unskipped/restarted movies and asymmetric loading beyond frame 600; verify no active decoder at first rollback. |
+| 12. Rematch | Not done: game phase/select map missing. No new switch. | — | After mapping, 10+ rematches, skewed commands, mirror picks, mashing, slow loads, KO undo and aborts. |
+| 13. Persistent game | Not done: transport/hash lifecycle and canonical warm state missing. No new switch. | — | Warm/fresh/new-opponent cycles, changed ports/keys/seeds; disconnect in resim/hash work, memory/socket/worker growth. |
+| 14. Direct fight | Not done: committed selection/stage/mode/ready fields missing. No new switch. | — | Map every selection and safe boundary locally; two-PC wrong/late setups, random picks and asymmetric loads. |
+| 15. Online state | Not done: card isolation/profile policy and effective unlock agreement missing. No new switch. | — | Different personal progress/options, isolated online profiles, both unlock settings, cold/warm/rematch/new peer. |
+| 16. Result file | Not done: actual scores/decision and exact compared-hash receipt missing. No new switch. | — | Real 3–0/3–1/3–2, draw/timeout/KO undo, late comparison, quit, stale IDs and write failure. |
+| 17. Loss/fallback | Failure/close audit done; safe cancellation/result/return not done. No new switch. | — | Failed bind/handshake, peer quit/kill, close during wait, silent and alive-but-stalled peer, slow load and relay fallback. |
+| 18. Replays | Not done: canonical start/setup and playback missing. No new switch. | — | Synthetic malformed/truncated files, every-hash one-PC playback, multi-match end boundary, slow disk; two-PC captures. |
+| 19. Spectating | Not done: validated replay stream/viewer missing. No new switch. | — | After replay validation, three PCs: join/refill, rematches, slow viewer/disk, late hashes, relay fallback and player overhead. |
+
+### The four changes and their acceptance checks
+
+**Item 1, cost visibility.** `NETCOST` lines in `rb_frames.log` use fixed-size quarter-millisecond histogram
+buckets through 64 ms and one overflow bucket. They report count, mean, p50/p90/p99 upper bounds and max
+for boot/live/cut/tail EE busy time and GS/VIF/VU/IOP counters, capture, restore and whole rollback.
+Overflow quantiles report the observed maximum. Component timers nest/overlap: do not add them. EE busy is
+the existing host estimate, which may include OS descheduling. "Boot" means before the existing `rbStart`,
+not a verified game phase. Capture still excludes hash-reader waits; use `NETHASH_PROFILE` beside it.
+These are boundary/component costs, not measured displayed-picture intervals. OFF must emit no `NETCOST`;
+ON must have finite nonnegative values, ordered quantiles and fixed storage. No speedup is claimed.
+
+The baseline already has early rollback and lazy captures. T4's EE guest threads are cooperative and its
+IOP/kernel state is serialized. Patch 44 retains drains for guest-readable GS paths; a blanket output-worker
+drain could restore historical 5–7 ms waits. T5's side-thread manager addresses and semaphore writes were not
+ported. Prove that no host worker can write restored memory before changing a capture/load boundary.
+
+**Item 3, strict HELLO.** Strict mode requires equal nonzero build IDs, opposite pad slots, nonzero nonce,
+nonzero host session and bounded explicit delay. Foreign-version HELLO failure, HELLO restarts and REJECT
+handling validate the tag or expected source first. Unkeyed configured-source checks identify an IP, not
+cryptographic authentication. Host recovery from a lost session echo requires a previously validated HELLO
+identity; early INPUT/PING cannot bypass build validation. A host without a configured peer/key still uses
+first-contact discovery. Existing handshake failure can still continue offline: item 17 remains open.
+
+Exercise keyed/unkeyed wrong/missing tags, unexpected sources, wrong slots, nonce/session zero, delay 16–254,
+INPUT/PING before HELLO, matching and mismatching IDs, and lost/reordered echo recovery. A valid mismatched
+peer must fail; untrusted traffic must not cancel a strict session. Strict mode does not compare saves,
+unlocks or every environment setting. Build equality alone is not complete setup identity.
+
+**Item 5, audio timeline.** The old boundary mute used `g_frameCuts != 0`. With `TEKKEN4_RB_CUT=none`, or a
+custom cut set whose drawn tail clears all cuts, it could overwrite the rollback-start mute and queue audio
+from replayed frames again. The opt-in selector uses Test wrong/resim, SelfNet resim or Net resim state.
+IOP/SPU2 execution and snapshot contents stay intact; the existing host output mute runs after SPU2 bookkeeping.
+Test with `TEKKEN4_RB_IOPSTATE=1` and misprediction, normal cuts, `none`, and `draw,vu1` with tail 1. Require
+zero restore/hash mismatches and no extra samples from wrong/resim passes. With IOPSTATE=0 the new selection
+has no output-mute effect. Listen on both PCs for music seams, late/missing sounds, crackle and underruns.
+Already-heard wrong sounds remain irreversible; this is not a claim of perfect corrected audio.
+
+**Item 6, agreed delay.** Equal explicit settings 0–15 win. Otherwise the host uses measured median RTT:
+1 through 60 ms, 2 through 150, 3 through 250, 4 above; missing RTT selects 2. The joiner follows that pick
+before input priming. Negative API settings normalize to auto; values above 15 clamp to 15 before HELLO.
+The host retains its decision on repeated agreement calls. This adapts T5's equal-setting policy while
+retaining T4's high-RTT auto floors; it does not implement T5's separate casual/ranked/lobby policy layers.
+Equal explicit settings can override auto floors. Delay stays fixed for the session.
+
+Wire compatibility is deliberately separate for every combination, with unchanged packet layouts:
+
+| Strict HELLO | Delay match | Effective `kNetVersion` selection |
+|---|---|---|
+| OFF | OFF | 1, original `kNetVersion` |
+| ON | OFF | 2, `kNetVersionStrict` |
+| OFF | ON | 3, `kNetVersionDelayMatch` |
+| ON | ON | 4, `kNetVersionStrictDelayMatch` |
+
+There is no automatic downgrade. Mixed versions must never reach input priming; a strict discovery host
+without a trusted source may wait for the connection timeout rather than accept a foreign-version failure.
+Test all pairs of combinations. Test equal 0/0, 1/1, 15/15; unequal 1/2 and explicit/auto; RTT
+59/60/61, 149/150/151, 249/250/251 ms and no samples. Verify OFF preserves host precedence. The 1 ms tap
+latch already exists: verify keyboard/Raylib/XInput taps, stalls and resim without consuming a tap twice.
+T4 has no phase-based mid-fight lockstep windows. Keep boot lockstep and the prediction-history safety wait;
+do not import T5's obsolete phase windows or its old two-second wait-then-predict behavior.
+
+### T4 discovery required before the remaining behavior changes
+
+Known addresses below are tracing anchors from this T4 source, not new runtime writes. No T5 address was
+carried over. The maintainer must perform these probes in the real SLUS-20328 game, outside this copy.
+
+1. **Draw cuts (2).** Existing T4 packet-builder/end routines, including `FUN_00233b60`, are not proven safe
+   whole-function draw cuts. Use `TEKKEN4_STACKPROF`, lifted US function callers and VIF/GIF buffer-write
+   traces to classify complete functions, return contracts, memory/RNG/loader effects and GS readbacks.
+   Preserve render begin/end pairing and full function epilogues. T5's HP-drain update fix (`ROLLBACK.md`
+   section 35) proves a clean gameplay hash does not validate HUD animation. Do not mask unexplained differences.
+2. **Phases, setup, pause, scores (4/12/14/16).** Start from `FUN_00196940` / `FUN_001969f8` and the documented
+   VBlank boundary (`ROLLBACK_PHASE01.md:44`). Align traces through title, each select, loading, intro, READY,
+   fight, START pause/resume, KO slow motion/replay, next round, final pose and return to select. Follow field
+   writers to establish widths, side strides and resets. The known roster table `0x0030e100` has 112 entries
+   of 28 bytes: u16 fighter at +0, u16 costume at +2, availability callback at +24 (`tekken4_unlock_overrides.cpp`).
+   Trace `FUN_001e2da0`/`FUN_001e2cc0` callers at each player's confirm to find committed selections; table
+   metadata is not committed battle state. Trace stage confirm into resource loading to replace lobby
+   placeholder IDs. Find actual two-side round counts with 3–0/3–1/3–2, timeout and double KO. Verify stale
+   decision flags clearing into rematch and pending mode teardown; never infer scores from a winner byte.
+3. **Ready/load/drain (9/11/13/14/17).** Host MPEG decoder state is outside snapshots (patch 63); the fixed
+   frame-600 threshold is unproved with slow movies. Trace MPEG creation/deletion and T4 movie RPC open
+   `0x3000`, read `0x3200`, close `0x3100` in `tekken4_overrides.cpp`. Establish no active decoder or pending
+   movie I/O before rollback. The runahead-only quiet heuristic is not a rollback-safe completion query.
+   Trace actual loader queues, completion tokens and any host writes. Timeout ends a session; it never means
+   a partial load has completed. T4 already snapshots emulated semaphore state, unlike T5's native semaphore
+   token bug; do not add PS3 token repair writes. Stress full/incremental RDRAM verification with
+   `PS2X_RB_INCREMENTAL=0/1` and `PS2X_RB_WW_VERIFY=1`, sound on and repeated ring wraps.
+4. **RNG and hashes (10).** Source-backed `srand=0x002a2528`, `rand=0x002a2538`, `_impure_ptr=0x00304b94`,
+   generator at pointee +88, scene caller `FUN_0020e090`/return `0x20e0cc` are tracing anchors. Current
+   `loggedSrand` XORs the negotiated seed only when the game calls it; it is not an explicit sync-point
+   reseed. `TEKKEN4_RAND_SEED` bypasses that hook. Trace all RNG state/callers across cold/warm loading and
+   identify a ready boundary before the first intro draw. Never use host-timed draws for gameplay.
+   Normal network hash covers all RDRAM, scratchpad, VU0 data, selected IOP state and EE cycle. VU1/GS output
+   omissions follow the cut policy. EE context/scheduler/device fields, VU code/interpreter state and much
+   saved IOP kernel/device/SPU2 state are coverage limits, not proven cosmetic exclusions. IOP hash includes
+   RAM, sample RAM, selected emulator/thread scalars and sound cycle, not the complete IOP snapshot.
+   Keep broad restore checks. T5's camera and alleged timestamp exclusions hid sidestep/RNG feedback
+   (`NETPLAY.md` desync hunts); none were imported.
+5. **Online profile (15).** `TEKKEN4_UNLOCK_ALL=0` alone disables the existing unlock override; agreement is
+   still missing. Availability callback `0x001ec350` and profile `0x0036c2b8+0x60+fighter` are unlock evidence,
+   not fixed-online-state evidence. Trace mapped SDK calls `sceMcOpen=0x2947e0`, `Read=0x294b70`,
+   `Write=0x294c90`, `Sync=0x294e80`, `GetInfo=0x294fb8`, `GetDir=0x2951b0` from `config/analyzer_seed.toml`
+   and `function_map.csv`: paths, caller PCs, read destinations and asynchronous completion. Locate every
+   option copy, including repeated in-fight copies. No public card-path setter was found. Normal launcher
+   storage uses the player's SAVE_DIR; isolate online storage before profile load through supported storage
+   integration. T5's difficulty/time and unlock-grid desyncs show why agreeing only a build or one byte fails.
+
+### Session, result and replay contracts still to implement
+
+These are specifications, not dormant features or switches. Future behavior needs separate default-OFF
+`TEKKEN4_` gates, new switched wire versions where needed, and a separate review.
+
+- **Pause/rematch (4/12):** apply symmetric input rules after both pads are exchanged on every live/resim
+  boundary. Preserve menu controls. Confirm the deciding input prefix before pad holds/skips/results; undo
+  pending actions if rollback removes KO. Do not wait for the entire moving live state to become final.
+  Require a fresh decision transition, and rematch readiness for the locally driven side. T5's stale decision,
+  predicted-START pause, same-character skewed-command deadlock and select-reinitialization heap leak
+  (`DIRECTFIGHT.md` rematch/select restart sections) must not recur. Keep the session but give each match a
+  fresh identity/setup; reset input/hash epochs only through a synchronized protocol.
+- **Persistent sessions (13):** current `start()` returns when already on; detached RX/tick/simulator workers
+  never stop, and `bye()` does not close/reset the transport. The hash worker reads snapshot slots outside
+  its mutex under ownership. Stop submissions and drain queued/active readers before touching the ring;
+  use session generations for late completions. Wake/join or safely park socket workers, close the old socket,
+  discard delayed packets, and clear keys/nonces/RTT/history/lead/delay/results/cuts/mute/pacing. A new session
+  requires fresh identity and a proven canonical guest re-entry state. Whole-RDRAM/EE-cycle hashes mean warm
+  versus cold differences cannot be dismissed by importing T5 boot ranges or masks.
+- **Direct fight (14):** negotiate version/build/match identity, actual fighter/model/costume/stage, rounds,
+  seed and online profile/options identity. Resolve random choices once. Both peers validate/acknowledge
+  setup and reach a verified ready boundary before synchronized counters/RNG/input epoch begin. Never
+  invent an opponent pick on timeout or copy live loader queues into a reusable boot image.
+- **Result file (16):** versioned match/session/build/setup identity, actual scores, deciding boundary/hash,
+  match-local mismatches, `verified|unverified|incomplete`, nullable winner and explicit reason. Require the
+  corrected confirmed deciding prefix and an exact equal-hash receipt for that boundary. Transport `checked`
+  skips sparse and aged-out absent hashes; it is NOT proof of comparison. Add an exact receipt and pin the
+  deciding hash. Timeout/missing comparison/quit yields no trusted winner. Bounded host writer and atomic
+  replace once per match; write failure cannot affect simulation. `NETEND` remains a harness limit.
+- **Loss/closed window/fallback (17):** handshake failure currently continues offline; peer loss bypasses the
+  wait and can keep predicting. An alive PINGing peer without input progress can wait indefinitely. Existing
+  window-close code requests runtime stop, but blocking handshake/input waits lack an exposed stop predicate.
+  A future cancellation path must stop simulation at a boundary, release workers safely, and retain a known
+  confirmed result or emit incomplete/null winner. Distinguish bind/build/rejection/no-peer, quit/silence,
+  input stall, start/load timeouts and local close. Authenticated load-progress signaling must precede a
+  progress watchdog; a slow loader is not automatically a stalled peer. No abrupt process-exit workaround
+  was added. Direct-to-relay fallback must not resume an ended match or reuse stale identity/results.
+- **Replay (18):** T5's replay path excludes boot-through-menu sessions (`REPLAYS.md:267–268`), T4's current
+  route. First prove canonical setup/start/barriers and playback. Then record final raw P1/P2 inputs with a
+  monotonic cursor after pending corrections resolve; do not serialize predicted `g_np.inputs`. Header needs
+  T4 magic/version, build/effective wire/settings/profile identity, seed/delay/hash coverage and start identity.
+  Records need bounded lengths, setup/barriers/RNG/counters, ordered two-pad frames, final hashes/results,
+  completeness and LAST actually executed frame. T4 axes are `rx,ry,lx,ly`; do not copy T5 column order.
+  Future delayed inputs are not executed frames. Slow disk/full queue makes recording incomplete and stops
+  it without blocking players. Validate truncation, ordering, integer bounds and incompatible identities.
+- **Spectating (19):** build on validated replay with SESSION/INPUTS/HASH/BARRIER/MATCH/LAST/END records and
+  bounded worker queues. Viewer waits/refills (T5 uses 120 frames), players never wait. Join from session
+  start until independently complete rematch start state is proved; fast catch-up is unproved. Bound record,
+  decompression, session and per-viewer storage. Host timestamps stay diagnostic. Preserve stream identity
+  across pre-handshake relay fallback; do not publish false END for a replaced attempt.
+
+### Review, proof still needed and agents
+
+Separate reviewer `review_early` reviewed the source changes for compile issues, determinism, switch defaults,
+wire compatibility and license notices. Its two HELLO recovery findings were fixed: strict build validation
+and matching-delay preference negotiation can no longer be bypassed by early INPUT/PING recovery.
+Separate reviewer `review_final` passed the final combined code/documentation diff with no must-fix findings.
+Both reviews cover every changed item; deferred items have no code diff. Static/whitespace review is the only
+verification performed here; compiler, linker, patched-runtime API compatibility and runtime behavior remain
+unproved. Nothing was committed or written through git.
+
+**A running game is required** for draw/phase/score/pause/selection/stage/load/RNG/profile discovery, sound
+WAVs/listening, broad snapshot checks, cost measurements, canonical replay starts and safe warm transitions.
+**Two physical PCs are required** for cross-machine determinism, actual direct/WAN/relay behavior, delay and
+display fairness, late-input KO undo, two-endpoint sound, rematch/session/outcome acceptance. Use independent
+displays and sound devices with rendering headroom. **Three PCs are preferred** for spectator overhead.
+Do not claim faster resim, trusted ranked results or feature parity until those tests pass.
+
+Area agents: `item01_headroom`, `item02_cuts`, `item03_negotiation`, `item04_pause`, `item05_audio`,
+`item06_delay`, `item07_timesync`, `item08_packets`, `item09_snapshot`, `item10_hash`, `item11_startup`,
+`item12_rematch`, `item13_persistent`, `item14_directfight`, `item15_online_state`, `item16_results`,
+`item17_loss`, `item18_replay`, `item19_spectating`. Each owned one plan item; only the designated owner edited
+each runtime file, with sequential ownership transfers. Unimplemented items received read-only audits.

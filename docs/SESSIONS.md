@@ -1,5 +1,8 @@
 # Session plan
 
+For this clean source copy, read `AGENTS.md` first. Maintainer paths, worktrees, builds and Git writes
+described below are outside this copy's scope. Existing test results were not reproduced here.
+
 There is one T4 session for the game, netplay + online and release packaging. Launcher work is in the separate
 OpenRecomp-FGC project. One coordinating Main session outside this project merges results and cuts releases.
 Each session owns its area and stays out of the others'. Read `docs/PROJECT_MAP.md` first. Rules for everyone: `CLAUDE.md`.
@@ -23,7 +26,7 @@ documents the switch in `docs/GRAPHICS.md`, then the launcher session adds the c
 ## Open work by area
 **Launcher (in OpenRecomp-FGC)**
 - Move each part of the T4 Tk launcher into OpenRecomp-FGC.
-- Real `.exe` starter, updater, Online tab (a placeholder in the T4 Tk launcher). The Tk BUILD GAME tab is only dry-run tested (`tools\build_game.ps1` itself ran end to end).
+- Real `.exe` starter, updater and shared Online integration. The standalone Tk Host/Join controls exist but have not been run here. The Tk BUILD GAME tab is only dry-run tested; `tools\build_game.ps1` reached a fight through grouped `-Steps` runs on a developer PC (`docs/E2E_BUILD.md`), not a verified single invocation or clean-PC setup.
 - Settings still missing in the T4 Tk UI: AA levels, HUD sharp, anisotropic filtering, run-ahead.
 
 **T4: Game**

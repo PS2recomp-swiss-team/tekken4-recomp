@@ -6,6 +6,7 @@ setlocal
 set "ROOT=%~dp0.."
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=runtime"
 if defined TEKKEN4_SRC (set "TREE=%TEKKEN4_SRC%") else set "TREE=%ROOT%\..\tekken4-fork-ps2recomp"
+if exist "%ROOT%\toolchain\toolchain.json" set "TREE=%ROOT%\deps\ps2recomp"
 set "EXE=%TREE%\out\%TEKKEN4_BUILD_DIR%\ps2xRuntime\ps2EntryRunner.exe"
 if not exist "%EXE%" (echo ps2EntryRunner.exe not built: run tools\build_runtime.cmd & exit /b 1)
 if not exist "%ROOT%\logs" mkdir "%ROOT%\logs"

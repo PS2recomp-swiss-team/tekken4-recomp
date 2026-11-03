@@ -22,7 +22,7 @@
 .PARAMETER Force
   Ignore the up-to-date checks and redo every step (the PS2Recomp tree is never re-cloned).
 .PARAMETER WhatIf
-  Dry run: do the read-only checks (prerequisites, ISO verification), print which steps would run, change nothing.
+  Dry run: check prerequisites and the ISO, and print which steps would run. Writes the build log only.
 .PARAMETER Steps
   Run only these steps (names above), e.g. -Steps fork. Default: all.
 .PARAMETER LogDir
@@ -36,7 +36,8 @@ param(
     [switch]$Force,
     [switch]$WhatIf,
     [string[]]$Steps,
-    [string]$LogDir
+    [string]$LogDir,
+    [switch]$AcceptMicrosoftLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +49,11 @@ $PinnedCommit    = 'eb8688b'
 $ForkBranch      = 't4-us'
 $DefaultForkUrl  = 'https://github.com/ran-j/PS2Recomp'
 $Root     = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path.TrimEnd('\')
+# Keep the prototype switch: a bundle marker selects the portable pipeline; a checkout keeps the VS path.
+if (Test-Path -LiteralPath (Join-Path $Root 'toolchain\toolchain.json')) {
+    & (Join-Path $PSScriptRoot 'build_game_portable.ps1') @PSBoundParameters
+    exit $LASTEXITCODE
+}
 $AllSteps = @('prereq', 'verify', 'extract', 'fork', 'tools', 'recomp', 'stage', 'runtime')
 if (-not $Steps -or $Steps.Count -eq 0) { $Steps = $AllSteps }
 $Steps = @($Steps -join ',' -split ',' | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
@@ -95,6 +101,9 @@ function Invoke-Logged {
     $ErrorActionPreference = 'Continue'
     Push-Location -LiteralPath $WorkDir
     try {
+        # A command that cannot start must not inherit an earlier successful exit code.
+        # Native commands update the global variable; a local sentinel would shadow it.
+        $global:LASTEXITCODE = 1
         & $File @ArgList 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $s = $_.Exception.Message } else { $s = [string]$_ }
             $s = $s.TrimEnd()
@@ -106,7 +115,7 @@ function Invoke-Logged {
                 if ($Label) { Write-Progress -Activity $Label -Status ($s.Substring(0, [Math]::Min(110, $s.Length))) }
             }
         }
-        $code = $LASTEXITCODE
+        $code = $global:LASTEXITCODE
     } finally {
         Pop-Location
         $ErrorActionPreference = $old
@@ -281,7 +290,7 @@ if (-not $Iso) {
 }
 $IsoInfo = $null
 if (($Steps -contains 'verify') -or ($Steps -contains 'extract')) {
-    if (-not $Iso) { Fail 'verify' "no ISO given and no *.iso in $Root. Usage: powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso `"C:\path\Tekken 4 (USA).iso`"" }
+    if (-not $Iso) { Fail 'verify' "no ISO given and no *.iso in $Root. Usage: powershell -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso `".\Tekken 4 (USA).iso`"" }
     if (-not (Test-Path -LiteralPath $Iso -PathType Leaf)) { Fail 'verify' "ISO not found: $Iso" }
     $IsoInfo = Get-Item -LiteralPath $Iso
     $IsoFp = '{0}|{1}|{2}' -f $IsoInfo.FullName.ToLower(), $IsoInfo.Length, $IsoInfo.LastWriteTimeUtc.Ticks
@@ -520,19 +529,19 @@ foreach ($t in $Timings) { Say "  $t" }
 Say ('  total    {0:N1}s' -f $PipelineClock.Elapsed.TotalSeconds)
 Say ''
 if ($WhatIf) {
-    Say 'Dry run only: nothing was changed (steps marked "would run" are what a real run does).'
+    Say 'Dry run only: the build log was written; steps marked "would run" were not run.'
 } elseif ($Steps -contains 'runtime') {
-    Say 'Ready. Start the game with:'
+    Say 'Ready. In Command Prompt, start the game with:'
     Say ''
     $inRoot = $IsoInfo -and ($IsoInfo.DirectoryName.TrimEnd('\') -ieq $Root)
     $rootIso = @(Get-ChildItem -LiteralPath $Root -Filter '*.iso' -File -ErrorAction SilentlyContinue).Count -gt 0
     if ($IsoInfo -and -not $inRoot -and -not $rootIso) {
-        Say "    set TEKKEN4_ISO=$($IsoInfo.FullName)"
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    set `"TEKKEN4_ISO=$($IsoInfo.FullName)`""
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
         Say ''
         Say '(the runtime reads the game data and sound from the ISO: TEKKEN4_ISO points it at yours, or copy the ISO into the repo root)'
     } else {
-        Say "    $(Join-Path $Root 'tools\run_game.cmd')"
+        Say "    `"$(Join-Path $Root 'tools\run_game.cmd')`""
     }
     Say ''
     Say 'Close the game window to stop it; the console output goes to logs\run.log.'

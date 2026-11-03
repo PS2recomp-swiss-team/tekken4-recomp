@@ -7,6 +7,7 @@ rem Our game overrides (runtime\*_overrides.cpp) are copied in too; /XF keeps th
 setlocal
 set "GEN=%~dp0..\generated"
 if defined TEKKEN4_SRC (set "RT=%TEKKEN4_SRC%\ps2xRuntime") else set "RT=%~dp0..\..\tekken4-fork-ps2recomp\ps2xRuntime"
+if exist "%~dp0..\toolchain\toolchain.json" set "RT=%~dp0..\deps\ps2recomp\ps2xRuntime"
 if not exist "%GEN%\register_functions.cpp" (echo generated\ is empty: run ps2_recomp first & exit /b 1)
 rem /E copies only and never purges (no tool in this project deletes: user rule 2026-10-27); stale files stay until the user removes them.
 robocopy "%GEN%" "%RT%\src\runner" *.cpp /E /XF *_overrides.cpp /NJH /NJS /NFL /NDL /NP
@@ -19,6 +20,11 @@ robocopy "%~dp0..\runtime" "%RT%\src\runner" tekken4_net*.cpp tekken4_net*.h /NJ
 if errorlevel 8 (echo copying the netplay transport failed & exit /b 1)
 rem robocopy exit 1 = the transport was copied in now. The rollback overrides test __has_include("tekken4_net.h") inside
 rem a unity batch whose dependency list never had that header: touch them so Ninja recompiles them with netplay on.
+if errorlevel 1 powershell -NoProfile -Command "(Get-Item -LiteralPath '%RT%\src\runner\tekken4_rollback_overrides.cpp').LastWriteTime = Get-Date"
+rem Header-only opt-in state discovery and online result reporting, included by the rollback overrides.
+robocopy "%~dp0..\runtime" "%RT%\src\runner" tekken4_state_probe.h tekken4_online_result.h /NJH /NJS /NFL /NDL /NP
+if errorlevel 8 (echo copying the state probe and result headers failed & exit /b 1)
+rem Touch the including translation unit when either header is first staged or changed (including unity builds).
 if errorlevel 1 powershell -NoProfile -Command "(Get-Item -LiteralPath '%RT%\src\runner\tekken4_rollback_overrides.cpp').LastWriteTime = Get-Date"
 robocopy "%GEN%" "%RT%\include" ps2_recompiled_functions.h ps2_recompiled_stubs.h /NJH /NJS /NFL /NDL /NP
 if errorlevel 8 (echo copying headers failed & exit /b 1)

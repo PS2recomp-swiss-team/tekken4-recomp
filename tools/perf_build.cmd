@@ -1,13 +1,13 @@
 @echo off
-rem Perf work build (docs\PERF.md): PS2Recomp worktree D:\tekken4-fork-perf (branch t4-perf), out\perf.
+rem Perf work build (docs\PERF.md): sibling PS2Recomp worktree tekken4-fork-perf (branch t4-perf), out\perf.
 rem Same as tools\build_runtime.cmd but WITHOUT applying patches\*.patch (t4-perf already holds 01-40 as commits plus
 rem the perf commits; build_runtime's "apply what does not reverse" check would re-apply additive patches there), and
-rem the shared overrides are staged from HEAD of D:\tekken4-us (like docs\rollback\rb_build.cmd), so other
+rem the shared overrides are staged from HEAD of this checkout (like docs\rollback\rb_build.cmd), so other
 rem agents' uncommitted edits stay out.
 rem   tools\perf_build.cmd            stage + build
 rem   tools\perf_build.cmd nostage    build only
 setlocal
-if not defined TEKKEN4_SRC set "TEKKEN4_SRC=D:\tekken4-fork-perf"
+if not defined TEKKEN4_SRC set "TEKKEN4_SRC=%~dp0..\..\tekken4-fork-perf"
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=perf"
 set "SRC=%TEKKEN4_SRC%"
 set "BUILD=%SRC%\out\%TEKKEN4_BUILD_DIR%"

@@ -15,10 +15,11 @@ both rounds with KOs, win poses/replays, then the next match on Underground), bo
 | `n50b` | 50 (48) | 1 | 727 / 1327 | 927 / 1655 | 3 / 4 | 16.9 / 26.4 / 41.3; 22.2 / 28.3 / 43.6 | 409 / 417 (2.4 s, the lockstep boot) | 3 / 4 | 39.0 / 36.8 | 26.0 / 45.7; 26.2 / 53.3 | 416 (+ ref 416) | **0** |
 | `n150b` | 150 (148-151) | 3 (auto) | 808 / 1148 | 1416 / 1955 | 5 / 6 | 19.7 / 30.6 / 48.0; 21.2 / 31.2 / 56.9 | 423 / 410 (3.7 s) | 1 / 26 | 38.9 / 36.9 | 27.1 / 46.0; 27.2 / 52.8 | 402 (+ ref 402) | **0** |
 
-- **0 desyncs**: host and joiner agree on the final-state hash (RDRAM + scratchpad + VU0, IOP RAM + SPU2 RAM + IOP
+- **0 sampled hash mismatches**: host and joiner agree on the final-state hash (RDRAM + scratchpad + VU0, IOP RAM + SPU2 RAM + IOP
   threads, EE cycle) of every 30th frame from frame 30 to 12 000+, and both agree with `nref`, a single-process
-  measure run fed the same inputs on time (`docs/rollback/net_compare.py`). So the netplay timeline, with its
-  rollbacks, is bit-identical to playing the same inputs offline, sound included.
+  measure run fed the same inputs on time (`docs/rollback/net_compare.py`). This establishes agreement of the
+  covered state at those sampled frames. It does not check every frame or prove identical presented pictures,
+  heard audio or smooth play; the separate picture, sound and timing observations below have their own limits.
 - **Pictures** (`net_shot_f*.bmp` at frames 2400 ... 12000, `logs/net/n*b/contact.png`, host row over joiner row):
   the same scene on both at every shot (fight start, rounds, "PAUL WINS", "KAZUYA WINS", the next match's intro and
   fight); about half of the pairs are pixel-identical, the others one presented frame apart (the shot takes the

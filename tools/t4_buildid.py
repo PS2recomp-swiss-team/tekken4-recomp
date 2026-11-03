@@ -6,14 +6,15 @@ Rollback netplay only works when both PCs run identical game code. Like T5DR Onl
     code_id   SHA-1 over the PS2Recomp tree's content (tree id, not the commit: build_game.ps1 commits the patches at
               build time, so every player's commit differs) and uncommitted diff, our patches/*.patch, config/*.toml,
               config/*.csv (function maps: what the recompiler generated), the game modules staged into the
-              runner (src/runner/*_overrides.cpp, tekken4_net*.cpp/.h), and the toolchain of the CMake build: compiler
+              runner (src/runner/*_overrides.cpp, tekken4_net*.cpp/.h, tekken4_state_probe.h,
+              tekken4_online_result.h), and the toolchain of the CMake build: compiler
               id and exact version, build type, flags, PS2X_* options (players compile locally: another compiler
               version can round floats differently and desync). No paths, they differ per PC.
     net       the netplay protocol version (runtime/tekken4_net.h kNetVersion)
 
 build id = first 16 hex digits of SHA-1("t4dr-build:<elf_sha1>:<code_id>:<net>").
 
-    python -I tools/t4_buildid.py --src D:\\tekken4-fork-net --out D:\\tekken4-fork-net\\out\\net\\ps2xRuntime
+    python -I tools/t4_buildid.py --src .\\deps\\ps2recomp --out .\\deps\\ps2recomp\\out\\runtime\\ps2xRuntime
 
 writes <out>/t4net_build.txt ("<id> <elf_sha1> <code_id> <net>") and t4net_build.json; tools/net_pair.ps1 passes the
 id as TEKKEN4_NET_BUILD, and a peer whose HELLO carries another id is refused (build_mismatch).
@@ -95,16 +96,31 @@ def toolchain(build):
 def code_id(src, tool_lines):
     h = hashlib.sha1()
     h.update(b"toolchain:" + "\n".join(tool_lines).encode())
-    h.update(b"tree:" + git(src, "rev-parse", "HEAD^{tree}").strip())
-    # uncommitted edits of the tree, without the staged generated code / game modules (hashed below)
-    h.update(b"diff:" + git(src, "diff", "HEAD", "--", ".", ":(exclude)ps2xRuntime/src/runner"))
+    marker = os.path.join(src, ".t4-vendored.json")
+    if os.path.isfile(marker):
+        # Released sources have no Git. Hash actual source contents, never absolute paths or build outputs.
+        h.update(b"vendored:" + sha1_text(marker).encode())
+        for folder, dirs, files in os.walk(src):
+            dirs[:] = sorted(d for d in dirs if d not in (".git", "out", "build", "generated", "__pycache__"))
+            for name in sorted(files):
+                path = os.path.join(folder, name)
+                rel = os.path.relpath(path, src).replace("\\", "/")
+                if rel.startswith("ps2xRuntime/src/runner/"):
+                    continue  # generated code is identified by the ELF; overrides are hashed below
+                if name.endswith((".cpp", ".c", ".h", ".hpp", ".inl", ".cmake", ".txt")):
+                    h.update(b"source:" + rel.encode() + b":" + sha1_text(path).encode())
+    else:
+        h.update(b"tree:" + git(src, "rev-parse", "HEAD^{tree}").strip())
+        # uncommitted edits of the tree, without the staged generated code / game modules (hashed below)
+        h.update(b"diff:" + git(src, "diff", "HEAD", "--", ".", ":(exclude)ps2xRuntime/src/runner"))
     for path in sorted(glob.glob(os.path.join(ROOT, "patches", "*.patch"))):
         h.update(b"patch:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     for pattern in ("*.toml", "*.csv"):
         for path in sorted(glob.glob(os.path.join(ROOT, "config", pattern))):
             h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     runner = os.path.join(src, "ps2xRuntime", "src", "runner")
-    for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h"):
+    for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h",
+                    "tekken4_state_probe.h", "tekken4_online_result.h"):
         for path in sorted(glob.glob(os.path.join(runner, pattern))):
             h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     return h.hexdigest()

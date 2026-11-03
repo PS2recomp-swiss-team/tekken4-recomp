@@ -1,5 +1,44 @@
 # Online play through a lobby (rollback phase 4)
 
+## Package 5 status, 2026-11-02
+
+The [current server handoff decisions](../SERVER_HANDOFF_T4.md) supersede the
+2026-10-29 private-copy design below. OpenRecomp-FGC and the existing T5DR
+launcher must use lobby protocol **1**, preserving its message meanings, and
+players using either launcher must meet on the same game/build. No protocol
+version change is agreed. T4 and T5DR matches remain separate.
+
+The owner's account model is one existing T5DR account, with the same name and
+password and no new registration. Sessions, matches and ratings are per game;
+both games online at once is the target. Account work follows the T4 release;
+the account branch is still a draft, and nothing changes on the server now.
+The reported current same-account takeover between launchers is not proof of
+those future cross-game sessions. `kicked` must be visible and must stop
+automatic login. Saved-login sharing and a cross-launcher game-running guard
+remain to be settled.
+
+The shared-launcher source, private lobby code and protocol capability catalog
+are absent here. Do not implement outgoing fields/caps from the illustrative
+historical `hello` below without comparing the authorized protocol source.
+The standalone T4 Host/Join path uses direct IP through `tools/net_play.ps1`;
+it has no lobby login. Common lobby semantics do not change T4's game-packet
+magic or build identity into T5DR's. No real lobby/GUI/game test was run here.
+
+Acceptance must run the actual launchers in order: login/search;
+match/ready/result; rooms/friends; tournaments/spectating. Keep the old launcher
+running beside the new one during each stage. Stub games and mocked launcher
+tests cannot prove this. T4 rank names are client text only; ranked play still
+needs an authoritative game match result. The existing optional
+`TEKKEN4_NET_RESULT` session report writes `winner: null`, `score: null` and
+`match_result_proven: false`; it has no game match-end detector. It cannot
+award a winner or rating. See [rank/result limits](ONLINE_RANKS.md).
+
+## Historical integration notes (2026-10-29)
+
+Historical integration notes for private code absent from this source copy. This is not a player setup guide
+for the public beta: no lobby, matchmaking or ranked service is supplied here. See `BETA_RELEASE_NOTES.md` for
+current scope and `AGENTS.md` for clean-copy limits. The local results below were not reproduced in this audit.
+
 Status 2026-10-29. Tekken 4 reuses the lobby of the user's T5DR Online project (C:\T5DROnline, `lobby/t5lobby`,
 `docs/ONLINE.md`, `NETPLAY.md`, `HOSTING.md`, `RANKED.md` there, "T5 ..." below): server, client library, NAT traversal,
 relay and the match flow are T5DR's code, copied into `lobby/` and adapted where the game differs. The game side is

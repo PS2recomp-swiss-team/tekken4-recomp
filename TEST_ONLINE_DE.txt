@@ -1,0 +1,173 @@
+TEKKEN 4 - SONNTAGSTEST UEBER INTERNET
+31.10.2026. Zwei PCs, je eigene USA-ISO SLUS-20328 v1.00.
+Hier weder Build noch Internet-Spiel getestet.
+
+1. BEIDE: TOOLS UND BUILD VOR DEM SPIELTERMIN
+Dasselbe Test-Zip ganz in je einen neuen Ordner T4-Test entpacken.
+Quelltext ohne Spieldaten, BIOS oder fertige EXE. Werkzeuge separat installieren.
+Windows 10/11 x64. Noetig: Python 3.8+, Git, CMake 3.20+, Ninja; Python,
+CMake und ninja.exe ins PATH. Dazu Visual Studio 2022 Build Tools:
+"Desktopentwicklung mit C++", MSVC v143 x64/x86 und Windows SDK waehlen.
+Exakt gleiche MSVC-Version auf beiden PCs; "VS 2022" allein reicht nicht.
+Downloads: python.org/downloads, git-scm.com/download/win, cmake.org/download,
+github.com/ninja-build/ninja/releases, visualstudio.microsoft.com/downloads
+(dort "Build Tools for Visual Studio 2022"). Danach alte Konsolen schliessen.
+
+Entpackten Ordner T4-Test im Explorer oeffnen. In die Adresszeile powershell,
+Enter. Diese Zeilen einzeln ausfuehren. ISO-Pfad bei Abfrage vollstaendig und
+ohne Anfuehrungszeichen eingeben; Konsole offen lassen:
+
+  $env:TEKKEN4_SRC = Join-Path $PWD 'deps\ps2recomp'
+  $env:TEKKEN4_BUILD_DIR = 'runtime'
+  $iso = Read-Host 'Vollstaendiger Pfad zur eigenen USA-ISO'
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_game.ps1 -Iso $iso
+
+Internet fuer Abhaengigkeiten noetig; Build kann lange dauern. Erst bei
+"Ready" weiter. Build erzeugt auch die Build-ID. Nicht beim Spielen bauen.
+
+2. HOST A (SPIELER 1) UND MITSPIELER B (SPIELER 2)
+A bedient das Hauptmenue. B muss A ueber UDP 7400 erreichen. Kein Lobby-Server,
+kein automatisches Oeffnen des Routers. Einen dieser zwei Wege waehlen:
+
+WEG A - PORTFREIGABE BEI A
+A: Mit ipconfig die eigene Heimnetz-IPv4 ansehen. Im Router fuer diesen PC
+feste DHCP-Zuordnung setzen. UDP extern 7400 -> diese IPv4, intern 7400
+freigeben (nicht TCP). Oeffentliche IPv4 im Router ablesen, B privat mitteilen.
+B: Keine Router-Freigabe. Bei -Join A's oeffentliche IPv4 nehmen.
+A's Heimnetz-Adresse funktioniert ueber Internet nicht. Keine oeffentliche
+IPv4 (DS-Lite/CGNAT), kein Router-Zugang oder zweiter Router davor? Weg B.
+
+WEG B - VPN, Z.B. TAILSCALE
+Beide: Windows-Client von tailscale.com/download installieren.
+A: Anmelden, privates Netzwerk (Tailnet) anlegen. Webverwaltung -> Users ->
+Kollegen einladen; Einladungslink nur B senden.
+B: Mit eigenem Konto annehmen, Windows-Client bei A's eingeladenem Tailnet
+anmelden; nicht ein zweites eigenes Netzwerk benutzen.
+A: Falls verlangt, B's PC in der Verwaltung genehmigen.
+Beide PCs muessen in Tailscale verbunden sichtbar sein. Eigene Zugriffsregeln
+muessen UDP 7400 von B zu A erlauben.
+A: Seine Tailscale-IPv4 (100.x.y.z) B mitteilen. B: Diese bei -Join nehmen.
+Keine Router-Portfreigabe. B: tailscale ping HOST-IP ausfuehren (A's VPN-IPv4
+einsetzen), Ausgabe direct/DERP/relay mitmelden; Relay kann verzoegern.
+Das ersetzt die UDP-Pruefung in Schritt 3 nicht.
+Anleitung: https://tailscale.com/docs/how-to/quickstart
+Einladung: https://tailscale.com/docs/features/sharing/how-to/invite-any-user
+
+FIREWALL - VON EUCH SELBST EINRICHTEN
+A: Windows-Sicherheit -> Firewall & Netzwerkschutz -> Erweiterte Einstellungen
+-> Eingehende Regeln -> Neue Regel -> Port -> UDP -> lokale Ports: 7400
+-> Verbindung zulassen -> aktives Profil (bei VPN ggf. Oeffentlich).
+Name "T4 Sonntag UDP 7400". Das erlaubt PowerShell-Vorpruefung und Spiel.
+B: Falls gesperrt, ausgehendes UDP zu A:7400 samt Antwortverkehr erlauben.
+Andere Sicherheitssoftware entsprechend einstellen. Fragt Windows nach
+ps2EntryRunner.exe: im benutzten Profil zulassen. Firewall nicht abschalten.
+Nach Test die Testregel deaktivieren, temporaere Router-Freigabe schliessen.
+
+3. VERBINDEN
+Konsole aus Schritt 1 nutzen. Bei neuer Konsole die ersten drei Zeilen wieder
+setzen (Build nicht wiederholen). Andere Builds/Spiele schliessen, Pad anschliessen.
+Keine Konsole mit alten Paar-/Selbsttest-Einstellungen weiterbenutzen.
+BEIDE setzen vor den Startbefehlen dieselben Einstellungen:
+
+  $env:TEKKEN4_NET_COALESCE = '1'
+  $env:TEKKEN4_NET_DIAG = '1'
+  $env:TEKKEN4_NET_STRICT_HELLO = '0'
+  $env:TEKKEN4_RB_AUDIO_TIMELINE = '0'
+  $env:TEKKEN4_NET_DELAY_MATCH = '0'
+  $env:TEKKEN4_NET_COST_PROFILE = '0'
+  $env:TEKKEN4_NET_HASH_PROFILE = '0'
+  $env:TEKKEN4_NET_SIM_SAFE_WAIT = '0'
+  $env:TEKKEN4_NET_REFRESH_RC = '0'
+  $env:TEKKEN4_NET_SIM = ''
+  $env:TEKKEN4_NET_DELAY = 'auto'
+  $env:TEKKEN4_NET_TIMESYNC = '1'
+  $env:TEKKEN4_NET_MAXPRED = '8'
+  $env:TEKKEN4_NET_EARLY = '1'
+  $env:TEKKEN4_NET_LAZY = '1'
+  $env:TEKKEN4_SOUND = '1'
+  $env:TEKKEN4_NET_LOCALPAD = '1'
+
+COALESCE sparte im Ein-PC-Paar rund 48% Pakete und Nutzdaten. Das beweist
+keine Heilung einseitiger Haenger auf zwei PCs. DIAG dient der Beobachtung;
+die anderen Versuche rechtfertigen kein Einschalten fuer diesen Haupttest.
+REFRESH_RC ist eine neue, hier weder gebaute noch ausgefuehrte Korrektur und
+bleibt aus. Netzwerksimulation bleibt aus; echte Verbindung beobachten.
+
+A zuerst, B direkt danach; HOST-IP durch A's oeffentliche ODER VPN-IPv4 ersetzen:
+
+A:
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\net_play.ps1 -Host -Port 7400 -Iso $iso -Src $env:TEKKEN4_SRC -BuildDir runtime -Delay auto -Sound 1
+B:
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\net_play.ps1 -Join HOST-IP -Port 7400 -Iso $iso -Src $env:TEKKEN4_SRC -BuildDir runtime -Delay auto -Sound 1
+
+Vor Spielstart: automatischer Vergleich von Build-ID, Compiler/MSVC und
+ISO-SHA256, dann UDP-Hin-/Rueckweg. Hashing kann Minuten dauern. Ab "UDP check"
+wartet jede Seite 90 Sekunden. Bei langsamer ISO beide neu mit Zusatz
+-PreflightTimeoutSeconds 300 starten. Erst bei erfolgreicher Pruefung spielen;
+der Verbindungsaufbau des Spiels folgt noch. Diagnose ist standardmaessig an
+(TEKKEN4_NET_DIAG). Keine Netzwerksimulation einschalten.
+
+Beide Spiele starten kalt. Jeder steuert nur sein Pad. Erstes Gamepad oder
+Tastatur standardmaessig; Tastatur braucht Fensterfokus. WASD bewegen,
+Z/X/C/V = Viereck/Kreuz/Kreis/Dreieck, Enter = Start. Alternativ Pfeiltasten
+links/unten/rechts/oben fuer diese vier Tasten.
+
+4. ETWA 15 MINUTEN SPIELEN
+0-3 Min.: Logos/Menues vergleichen. A waehlt VS BATTLE. Beide Figuren waehlen;
+bewegen, bestaetigen/zurueck testen. Gleiche Anzeige?
+3-8 Min.: Versus, mehrere Runden. Bewegen, blocken, schnelle Tastenfolgen,
+Wuerfe. Beide sollen Runden gewinnen. KO, Replay, Ergebnis vergleichen;
+Ton und Eingabeverzoegerung merken.
+8-12 Min.: Rematch/naechster Kampf ueber Ergebnis-Menue. Andere Figuren oder
+Stage, mehrere Runden, beide aktiv steuern.
+12-15 Min.: Weiterer Kampf und Rueckkehr in erreichbare Menues. Gleiche Szene,
+Sieger und Ergebnis? Ruckler, Ton-Aussetzer, Haenger mit Uhrzeit notieren.
+START pausiert beide; lange Pausen vermeiden. Danach beide Spielfenster
+schliessen (Esc beendet nicht), Konsolenende abwarten.
+
+Nach dem Hauptlauf erst beide Logs wie unten sammeln. Danach ein Vergleich
+mit denselben PCs, Rollen, Figuren/Stage und allen uebrigen Einstellungen:
+BEIDE setzen $env:TEKKEN4_NET_COALESCE = '0', starten beide Spiele wieder
+kalt mit denselben Befehlen und wiederholen den Ablauf. Auch diese Logs
+getrennt sammeln und als COALESCE=0 kennzeichnen. Laufreihenfolge, echte RTT,
+ausgehandelten Delay und unterschiedliche Ruckler mitmelden. Ein einzelnes
+Paar ist noch kein Nachweis einer Verbesserung auf jedem Internetpfad.
+
+5. BEIDE: LOGS UND RUECKMELDUNG
+Vor naechstem Versuch sammeln:
+
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\collect_test_logs.ps1
+
+Jeder sendet das ausgegebene Log-Zip privat an den Maintainer. Dazu: A/B,
+Router/VPN (direct/relay), Datum/Uhrzeit/Zeitzone, bis wohin gespielt,
+Figuren/Stage/Sieger, Verzoegerung/Ton/Ruckler, genaue Fehlermeldung und ob
+beide dasselbe sahen. Auch Fehlschlaege melden. Sammler versucht Netzadressen
+und persoenliche Pfade zu entfernen; ZIP-Inhalt vor Versand pruefen. Keine ISO, Spieldaten,
+Saves, Screenshots oder Dumps senden.
+
+FEHLER -> WAS TUN
+- Fehlende Tools / "FAILED at step ...": Schritt/Fehler melden. Fehlendes Tool
+  installieren, neue Konsole, denselben Build-Befehl wiederholen.
+- Falsche ISO / SHA-1 / PAL: eigene ISO/Edition pruefen; nur USA SLUS-20328
+  v1.00. Keine ISO verschicken oder vom Kollegen anfordern.
+- EXE / Build-ID / Compiler-Metadaten fehlen: Build abschliessen; gleiche
+  -Src/-BuildDir nutzen. Keine Kennung von Hand erfinden.
+- Build-ID verschieden / build_mismatch: beide stoppen. Gleiches ZIP und
+  angezeigte Compiler/MSVC-Zeile vergleichen, in neuen Ordnern neu bauen.
+  MSVC-Version im VS Installer nicht gleich waehlbar? Maintainer fragen.
+- rejected: alte Spielsitzungen auf beiden PCs schliessen; Build pruefen.
+- ISO-SHA256 verschieden: ISO/Edition pruefen, stoppen, Hashes melden.
+- UDP-Pruefung fehlgeschlagen / udp_timeout / no_peer: A zuerst, gleicher Port;
+  IP, Firewall, Router pruefen. Bei CGNAT/DS-Lite VPN nehmen. TCP-Test beweist
+  UDP nicht. Bei langer Hash-Berechnung siehe Schritt 3.
+- "bind ... failed" / udp_bind_failed: altes Spiel/alte Testkonsole schliessen,
+  beide neu starten. Port nicht nur auf einer Seite aendern.
+- peer_timeout / peer_quit / peer_restarted: Verbindung weg oder Kollege
+  beendet/neu gestartet. Beide stoppen, Logs sammeln, gemeinsam neu verbinden.
+- NETDESYNC / mismatches groesser 0 / verschiedene Bilder oder Sieger:
+  stoppen, Uhrzeit/letzte Aktion notieren, beide Zips senden. Keine
+  net_desync_*.bin-Dumps senden: koennen Spieldaten enthalten.
+- "game runs offline" / "NET no session": kein Online-Test! Beide stoppen,
+  vorherige Fehlermeldung beheben, auch wenn das Fenster spielbar bleibt.
+- Langsam / kein Ton / Haenger: Uhrzeit/Szene melden. Beim Laden kurz warten;
+  bleibt es stehen, beenden und Logs sammeln. Keine Builds nebenher.

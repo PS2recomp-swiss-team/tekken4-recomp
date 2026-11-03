@@ -5,6 +5,10 @@ rem (Grok builds in out\grok so its builds and Claude's never overwrite each oth
 rem Logs: per-function trace (AGRESSIVE_LOGS) off, it is what slowed the GoW port down; console runtime
 rem logs and the IOP RPC trace stay on while we chase boot problems. Changing any of these rebuilds everything.
 setlocal
+if exist "%~dp0..\toolchain\toolchain.json" (
+  call "%~dp0build_runtime_portable.cmd"
+  exit /b
+)
 for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
 if not defined VSDIR (echo MSVC not found & exit /b 1)
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
