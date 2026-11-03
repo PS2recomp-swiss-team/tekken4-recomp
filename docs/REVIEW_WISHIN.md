@@ -55,3 +55,12 @@ the code by Claude; the others come from review agents and still need a look.
   comes mostly from not drawing the tail frame; patch 74 alone did not move fps.
 - Ahead of PAL: resolution steps + seam fix, FXAA/SSAA/aniso, fullscreen, pad latency, movie audio at 44.1 kHz.
   PAL is ahead on the in-game settings window (live, saved), control rebinding and the readback fix.
+
+## Addendum 2026-11-03: your commits after caf10f5 (up to 10edeb3)
+
+Merged into `us-iso` (9762ca3) with three small conflicts: `build_game.ps1` takes your `Write-NetBuildId`;
+`run_game.cmd` and `stage_generated.cmd` take your release-bundle tree (`deps\ps2recomp`) and the new staged headers,
+and keep `tools\us_tree.cmd` for checkouts. Patch 87 builds; fight 60 fps; netplay pairs 0 mismatches. But the pairs
+are less smooth than at caf10f5 (rebases x2.5-4, fps run 56.8 -> 52.6, p99 ~91 ms): docs\NETPLAY_CHECK_PABLO_PC.md
+section 9. Items 1-3 above (unlock vs netplay, launcher/portable tree default, `build_game_portable.ps1` `@()`) are
+still open on your branch. Not reviewed line by line: the 101 Codex draft commits.

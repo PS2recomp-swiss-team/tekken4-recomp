@@ -140,3 +140,18 @@ PS2Recomp tree H:\tekken4-fork-ps2recomp_usa t4-us: TheWishin's patches 57-86 co
 NETDESYNC lines 0 on both sides; `docs\rollback\net_compare.py`: 419 frames compared, 0 differ. Frame 6000 shot: the
 arena round ends ("KAZUYA WINS"). Not tested here: unlock on/off mismatch between peers (docs\REVIEW_WISHIN.md item 1),
 the launcher, fullscreen, two PCs.
+
+## 9. Update 2026-11-03 later (Claude): us-iso 9762ca3 = us-slus20328 10edeb3 (+112 commits, patch 87) + Pablo's
+
+t4-us head 640b38d (patch 87 committed). build_game.ps1 169 s, build id 4b58bebc31e2f372. Offline perf_fight arena:
+60.0 fps, min 60 (logs\perf\merged_20261103b). Two pairs with the section 8 settings (`pablo-merged-n150c`, `-n150d`):
+
+| run | side | fps run | rollbacks | rollback ms p50/p90/max | stalls | rebases | displayed ms p99 | mismatches |
+|---|---|---|---|---|---|---|---|---|
+| n150c | host / join | 52.4 / 52.4 | 1672 / 2498 | 6.7/13.5/100 , 14.0/27.7/130 | 0 / 36 | 404 / 338 | 91.9 / 93.9 | 0 / 0 |
+| n150d | host / join | 52.8 / 52.8 | 2530 / 1749 | 11.5/22.2/116 , 10.4/12.8/107 | 7 / 0 | 336 / 372 | 89.8 / 92.2 | 0 / 0 |
+| n150b (caf10f5) | host / join | 56.8 / 56.8 | 1953 / 2679 | 10.1/12.5/87 , 11.1/28.7/51 | 0 / 46 | 146 / 84 | 71.5 / 77.3 | 0 / 0 |
+
+Still deterministic (0 NETDESYNC, net_compare 400 frames, 0 differ), but both runs of the newer build are less smooth
+than caf10f5: rebases x2.5-4 (23-29 s of rebase time per side), fps run 56.8 -> 52.6, p99 ~75 -> ~91 ms. Same PC,
+same settings; the cause is somewhere in c17fd97..10edeb3 (not bisected).
