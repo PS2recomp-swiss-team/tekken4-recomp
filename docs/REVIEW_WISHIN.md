@@ -64,3 +64,8 @@ and keep `tools\us_tree.cmd` for checkouts. Patch 87 builds; fight 60 fps; netpl
 are less smooth than at caf10f5 (rebases x2.5-4, fps run 56.8 -> 52.6, p99 ~91 ms): docs\NETPLAY_CHECK_PABLO_PC.md
 section 9. Items 1-3 above (unlock vs netplay, launcher/portable tree default, `build_game_portable.ps1` `@()`) are
 still open on your branch. Not reviewed line by line: the 101 Codex draft commits.
+
+**Correction (same day):** the "less smooth than caf10f5" above is not a code regression. A bisect over all your
+netplay changes found every state at 55.9-56.6 fps, and the final code itself gave both 55.9 and 53.2 in two runs:
+it is run-to-run variance on one PC (NETPLAY_CHECK_PABLO_PC.md section 10). Item 1 (unlock vs netplay) is fixed on
+`us-iso` faf7d21: unlock is always on when TEKKEN4_NET is set (was 198/199 hashes differing with one side at 0).

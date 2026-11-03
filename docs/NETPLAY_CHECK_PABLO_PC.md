@@ -155,3 +155,28 @@ t4-us head 640b38d (patch 87 committed). build_game.ps1 169 s, build id 4b58bebc
 Still deterministic (0 NETDESYNC, net_compare 400 frames, 0 differ), but both runs of the newer build are less smooth
 than caf10f5: rebases x2.5-4 (23-29 s of rebase time per side), fps run 56.8 -> 52.6, p99 ~75 -> ~91 ms. Same PC,
 same settings; the cause is somewhere in c17fd97..10edeb3 (not bisected).
+
+## 10. Correction 2026-11-03 (Claude): the section 9 "regression" is not in the code
+
+Bisected the five netplay runtime files (tekken4_net.cpp/.h, tekken4_rollback_overrides.cpp, tekken4_state_probe.h,
+tekken4_online_result.h; nothing else that reaches the exe changed except patch 87) with the section 8 pair, one run
+per state, incremental builds (tools/build_runtime.cmd). Runs in logs\net\bisect-*:
+
+| state | fps run | rebases host / join | p99 ms | mismatches |
+|---|---|---|---|---|
+| caf10f5 files + patch 87 | 56.6 | 147 / 107 | 72.9 / 72.1 | 0 |
+| Codex #14 950e73d | 56.5 | 146 / 88 | 75.0 / 79.1 | 0 |
+| Codex #22 90e5509 | 56.4 | 159 / 111 | 75.7 / 74.6 | 0 |
+| Codex #26 a1c9b2b | 56.6 | 150 / 99 | 70.0 / 74.3 | 0 |
+| Codex #28 02e5b02 | 56.1 | 169 / 124 | 76.1 / 76.4 | 0 |
+| Codex #29 e593137 (= final code) | 55.9 | 146 / 159 | 81.1 / 83.8 | 0 |
+| final code + unlock fix (`pablo-merged-n150e`) | 53.2 | 289 / 349 | 92.9 / 92.3 | 0 |
+
+The same netplay code gave 55.9 and 53.2 in two runs: of 10 runs on this PC, 7 are "good" (55.9-56.8 fps, rebases
+~90-170) and 3 are "bad" (52.4-53.2, ~290-400), with no code difference between the groups. So it is run-to-run
+variance of two instances on one PC (window focus / foreground boost or other load are the likely causes;
+`net_pair.ps1 -TimingDiag` samples exactly that), not a commit. Compare builds with several runs each.
+
+Unlock vs netplay (docs\REVIEW_WISHIN.md item 1), pair with the joiner at TEKKEN4_UNLOCK_ALL=0, 6000 frames: before
+the fix 198 of 199 hashes differ (no NETDESYNC line in stdout, the match runs on out of sync); after faf7d21 (unlock
+always on with TEKKEN4_NET) 0 of 199, net_compare 213 frames 0 differ.
