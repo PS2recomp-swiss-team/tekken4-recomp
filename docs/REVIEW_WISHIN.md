@@ -69,3 +69,7 @@ still open on your branch. Not reviewed line by line: the 101 Codex draft commit
 netplay changes found every state at 55.9-56.6 fps, and the final code itself gave both 55.9 and 53.2 in two runs:
 it is run-to-run variance on one PC (NETPLAY_CHECK_PABLO_PC.md section 10). Item 1 (unlock vs netplay) is fixed on
 `us-iso` faf7d21: unlock is always on when TEKKEN4_NET is set (was 198/199 hashes differing with one side at 0).
+Item 2, launcher part: fixed on `us-iso` (`launcher/t4core.py` `ps2recomp_tree()` follows `tools\us_tree.ps1`: TEKKEN4_SRC,
+deps\ps2recomp, ..\tekken4-fork-ps2recomp_usa, else ..\tekken4-fork-ps2recomp only when it is free or on t4-us). Checked
+on both layouts (yours: plain tree on t4-us is still used; Pablo's: the US tree). OpenRecomp-FGC's t4 adapter uses this
+core, so its Play / Build on Pablo's PC now use the US tree. `build_game_portable.ps1` is unchanged (bundle only).

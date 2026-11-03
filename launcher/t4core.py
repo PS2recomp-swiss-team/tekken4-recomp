@@ -138,8 +138,20 @@ def read_json(path):
         return None
 
 
+def tree_branch(tree):
+    """Checked-out branch of a git tree, '' when it is not one."""
+    try:
+        r = subprocess.run(["git", "-C", tree, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True,
+                           timeout=10, creationflags=NO_WINDOW)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def ps2recomp_tree():
-    """Same rule as tools\\build_game.ps1: TEKKEN4_SRC, else a vendored deps\\ps2recomp (release), else ..\\tekken4-fork-ps2recomp."""
+    """Same rule as tools\\build_game.ps1 (tools\\us_tree.ps1): TEKKEN4_SRC, else a vendored deps\\ps2recomp (release),
+    else ..\\tekken4-fork-ps2recomp_usa when it exists, or ..\\tekken4-fork-ps2recomp when that one is free or on branch
+    t4-us. On a PC that also holds the PAL cousin project the plain name is the PAL tree (branch gs-gl): never that."""
     if bundled_toolchain():
         return os.path.join(ROOT, "deps", "ps2recomp")
     if os.environ.get("TEKKEN4_SRC"):
@@ -147,7 +159,13 @@ def ps2recomp_tree():
     vendored = os.path.join(ROOT, "deps", "ps2recomp")
     if os.path.isdir(vendored):
         return vendored
-    return os.path.abspath(os.path.join(ROOT, "..", "tekken4-fork-ps2recomp"))
+    own = os.path.abspath(os.path.join(ROOT, "..", "tekken4-fork-ps2recomp_usa"))
+    plain = os.path.abspath(os.path.join(ROOT, "..", "tekken4-fork-ps2recomp"))
+    if os.path.isdir(own):
+        return own
+    if not os.path.isdir(os.path.join(plain, ".git")) or tree_branch(plain) == "t4-us":
+        return plain
+    return own
 
 
 def find_runtime(s=None):
