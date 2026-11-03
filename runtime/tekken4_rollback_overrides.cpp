@@ -90,6 +90,8 @@
 // TEKKEN4_NET_DEFER_RESIM_FLUSH=1  defer ordinary boundary log flushes until replay returns live (default off).
 // TEKKEN4_NET_BOOT_RENDEZVOUS=1  wait once for the peer's same-frame publication after boot prefill (default off).
 // TEKKEN4_NET_FAST_SYNC=1  use eight fresh lead samples instead of twenty; keep the RTT settling hold (default off).
+// TEKKEN4_NET_SYNC_SPREAD=<n>  a time-sync correction is spread over the next n live frames (default 8: ~2 ms
+//                              longer each, no frame shown twice); 0 or 1 = the old single pause of the whole give.
 // TEKKEN4_NET_SUBFRAME_SYNC=1  correct filtered leads of 0.25..<1 frame with fractional waits (default off).
 // TEKKEN4_NET_FULL_SYNC=1  give up the measured lead from 1 frame, capped at four, without whole-frame rounding (default off).
 // TEKKEN4_NET_SYNC_CAP_ONE=1  cap each correction pause at one vblank; retain its original settling hold (default off).
@@ -1214,6 +1216,9 @@ namespace tekken4_rollback
         bool timeSync = true, localPad = true, dump = false, ended = false;
         bool fastSync = false;
         bool subframeSync = false;
+        int syncSpread = 8;                                              // TEKKEN4_NET_SYNC_SPREAD
+        std::chrono::steady_clock::duration spreadLeft{}, spreadSlice{}; // time-sync give still to hand out
+        uint64_t spreadSlices = 0;
         bool fullSync = false;
         bool syncCapOne = false;
         bool syncGapReset = false;
@@ -1821,6 +1826,17 @@ namespace tekken4_rollback
         ps2_rollback::setIopOutputMuted(false);
     }
 
+    // First visit of a live boundary, before its vblank time is read: hand out one slice of a pending time-sync give.
+    void npSpreadSlice()
+    {
+        if (g_np.spreadLeft.count() <= 0)
+            return;
+        const auto slice = std::min(g_np.spreadLeft, std::max(g_np.spreadSlice, std::chrono::steady_clock::duration(1)));
+        npShift(slice);
+        g_np.spreadLeft -= slice;
+        ++g_np.spreadSlices;
+    }
+
     void npApplyTimeSync(const NetplayState::SyncCorrection &selected)
     {
         const uint64_t f = selected.frame, rc = selected.rc;
@@ -1830,11 +1846,23 @@ namespace tekken4_rollback
         const auto give = selected.give, baseGive = selected.baseGive;
         const auto legacyGive = selected.legacyGive, fullGive = selected.fullGive;
         const auto sleepStart = std::chrono::steady_clock::now();
-        npSleepUntil(std::max(std::chrono::steady_clock::now(), g_np.liveT) + give);
-        npShift(give);
+        // Spread (default): no pause now; the next syncSpread live frames each start give/syncSpread later
+        // (npSpreadSlice). One pause of a whole frame showed the same picture twice: a 31-34 ms hitch per
+        // correction in the owner's 2-PC test. Wall-clock pacing only: inputs and the simulation do not change.
+        const bool spread = g_np.syncSpread > 1;
+        if (spread)
+        {
+            g_np.spreadLeft += give;
+            g_np.spreadSlice = g_np.spreadLeft / g_np.syncSpread;
+        }
+        else
+        {
+            npSleepUntil(std::max(std::chrono::steady_clock::now(), g_np.liveT) + give);
+            npShift(give);
+        }
         const auto sleepEnd = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(give).count();
-        const double actual = std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
+        const double actual = spread ? ms : std::chrono::duration<double, std::milli>(sleepEnd - sleepStart).count();
         ++g_np.syncCapActions;
         if (baseGive > kVblank)
             ++g_np.syncCapEligible;
@@ -1865,7 +1893,8 @@ namespace tekken4_rollback
             g_np.diagSyncOverMaxMs = std::max(g_np.diagSyncOverMaxMs, actual - ms);
         }
         const int rtt = t4net::rttMs();
-        g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u;
+        g_np.tsHold = f + static_cast<uint64_t>(frames) + (rtt > 0 ? static_cast<uint64_t>(rtt / 16.667 + 0.999) : 0u) + 2u +
+                      static_cast<uint64_t>(spread ? g_np.syncSpread : 0);
         // Keep the original nominal post-sleep hold. Wall expiry may only admit samples EARLIER.
         g_np.syncHoldEnd = sleepEnd + kVblank * static_cast<int64_t>(g_np.tsHold - f);
         g_np.syncHoldReleased = false;
@@ -2463,6 +2492,8 @@ namespace tekken4_rollback
             std::fprintf(g_log, "NET TEKKEN4_NET_DEFER_RESIM_FLUSH=1: ordinary log flushes deferred while replay remains active\n");
         if (g_np.bootRendezvous)
             std::fprintf(g_log, "NET TEKKEN4_NET_BOOT_RENDEZVOUS=1: one same-frame input wait after boot prefill; phase experiment, not a shared release clock\n");
+        std::fprintf(g_log, "NET time-sync corrections spread over %d live frame(s) (TEKKEN4_NET_SYNC_SPREAD)\n",
+                     g_np.syncSpread > 1 ? g_np.syncSpread : 1);
         if (g_np.subframeSync)
             std::fprintf(g_log, "NET TEKKEN4_NET_SUBFRAME_SYNC=1: fractional waits for filtered leads 0.25..<1 frame\n");
         if (g_np.fullSync)
@@ -2662,6 +2693,7 @@ namespace tekken4_rollback
         {
             // first visit of this live boundary: its vblank time (the schedule runs earlyMs ahead of it)
             g_np.liveTFrame = f;
+            npSpreadSlice();
             const auto next = g_runtime->eeScheduler().nextVblankHostDeadline();
             g_np.liveT = next.time_since_epoch().count() == 0
                              ? std::chrono::steady_clock::now()
@@ -3047,6 +3079,8 @@ namespace tekken4_rollback
             g_np.fastSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SUBFRAME_SYNC"))
             g_np.subframeSync = std::strcmp(v, "1") == 0;
+        if (const char *v = std::getenv("TEKKEN4_NET_SYNC_SPREAD"))
+            g_np.syncSpread = std::max(0, std::min(60, static_cast<int>(parseNumber(v))));
         if (const char *v = std::getenv("TEKKEN4_NET_FULL_SYNC"))
             g_np.fullSync = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_SYNC_CAP_ONE"))
