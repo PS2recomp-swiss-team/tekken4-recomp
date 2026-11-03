@@ -144,6 +144,68 @@ namespace tekken4
 
 namespace tekken4_rollback
 {
+    // Host timing samples (ms) for the p50/p90/max lines of NETSUMMARY / COST. It used to be a vector sorted on
+    // every summary: the summary frame every 600 frames cost 9 ms after 3 minutes and 31 ms after 16 (owner's
+    // 2-PC test 2026-11-03: a visible 21-44 ms hitch every 10 s, growing with the session). Now a fixed histogram:
+    // 0.01 ms bins up to 100 ms (inside a bin the value is the bin's centre, so the printed %.2f can differ by 0.01),
+    // exact values outside that range and an exact maximum. O(1) per sample, ~10 us per percentile, whole session.
+    class TimeSamples
+    {
+    public:
+        void push_back(double v)
+        {
+            if (m_n == 0 || v > m_max)
+                m_max = v;
+            ++m_n;
+            if (v >= 0.0 && v < kRangeMs)
+            {
+                if (m_bins.empty())
+                    m_bins.assign(kBins, 0u);
+                ++m_bins[static_cast<size_t>(v / kBinMs)];
+            }
+            else
+                (v < 0.0 ? m_low : m_high).push_back(v);
+        }
+        [[nodiscard]] size_t size() const { return static_cast<size_t>(m_n); }
+        [[nodiscard]] bool empty() const { return m_n == 0; }
+        // As the old sorted-vector percentile: the value at index round(p * (n - 1)).
+        [[nodiscard]] double percentile(double p) const
+        {
+            if (m_n == 0)
+                return 0.0;
+            if (p >= 1.0)
+                return m_max;
+            uint64_t at = std::min<uint64_t>(m_n - 1u, static_cast<uint64_t>(p * static_cast<double>(m_n - 1u) + 0.5));
+            if (at < m_low.size())
+            {
+                std::vector<double> low = m_low;
+                std::nth_element(low.begin(), low.begin() + static_cast<std::ptrdiff_t>(at), low.end());
+                return low[at];
+            }
+            at -= m_low.size();
+            for (size_t b = 0; b < m_bins.size(); ++b)
+            {
+                if (at < m_bins[b])
+                    return std::min(m_max, (static_cast<double>(b) + 0.5) * kBinMs);
+                at -= m_bins[b];
+            }
+            std::vector<double> high = m_high;
+            if (high.empty())
+                return m_max;
+            at = std::min<uint64_t>(at, high.size() - 1u);
+            std::nth_element(high.begin(), high.begin() + static_cast<std::ptrdiff_t>(at), high.end());
+            return high[at];
+        }
+
+    private:
+        static constexpr double kBinMs = 0.01, kRangeMs = 100.0;
+        static constexpr size_t kBins = 10000u;
+        std::vector<uint32_t> m_bins;
+        std::vector<double> m_low, m_high;
+        uint64_t m_n = 0;
+        double m_max = 0.0;
+    };
+
     enum class Mode
     {
         Off,
@@ -238,7 +300,7 @@ namespace tekken4_rollback
         double restoreMs = 0, captureMs = 0, passEeMs = 0;
         uint64_t captures = 0;
         uint64_t depthHist[17]{};
-        std::vector<double> passCost; // restore + EE time of each rollback's re-simulated frames
+        TimeSamples passCost; // restore + EE time of each rollback's re-simulated frames
     };
 
     // The IOP outside the rollback state: per frame, what the IOP did to the EE on the live run, replayed while
@@ -303,7 +365,7 @@ namespace tekken4_rollback
     std::vector<uint64_t> g_prevPages; // previous boundary's page hashes: dirty-page count per frame
     uint64_t g_gsNs = 0, g_lastGsNs = 0; // host time in GS packet processing on the EE thread
     std::chrono::steady_clock::time_point g_start{};
-    std::map<std::string, std::vector<double>> g_eeByKind; // EE ms per executed frame, by pass kind
+    std::map<std::string, TimeSamples> g_eeByKind; // EE ms per executed frame, by pass kind
     ps2_rollback::HostProfile g_lastProfile;               // host profile counters at the previous boundary
 
     uint64_t parseNumber(const std::string &text)
@@ -712,13 +774,9 @@ namespace tekken4_rollback
         }
     }
 
-    double percentile(std::vector<double> values, double p)
+    double percentile(const TimeSamples &values, double p)
     {
-        if (values.empty())
-            return 0.0;
-        std::sort(values.begin(), values.end());
-        const size_t at = std::min(values.size() - 1u, static_cast<size_t>(p * static_cast<double>(values.size() - 1u) + 0.5));
-        return values[at];
+        return values.percentile(p);
     }
 
     std::string costText()
@@ -1298,7 +1356,7 @@ namespace tekken4_rollback
         uint64_t hashWaitCalls = 0, hashReaderWaits = 0;
         double hashWaitMs = 0, hashWaitMaxMs = 0, hashQueueMs = 0, hashQueueMaxMs = 0,
                hashAgeMs = 0, hashAgeMaxMs = 0;
-        std::vector<double> rbCost, frameTimes;
+        TimeSamples rbCost, frameTimes;
         std::chrono::steady_clock::time_point lastLive{}, winT0{}, runT0{};
         uint64_t winFrames = 0, runFrames = 0;
         double winFps = 0;
@@ -2495,8 +2553,6 @@ namespace tekken4_rollback
                 g_np.over34 += ms > 34.0 ? 1u : 0u;
             }
         }
-        if (g_np.frameTimes.size() > 20000u)
-            g_np.frameTimes.erase(g_np.frameTimes.begin(), g_np.frameTimes.begin() + 10000);
         g_np.lastLive = now;
         if (tekken4_online_result::enabled())
         {
