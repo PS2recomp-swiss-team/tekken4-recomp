@@ -11,6 +11,14 @@ To continue, open Claude Code in this folder and say: "read docs/status.md and c
   the intro movie PCM is 44.1 kHz; ours queues it as 48 kHz (`runtime/tekken4_overrides.cpp:212`), so the PAL intro may
   play ~9 % fast: compare with PCSX2 (sound is low priority). Worth taking from him later: fullscreen (his 83),
   vblank-phase present (64/65, without the 82 spin), pad read at the game's pad read (60).
+- **2026-11-03: everything merged and tested on this PC.** US: his patches 57-86 committed on
+  H:\tekken4-fork-ps2recomp_usa t4-us (c515561); `us-iso` built (build_game.ps1, 237 s); fight 60.0 fps; netplay pair
+  RTT 150 / 3 % loss / 12000 frames 0 mismatches, better than 10-30 (stalls 410 -> 0, fps run 51 -> 57): table in
+  H:\tekken4-recomp_usa\docs\NETPLAY_CHECK_PABLO_PC.md section 8. PAL: exe = patches 01-44 (built 10-30 13:47);
+  run_fixed_fight arena with sound: 60 fps (s 62-100: 35x60, 2x61, 1x59), logs\fixed_check_20261103.
+  Left as they are (raw records of reviewed Grok work, nothing unmerged that was accepted): branch `grok/wip`,
+  fork branches `wave3` / `wave3-merge` / `iop-sched-3`, worktrees `external\wt-*` (uncommitted Grok WIP), the US
+  tree's stale `gs-gl` branch. Clearing them away is the user's call (tools\to_clean.ps1, per path).
 - Done in session 1: toolchain installed, PS2Recomp tools built, analyzer seed + full recompile with 0 errors,
   Ghidra project (`ghidra/Tekken4`, non-shared) analysed with SDK names applied, Ghidra export recompiled.
 - Done in session 2: Ghidra MCP tools approved and working in Claude Code. **Runtime base decided: upstream
