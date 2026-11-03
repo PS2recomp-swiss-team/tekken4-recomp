@@ -138,8 +138,41 @@ def read_json(path):
         return None
 
 
+def git_branch(tree):
+    """Branch checked out in the git tree (clone or worktree), read from .git without running git; None if unknown."""
+    dot = os.path.join(tree, ".git")
+    try:
+        if os.path.isfile(dot):  # a worktree: "gitdir: <path>"
+            with open(dot, "r", encoding="utf-8") as f:
+                line = f.readline().strip()
+            if not line.startswith("gitdir:"):
+                return None
+            gitdir = line[len("gitdir:"):].strip()
+            dot = gitdir if os.path.isabs(gitdir) else os.path.join(tree, gitdir)
+        with open(os.path.join(dot, "HEAD"), "r", encoding="utf-8") as f:
+            head = f.readline().strip()
+    except OSError:
+        return None
+    prefix = "ref: refs/heads/"
+    return head[len(prefix):] if head.startswith(prefix) else None
+
+
+def us_tree(root=None):
+    """tools\\us_tree.cmd's rule: ..\\tekken4-fork-ps2recomp_usa when it exists, or ..\\tekken4-fork-ps2recomp when that
+    one is free or on branch t4-us; else ..\\tekken4-fork-ps2recomp_usa. The plain name may hold the PAL cousin
+    project's tree (branch master / gs-gl): a US build must never stage or build into it."""
+    parent = os.path.dirname(os.path.abspath(root or ROOT))
+    plain = os.path.join(parent, "tekken4-fork-ps2recomp")
+    own = os.path.join(parent, "tekken4-fork-ps2recomp_usa")
+    if os.path.exists(own):
+        return own
+    if not os.path.exists(os.path.join(plain, ".git")) or git_branch(plain) == "t4-us":
+        return plain
+    return own
+
+
 def ps2recomp_tree():
-    """Same rule as tools\\build_game.ps1: TEKKEN4_SRC, else a vendored deps\\ps2recomp (release), else ..\\tekken4-fork-ps2recomp."""
+    """Same rule as tools\\build_game.ps1: TEKKEN4_SRC, else a vendored deps\\ps2recomp (release), else us_tree()."""
     if bundled_toolchain():
         return os.path.join(ROOT, "deps", "ps2recomp")
     if os.environ.get("TEKKEN4_SRC"):
@@ -147,7 +180,7 @@ def ps2recomp_tree():
     vendored = os.path.join(ROOT, "deps", "ps2recomp")
     if os.path.isdir(vendored):
         return vendored
-    return os.path.abspath(os.path.join(ROOT, "..", "tekken4-fork-ps2recomp"))
+    return us_tree()
 
 
 def find_runtime(s=None):

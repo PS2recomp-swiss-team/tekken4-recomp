@@ -24,8 +24,10 @@ if ($Sim -and -not $UseInheritedProfile) {
 if (-not $Src) {
     $candidates = @(
         (Join-Path (Split-Path -Parent $root) 'tekken4-fork-net'),
-        (Join-Path $root 'deps\ps2recomp'),
-        (Join-Path (Split-Path -Parent $root) 'tekken4-fork-ps2recomp'))
+        (Join-Path $root 'deps\ps2recomp'))
+    # The US build tree (tools\us_tree.ps1): never the PAL cousin project's ..\tekken4-fork-ps2recomp.
+    . (Join-Path $PSScriptRoot 'us_tree.ps1')
+    try { $candidates += Resolve-UsTree $root } catch { Write-Warning $_.Exception.Message }
     foreach ($candidate in $candidates) {
         $candidateBuild = if ($BuildDir) { $BuildDir } elseif ($candidate -eq $candidates[0]) { 'net' } else { 'runtime' }
         if (Test-Path -LiteralPath (Join-Path $candidate "out\$candidateBuild\ps2xRuntime\ps2EntryRunner.exe") -PathType Leaf) {
@@ -37,7 +39,7 @@ if (-not $Src) {
     if (-not $Src) {
         $Src = if (Test-Path -LiteralPath (Join-Path $root 'deps\ps2recomp\.t4-vendored.json')) {
             Join-Path $root 'deps\ps2recomp'
-        } else { Join-Path (Split-Path -Parent $root) 'tekken4-fork-ps2recomp' }
+        } else { Resolve-UsTree $root }
     }
 }
 if (-not $BuildDir) {

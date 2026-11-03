@@ -16,10 +16,13 @@ if errorlevel 2 (
 )
 if errorlevel 1 exit /b 1
 if not defined T4_PORTABLE set "PATH=%ProgramFiles%\CMake\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
-rem Default PS2Recomp tree: the fork clone ..\tekken4-fork-ps2recomp (user, 2026-10-28: the only tree that holds
-rem exactly the committed patches; external\PS2Recomp keeps Grok's uncommitted WIP). TEKKEN4_SRC=<tree> overrides it.
-if defined TEKKEN4_SRC (set "SRC=%TEKKEN4_SRC%") else set "SRC=%~dp0..\..\tekken4-fork-ps2recomp"
-if defined T4_PORTABLE set "SRC=%~dp0..\deps\ps2recomp"
+rem PS2Recomp tree: the release zip's deps\ps2recomp, else tools\us_tree.cmd (TEKKEN4_SRC, else the US fork clone;
+rem a tree not on branch t4-us -- the PAL cousin project's ..\tekken4-fork-ps2recomp -- is refused), as build_runtime.cmd.
+if defined T4_PORTABLE (set "SRC=%~dp0..\deps\ps2recomp") else (
+  call "%~dp0us_tree.cmd"
+  if errorlevel 1 exit /b 1
+)
+if not defined T4_PORTABLE set "SRC=%TEKKEN4_SRC%"
 if not defined TEKKEN4_BUILD_DIR set "TEKKEN4_BUILD_DIR=runtime"
 set "BUILD=%SRC%\out\%TEKKEN4_BUILD_DIR%"
 rem A Grok build is CPU-heavy side work: it waits while a timed game / PCSX2 run holds logs\run.lock

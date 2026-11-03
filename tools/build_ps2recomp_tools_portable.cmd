@@ -13,8 +13,13 @@ if errorlevel 2 (
 )
 if errorlevel 1 exit /b 1
 if not defined T4_PORTABLE set "PATH=%ProgramFiles%\CMake\bin;%LOCALAPPDATA%\Microsoft\WinGet\Links;%PATH%"
-if defined TEKKEN4_SRC (set "SRC=%TEKKEN4_SRC%") else set "SRC=%~dp0..\..\tekken4-fork-ps2recomp"
-if defined T4_PORTABLE set "SRC=%~dp0..\deps\ps2recomp"
+rem PS2Recomp tree: the release zip's deps\ps2recomp, else tools\us_tree.cmd (TEKKEN4_SRC, else the US fork clone;
+rem a tree not on branch t4-us -- the PAL cousin project's ..\tekken4-fork-ps2recomp -- is refused).
+if defined T4_PORTABLE (set "SRC=%~dp0..\deps\ps2recomp") else (
+  call "%~dp0us_tree.cmd"
+  if errorlevel 1 exit /b 1
+)
+if not defined T4_PORTABLE set "SRC=%TEKKEN4_SRC%"
 set "TCARG="
 if defined T4_PORTABLE set TCARG="-DCMAKE_TOOLCHAIN_FILE=%T4_TOOLCHAIN_FILE%"
 cmake -S "%SRC%" -B "%SRC%\out\tools" -G Ninja %TCARG% -DCMAKE_BUILD_TYPE=Release ^

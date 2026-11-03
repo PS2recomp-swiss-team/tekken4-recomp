@@ -7,7 +7,7 @@
     prereq   Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja are present (prints what is missing and how to get it)
     verify   the ISO's SYSTEM.CNF says BOOT2 = cdrom0:\SLUS_203.28;1 and the ELF's SHA-1 is a4b7dde2...5815
     extract  SYSTEM.CNF, SLUS_203.28, IRX\IOPRP243.IMG, TEKKEN\DATA.BIN -> game\disc\  (tools\iso_extract.py)
-    fork     clone ran-j/PS2Recomp at eb8688b into ..\tekken4-fork-ps2recomp (or %TEKKEN4_SRC%) and commit patches\*.patch
+    fork     clone ran-j/PS2Recomp at eb8688b into the US tree (tools\us_tree.ps1) and commit patches\*.patch
              one by one (only when that tree does not exist)
     tools    tools\build_ps2recomp_tools.cmd (only when out\tools\ps2xRecomp\ps2_recomp.exe is missing / the tree moved on)
     recomp   ps2_recomp.exe config\ghidra_export.toml  (-> generated\)
@@ -28,7 +28,8 @@
 .PARAMETER LogDir
   Where build_game.log and build_game_state.json go (default: <repo>\logs).
 
-  Environment: TEKKEN4_SRC (PS2Recomp tree, default ..\tekken4-fork-ps2recomp), TEKKEN4_FORK_URL (clone source,
+  Environment: TEKKEN4_SRC (PS2Recomp tree; default from tools\us_tree.ps1: ..\tekken4-fork-ps2recomp_usa, or
+  ..\tekken4-fork-ps2recomp when it is free or on branch t4-us -- never the PAL tree), TEKKEN4_FORK_URL (clone source,
   default https://github.com/ran-j/PS2Recomp), TEKKEN4_BUILD_DIR (default runtime).
 #>
 param(
