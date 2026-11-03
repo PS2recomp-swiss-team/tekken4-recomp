@@ -1,0 +1,653 @@
+diff --git a/openrecomp/adapters/__init__.py b/openrecomp/adapters/__init__.py
+index 23310a1..fa33a51 100644
+--- a/openrecomp/adapters/__init__.py
++++ b/openrecomp/adapters/__init__.py
+@@ -17,6 +17,11 @@ def make(manifest, config):
+             root = find_root(manifest, config)
+             if root:
+                 return T4(manifest, config, root)
++        elif kind == "t4pal":
++            from .t4pal import T4Pal, find_root
++            root = find_root(manifest, config)
++            if root:
++                return T4Pal(manifest, config, root)
+     except Exception as e:  # noqa: BLE001 -- one broken game must not take the launcher down
+         missing = Missing(manifest, config)
+         missing.problem = f"{manifest['short']}: {e}"
+diff --git a/openrecomp/manifest.py b/openrecomp/manifest.py
+index 213788f..8db6f1f 100644
+--- a/openrecomp/manifest.py
++++ b/openrecomp/manifest.py
+@@ -6,7 +6,7 @@ import shutil
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ BUILTIN_DIR = os.path.join(os.path.dirname(HERE), "games")
+ SECTIONS = ("play", "online", "build", "replays", "settings")
+-ADAPTERS = ("t5dr", "t4", "generic")
++ADAPTERS = ("t5dr", "t4", "t4pal", "generic")
+ TOTAL_SLOTS = 6                        # the shelf always shows at least this many places
+ 
+ 
+diff --git a/openrecomp/adapters/t4pal.py b/openrecomp/adapters/t4pal.py
+new file mode 100644
+index 0000000..c0a4c75
+--- /dev/null
++++ b/openrecomp/adapters/t4pal.py
+@@ -0,0 +1,479 @@
++"""Tekken 4 PAL (SCES-50878, PS2 recomp): the PAL project's own scripts play and build it (tools\\run_game.cmd,
++tools\\build_game.cmd), and its settings are the file the game's F2 window writes (settings.ini, key=value lines).
++The first start without that file writes the best settings for this screen; after that the player's choices stay."""
++import ctypes
++import glob
++import hashlib
++import json
++import os
++import re
++import shutil
++import subprocess
++import threading
++import time
++
++from .base import NO_WINDOW, Adapter, ProcessBuild, expand_locations
++from .t4 import friendly_time
++from ..manifest import art_dir, user_dir
++
++STEP_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+(\w+)\s+-\s+(.*)$")
++ELF = os.path.join("game", "disc", "SCES_508.78")
++ELF_SHA1 = "24ced2b7f3a0a40b3cacec56a030701d6be8e5ce"   # Tekken 4 PAL v2.00, the only build the project's addresses fit
++STEPS = [("tools", "Build the recompiler"), ("recomp", "Recompile the game"), ("stage", "Copy the code into the runtime"),
++         ("runtime", "Build the game")]
++FRAME_LINES = 512                                        # a PAL frame; internal_scale multiplies it
++YES_NO = [(0, "Off"), (1, "On")]
++# settings.ini keys the game reads (ps2_graphics_settings.cpp) -> the runtime's own default when a key is missing
++GAME_DEFAULTS = dict(aspect=0, smooth_screen=0, internal_scale=1, widescreen=0, no_interlace=0, texture_filter=0,
++                     fxaa=0, sharpen=0)
++STATE_DEFAULTS = dict(window="fullscreen", sound=True, debug_panel=False, iso="")
++
++
++def find_root(manifest, config):
++    chosen = (config.get("roots") or {}).get(manifest["id"]) or os.environ.get("OPENRECOMP_T4PAL_ROOT")
++    for path in ([chosen] if chosen else []) + expand_locations(manifest.get("locations", [])):
++        if os.path.isfile(os.path.join(path, "tools", "run_game.cmd")) and \
++                os.path.isfile(os.path.join(path, "config", "ghidra_export.toml")):
++            return path
++    return None
++
++
++def screen_height():
++    """The primary screen's real height in pixels, whatever the DPI scaling (1080 when it cannot be read)."""
++    try:
++        user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
++        hdc = user32.GetDC(0)
++        height = gdi32.GetDeviceCaps(hdc, 117)           # DESKTOPVERTRES
++        user32.ReleaseDC(0, hdc)
++        return height or 1080
++    except (AttributeError, OSError):
++        return 1080
++
++
++def best_settings(height):
++    """The most the PAL build offers, for a screen `height` pixels tall: the internal picture at least as tall as the
++    screen (2x..4x; 4x still runs fights at 60 fps), the game's own 16:9 view, progressive, FXAA, smooth scaling."""
++    scale = max(2, min(4, -(-height // FRAME_LINES)))
++    return dict(aspect=1, smooth_screen=1, internal_scale=scale, widescreen=1, no_interlace=1, texture_filter=0,
++                fxaa=1, sharpen=0)
++
++
++def read_ini(path):
++    """key=value lines in file order; {} without a file."""
++    out = {}
++    try:
++        with open(path, encoding="utf-8", errors="replace") as f:
++            for line in f:
++                key, sep, value = line.rstrip("\r\n").partition("=")
++                if sep and key:
++                    out[key] = value
++    except OSError:
++        pass
++    return out
++
++
++def write_ini(path, values):
++    tmp = path + ".tmp"
++    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
++        for key, value in values.items():
++            f.write(f"{key}={value}\n")
++    os.replace(tmp, path)
++
++
++def sha1(path):
++    h = hashlib.sha1()
++    with open(path, "rb") as f:
++        for block in iter(lambda: f.read(1 << 20), b""):
++            h.update(block)
++    return h.hexdigest()
++
++
++class T4Pal(Adapter):
++    native_label = ""
++
++    def __init__(self, manifest, config, root):
++        super().__init__(manifest, config)
++        self.root = root
++        tree = self.m.get("tree") or os.path.join(os.path.dirname(root), "tekken4-fork-ps2recomp")
++        self.tree = os.path.abspath(os.path.expandvars(tree))
++        self.state_path = os.path.join(user_dir(), self.m["id"] + ".json")
++        self.state = dict(STATE_DEFAULTS, **self._load_state())
++        self.proc = None
++        self.build = None
++        self.build_lines = []
++        self.build_step = ""
++        self.build_step_no = (0, 0)
++        self.build_done = {}
++        self.last_result = ""
++        self.source_note = ""
++
++    # ---------------------------------------------------------------- files
++    def settings_path(self):
++        return os.path.join(self.root, "settings.ini")
++
++    def exe(self):
++        return os.path.join(self.tree, "out", "runtime", "ps2xRuntime", "ps2EntryRunner.exe")
++
++    def lock_path(self):
++        return os.path.join(self.root, "logs", "run.lock")
++
++    def _load_state(self):
++        try:
++            with open(self.state_path, encoding="utf-8") as f:
++                data = json.load(f)
++            return data if isinstance(data, dict) else {}
++        except (OSError, ValueError):
++            return {}
++
++    def _save_state(self):
++        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
++        tmp = self.state_path + ".tmp"
++        with open(tmp, "w", encoding="utf-8") as f:
++            json.dump(self.state, f, indent=1)
++        os.replace(tmp, self.state_path)
++
++    def game_values(self):
++        """The game's settings as ints: the file when there is one, else the best ones the first start will write."""
++        ini = read_ini(self.settings_path())
++        base = GAME_DEFAULTS if ini else best_settings(screen_height())
++        out = {}
++        for key, default in base.items():
++            try:
++                out[key] = int(ini.get(key, default))
++            except ValueError:
++                out[key] = default
++        return out
++
++    def ensure_settings(self):
++        """Writes the best settings once, when the game has no settings file yet. -> True when it wrote them."""
++        if os.path.isfile(self.settings_path()):
++            return False
++        write_ini(self.settings_path(), best_settings(screen_height()))
++        return True
++
++    # ---------------------------------------------------------------- state
++    def found(self):
++        return True
++
++    def problems(self):
++        out = []
++        if not os.path.isfile(os.path.join(self.root, ELF)):
++            out.append("game\\disc\\SCES_508.78 is missing: choose it from your Tekken 4 PAL disc in Build.")
++        if not os.path.isfile(self.exe()):
++            out.append("The game is not built yet: use Build.")
++        return out
++
++    def ready(self):
++        return not self.problems()
++
++    def status(self):
++        problems = self.problems()
++        last = self.state.get("last_run") or {}
++        return dict(status="Ready" if not problems else "Not built yet", version="SCES-50878", players="No",
++                    last=friendly_time(last.get("time", "")),
++                    detail=problems[0] if problems else "Tekken 4 (PAL) runs natively on this PC.")
++
++    def hero(self):
++        path = os.path.join(art_dir(self.m["id"]), "hero.png")
++        return path if os.path.isfile(path) else ""
++
++    # ---------------------------------------------------------------- playing
++    def run_lock_holder(self):
++        """'<pid> <what>' of logs\\run.lock when that process still runs (tools\\run_lock.ps1's rule), else ''."""
++        try:
++            with open(self.lock_path(), encoding="utf-8", errors="replace") as f:
++                first = (f.readline() or "").strip()
++        except OSError:
++            return ""
++        head = first.split(" ")[0]
++        return first if head.isdigit() and process_alive(int(head)) else ""
++
++    def iso(self):
++        chosen = self.state.get("iso") or ""
++        if chosen and os.path.isfile(chosen):
++            return chosen
++        found = sorted(glob.glob(os.path.join(glob.escape(self.root), "*.iso")))
++        return found[0] if found else ""
++
++    def game_env(self, extra_env=None):
++        env = dict(os.environ)
++        env.update(TEKKEN4_SRC=self.tree, TEKKEN4_BUILD_DIR="runtime", PS2X_SETTINGS=self.settings_path(),
++                   TEKKEN4_SOUND="1" if self.state.get("sound", True) else "0",
++                   TEKKEN4_WINDOW_TITLE="TEKKEN 4 PAL - YOUR GAME")
++        if self.state.get("debug_panel"):                  # unset = hidden until F1 (0 would switch F1 off)
++            env["PS2X_DEBUG_PANEL"] = "1"
++        if self.iso():
++            env["TEKKEN4_ISO"] = self.iso()
++        env.update({str(k): str(v) for k, v in (self.m.get("env") or {}).items()})
++        env.update(extra_env or {})
++        return env
++
++    def start(self, extra_env=None):
++        problems = self.problems()
++        if problems:
++            raise RuntimeError(problems[0])
++        holder = self.run_lock_holder()
++        if holder:
++            raise RuntimeError(f"Tekken 4 PAL is already running ({holder}).")
++        self.ensure_settings()
++        script = os.path.join(self.root, "tools", "run_game.cmd")
++        self.proc = subprocess.Popen(["cmd.exe", "/c", script], cwd=self.root, env=self.game_env(extra_env),
++                                     creationflags=NO_WINDOW)
++        os.makedirs(os.path.dirname(self.lock_path()), exist_ok=True)
++        with open(self.lock_path(), "w", encoding="ascii") as f:   # held by run_game.cmd's process, like run_lock.ps1
++            f.write(f"{self.proc.pid} openrecomp-play\n")
++        threading.Thread(target=self._wait, args=(self.proc,), daemon=True).start()
++        if self.state.get("window", "fullscreen") != "window":
++            threading.Thread(target=place_window, args=(self.exe(), self.state["window"]), daemon=True).start()
++        return self.proc.pid
++
++    def _wait(self, proc):
++        started = time.strftime("%Y-%m-%d %H:%M:%S")
++        code = proc.wait()
++        try:                                                # released = emptied, never removed (project rule)
++            with open(self.lock_path(), encoding="utf-8", errors="replace") as f:
++                mine = (f.readline() or "").split(" ")[0] == str(proc.pid)
++            if mine:
++                with open(self.lock_path(), "w", encoding="ascii") as f:
++                    f.write("")
++        except OSError:
++            pass
++        self.state["last_run"] = dict(time=started, code=code)
++        self._save_state()
++
++    def running(self):
++        return self.proc is not None and self.proc.poll() is None
++
++    def stop(self):
++        """Asks the game window to close (the game saves and exits), then ends what is left after 5 s."""
++        if not self.running():
++            return
++        pid = str(self.proc.pid)
++        subprocess.run(["taskkill", "/T", "/PID", pid], capture_output=True, creationflags=NO_WINDOW, check=False)
++        try:
++            self.proc.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            subprocess.run(["taskkill", "/T", "/F", "/PID", pid], capture_output=True, creationflags=NO_WINDOW,
++                           check=False)
++
++    # ---------------------------------------------------------------- settings
++    def settings(self):
++        v = self.game_values()
++        return [
++            dict(id="internal_scale", label="Internal resolution", value=v["internal_scale"],
++                 options=[(1, "Native (1x)"), (2, "2x"), (3, "3x"), (4, "4x")],
++                 hint="How sharply the game is rendered.", lead="Higher steps need more graphics power. 4x still runs fights at 60 fps."),
++            dict(id="window", label="Window", value=self.state.get("window", "fullscreen"),
++                 options=[("fullscreen", "Fullscreen"), ("maximized", "Maximized"), ("window", "Window")],
++                 hint="Borderless fullscreen on the screen the game opens on.", lead="How the game window opens."),
++            dict(id="aspect", label="Aspect ratio", value=v["aspect"],
++                 options=[(1, "16:9"), (0, "4:3"), (2, "Stretch"), (3, "Native")],
++                 hint="16:9 with Widescreen on, 4:3 like a PS2 on an old TV.", lead="The shape of the picture on your screen."),
++            dict(id="widescreen", label="Widescreen", options=YES_NO, value=v["widescreen"],
++                 hint="The game's own 16:9 view: more to the sides.", lead="Use it with the 16:9 aspect ratio."),
++            dict(id="no_interlace", label="Progressive", options=YES_NO, value=v["no_interlace"],
++                 hint="The game's 480p mode: no interlace shimmer.", lead="Read when the game starts."),
++            dict(id="fxaa", label="Anti-aliasing", options=YES_NO, value=v["fxaa"],
++                 hint="FXAA over the finished picture.", lead="Smooths edges, costs almost nothing."),
++            dict(id="sharpen", label="Sharpening", value=v["sharpen"],
++                 options=[(0, "Off"), (25, "25 %"), (50, "50 %"), (75, "75 %"), (100, "100 %")],
++                 hint="Contrast-limited sharpening in the same pass.", lead="A little gives back detail FXAA softens."),
++            dict(id="texture_filter", label="Texture filter", value=v["texture_filter"],
++                 options=[(0, "As on the PS2"), (1, "Smooth")], hint="Smooth forces bilinear on 3D textures.",
++                 lead="As on the PS2 keeps the game's own filtering."),
++            dict(id="smooth_screen", label="Smooth scaling", options=YES_NO, value=v["smooth_screen"],
++                 hint="Filters the picture when it is scaled to the window.", lead="Off gives hard pixels."),
++            dict(id="sound", label="Sound", options=[(False, "Off"), (True, "On")], value=bool(self.state.get("sound", True)),
++                 hint="The real game sound on the emulated IOP.", lead="Without sound the game runs with a silent stand-in."),
++            dict(id="debug_panel", label="Debug window", options=[(False, "Off"), (True, "On")],
++                 value=bool(self.state.get("debug_panel")), hint="F1 in the game opens it too.", lead="For troubleshooting only."),
++        ]
++
++    def set_setting(self, sid, value):
++        if sid in GAME_DEFAULTS:
++            self.ensure_settings()
++            ini = read_ini(self.settings_path())
++            ini[sid] = str(int(value))
++            write_ini(self.settings_path(), ini)
++        else:
++            self.state[sid] = value
++            self._save_state()
++
++    def quick_settings(self):
++        return ["internal_scale", "window"]
++
++    # ---------------------------------------------------------------- build
++    def sources(self):
++        elf = os.path.join(self.root, ELF)
++        elf_ok = os.path.isfile(elf)
++        iso = self.iso()
++        home = os.path.expanduser("~")
++        dirs = [self.root, os.path.join(home, "Downloads"), os.path.join(home, "Desktop")]
++        return [
++            dict(id="elf", label="Game program", value="SCES_508.78" if elf_ok else "Missing", ok=elf_ok, kind="file",
++                 exts=[".78"], dirs=dirs, note=self.source_note,
++                 hint="SCES_508.78 from your Tekken 4 PAL disc (v2.00). It is copied to game\\disc."),
++            dict(id="iso", label="Game ISO", value=os.path.basename(iso) if iso else "Missing", ok=bool(iso), kind="file",
++                 exts=[".iso"], dirs=dirs, hint="Your Tekken 4 PAL ISO: the game reads music and movies from it."),
++        ]
++
++    def set_source(self, sid, path):
++        if sid == "iso":
++            self.state["iso"] = path
++            self._save_state()
++            return "The game reads music and movies from this ISO."
++        if not os.path.isfile(path):
++            return "That file does not exist."
++        if sha1(path) != ELF_SHA1:
++            self.source_note = "That is not SCES_508.78 of Tekken 4 PAL v2.00."
++            return self.source_note
++        dest = os.path.join(self.root, ELF)
++        if os.path.isfile(dest):
++            self.source_note = "game\\disc\\SCES_508.78 is already there."
++            return self.source_note
++        os.makedirs(os.path.dirname(dest), exist_ok=True)
++        shutil.copyfile(path, dest)
++        self.source_note = "Copied to game\\disc."
++        return self.source_note
++
++    def build_ready(self):
++        if not os.path.isfile(os.path.join(self.root, "tools", "build_game.cmd")):
++            return "This checkout has no tools\\build_game.cmd: update the PAL project."
++        if not os.path.isfile(os.path.join(self.root, ELF)):
++            return "Choose SCES_508.78 from your disc first."
++        return ""
++
++    def build_start(self, force=False):
++        cmd = ["cmd.exe", "/c", os.path.join(self.root, "tools", "build_game.cmd")]
++        env = dict(os.environ, TEKKEN4_SRC=self.tree)
++        self.build_lines = []
++        self.build_done = {}
++        self.build_step = ""
++        self.last_result = ""
++        self.build = ProcessBuild(cmd, cwd=self.root, env=env, on_line=self._on_line)
++        threading.Thread(target=self._build_end, args=(self.build,), daemon=True).start()
++
++    def _on_line(self, line):
++        self.build_lines = (self.build_lines + [line])[-40:]
++        m = STEP_RE.match(line)
++        if m:
++            if self.build_step:
++                self.build_done[self.build_step] = True
++            self.build_step = m.group(3)
++            self.build_step_no = (int(m.group(1)), int(m.group(2)))
++
++    def _build_end(self, build):
++        while build.running():
++            time.sleep(0.2)
++        if build.cancelled:
++            self.last_result = "Cancelled."
++        elif build.code == 0:
++            self.build_done[self.build_step] = True
++            self.last_result = "Build finished."
++        else:
++            self.last_result = f"Step {self.build_step or '?'} failed: {self.build_lines[-1] if self.build_lines else ''}"
++
++    def build_state(self):
++        running = bool(self.build and self.build.running())
++        steps = []
++        for name, label in STEPS:
++            if name in self.build_done:
++                value = "Done"
++            elif running and name == self.build_step:
++                value = "Running"
++            else:
++                value = "Open"
++            steps.append(dict(k=label, v=value))
++        n, total = self.build_step_no
++        return dict(running=running, fraction=(max(0, n - 1) / total) if total else 0.0, title=self.build_step,
++                    steps=steps, result=self.last_result, line=self.build_lines[-1] if self.build_lines else "")
++
++    def build_cancel(self):
++        if self.build:
++            self.build.cancel()
++
++
++def process_alive(pid):
++    try:
++        kernel32 = ctypes.windll.kernel32
++        kernel32.OpenProcess.restype = ctypes.c_void_p
++        handle = kernel32.OpenProcess(0x1000, False, pid)                  # PROCESS_QUERY_LIMITED_INFORMATION
++        if not handle:
++            return False
++        code = ctypes.c_ulong()
++        ok = kernel32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code))
++        kernel32.CloseHandle(ctypes.c_void_p(handle))
++        return bool(ok) and code.value == 259                              # STILL_ACTIVE
++    except (AttributeError, OSError):
++        return False
++
++
++def game_window(exe):
++    """The visible top-level window of a running `exe`, or None."""
++    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
++    kernel32.OpenProcess.restype = ctypes.c_void_p
++    want = os.path.normcase(os.path.abspath(exe))
++    found = []
++
++    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
++    def each(hwnd, _param):
++        if not user32.IsWindowVisible(ctypes.c_void_p(hwnd)):
++            return True
++        pid = ctypes.c_ulong()
++        user32.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
++        handle = kernel32.OpenProcess(0x1000, False, pid.value)
++        if handle:
++            buf = ctypes.create_unicode_buffer(1024)
++            size = ctypes.c_ulong(1024)
++            if kernel32.QueryFullProcessImageNameW(ctypes.c_void_p(handle), 0, buf, ctypes.byref(size)) and \
++                    os.path.normcase(buf.value) == want:
++                found.append(hwnd)
++            kernel32.CloseHandle(ctypes.c_void_p(handle))
++        return True
++
++    user32.EnumWindows(each, 0)
++    return found[0] if found else None
++
++
++class _Rect(ctypes.Structure):
++    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
++
++
++class _MonitorInfo(ctypes.Structure):
++    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _Rect), ("rcWork", _Rect), ("dwFlags", ctypes.c_ulong)]
++
++
++def place_window(exe, mode, wait=30.0):
++    """Waits for the game window, then maximises it or makes it a borderless window over its whole screen."""
++    try:
++        user32 = ctypes.windll.user32
++    except AttributeError:
++        return
++    end = time.time() + wait
++    hwnd = None
++    while time.time() < end and not hwnd:
++        time.sleep(0.25)
++        hwnd = game_window(exe)
++    if not hwnd:
++        return
++    h = ctypes.c_void_p(hwnd)
++    if mode == "maximized":
++        user32.ShowWindow(h, 3)                                            # SW_MAXIMIZE
++        return
++    user32.MonitorFromWindow.restype = ctypes.c_void_p
++    info = _MonitorInfo()
++    info.cbSize = ctypes.sizeof(_MonitorInfo)
++    if not user32.GetMonitorInfoW(ctypes.c_void_p(user32.MonitorFromWindow(h, 2)), ctypes.byref(info)):  # NEAREST
++        return
++    r = info.rcMonitor
++    get_style = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
++    set_style = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
++    get_style.restype = ctypes.c_ssize_t
++    style = get_style(h, -16)                                              # GWL_STYLE
++    style &= ~(0x00C00000 | 0x00040000 | 0x00020000 | 0x00010000 | 0x00080000)  # caption, frame, min/max, sysmenu
++    set_style(h, -16, ctypes.c_ssize_t(style))
++    user32.SetWindowPos(h, None, r.left, r.top, r.right - r.left, r.bottom - r.top, 0x0020 | 0x0040)  # FRAMECHANGED|SHOW
++    user32.SetForegroundWindow(h)
++
++
++__all__ = ["T4Pal", "find_root", "best_settings", "read_ini", "write_ini"]
+diff --git a/tests/test_t4pal.py b/tests/test_t4pal.py
+new file mode 100644
+index 0000000..d082c3e
+--- /dev/null
++++ b/tests/test_t4pal.py
+@@ -0,0 +1,133 @@
++"""The Tekken 4 PAL adapter on a fake checkout: settings file, best settings, environment, sources, build steps."""
++import os
++import sys
++import tempfile
++import unittest
++from unittest import mock
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from openrecomp import adapters, manifest as mf  # noqa: E402
++from openrecomp.adapters import t4pal  # noqa: E402
++from openrecomp.adapters.base import Missing  # noqa: E402
++
++
++def touch(path, data=b""):
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    with open(path, "wb") as f:
++        f.write(data)
++
++
++class Pal(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        base = self.tmp.name
++        self.root = os.path.join(base, "tekken4-recomp")
++        self.tree = os.path.join(base, "tekken4-fork-ps2recomp")
++        touch(os.path.join(self.root, "tools", "run_game.cmd"))
++        touch(os.path.join(self.root, "tools", "build_game.cmd"))
++        touch(os.path.join(self.root, "config", "ghidra_export.toml"))
++        self.env = mock.patch.dict(os.environ, {"OPENRECOMP_HOME": os.path.join(base, "home")})
++        self.env.start()
++        self.screen = mock.patch.object(t4pal, "screen_height", return_value=1440)
++        self.screen.start()
++        self.m = mf.validate(dict(id="t4pal", title="Tekken 4", numeral="4", accent="#F0414E", adapter="t4pal",
++                                  locations=[self.root], sections=["play", "build", "settings"]))
++
++    def tearDown(self):
++        self.screen.stop()
++        self.env.stop()
++        self.tmp.cleanup()
++
++    def adapter(self):
++        a = adapters.make(self.m, {})
++        self.assertIsInstance(a, t4pal.T4Pal)
++        return a
++
++    def built(self):
++        touch(os.path.join(self.root, "game", "disc", "SCES_508.78"))
++        touch(os.path.join(self.tree, "out", "runtime", "ps2xRuntime", "ps2EntryRunner.exe"))
++
++    def test_the_manifest_and_the_folder_are_found(self):
++        self.assertEqual(self.adapter().tree, self.tree)
++        other = dict(self.m, locations=[os.path.join(self.tmp.name, "elsewhere")])
++        self.assertIsInstance(adapters.make(other, {}), Missing)
++
++    def test_best_settings_follow_the_screen(self):
++        self.assertEqual([t4pal.best_settings(h)["internal_scale"] for h in (720, 1080, 1440, 2160)], [2, 3, 3, 4])
++        best = t4pal.best_settings(1080)
++        self.assertEqual((best["aspect"], best["widescreen"], best["no_interlace"], best["fxaa"]), (1, 1, 1, 1))
++
++    def test_the_first_start_writes_the_best_settings_once(self):
++        a = self.adapter()
++        self.assertEqual(a.settings()[0]["value"], 3)            # shown before the file exists
++        self.assertTrue(a.ensure_settings())
++        a.set_setting("internal_scale", 2)
++        self.assertFalse(a.ensure_settings())                    # the player's choice stays
++        self.assertEqual(t4pal.read_ini(a.settings_path())["internal_scale"], "2")
++
++    def test_changing_a_setting_keeps_the_games_other_lines(self):
++        a = self.adapter()
++        t4pal.write_ini(a.settings_path(), {"aspect": "0", "controls_layout": "xbox", "controls_key_CROSS": "88"})
++        a.set_setting("aspect", 1)
++        self.assertEqual(t4pal.read_ini(a.settings_path()),
++                         {"aspect": "1", "controls_layout": "xbox", "controls_key_CROSS": "88"})
++        values = {s["id"]: s["value"] for s in a.settings()}
++        self.assertEqual((values["aspect"], values["internal_scale"]), (1, 1))  # missing keys: the game's own default
++
++    def test_launcher_only_settings_are_kept_by_the_launcher(self):
++        a = self.adapter()
++        a.set_setting("window", "maximized")
++        a.set_setting("sound", False)
++        self.assertFalse(os.path.isfile(a.settings_path()) and "window" in t4pal.read_ini(a.settings_path()))
++        b = self.adapter()
++        self.assertEqual((b.state["window"], b.state["sound"]), ("maximized", False))
++
++    def test_ready_only_with_the_program_and_a_build(self):
++        a = self.adapter()
++        self.assertFalse(a.ready())
++        self.assertIn("SCES_508.78", a.status()["detail"])
++        self.built()
++        self.assertTrue(a.ready())
++
++    def test_the_game_runs_on_its_own_tree_and_settings(self):
++        a = self.adapter()
++        env = a.game_env()
++        self.assertEqual(env["TEKKEN4_SRC"], self.tree)
++        self.assertEqual(env["PS2X_SETTINGS"], a.settings_path())
++        self.assertNotIn("PS2X_DEBUG_PANEL", env)                # unset keeps F1 working
++        a.set_setting("debug_panel", True)
++        self.assertEqual(a.game_env({"X": "1"})["PS2X_DEBUG_PANEL"], "1")
++
++    def test_a_running_lock_holder_blocks_play(self):
++        self.built()
++        a = self.adapter()
++        touch(a.lock_path(), f"{os.getpid()} run_capture test\n".encode())
++        with self.assertRaises(RuntimeError):
++            a.start()
++        touch(a.lock_path(), b"")
++        self.assertEqual(a.run_lock_holder(), "")
++
++    def test_the_program_is_checked_and_never_replaced(self):
++        a = self.adapter()
++        wrong = os.path.join(self.tmp.name, "SCES_508.78")
++        touch(wrong, b"not the game")
++        self.assertIn("not SCES_508.78", a.set_source("elf", wrong))
++        self.assertFalse(os.path.isfile(os.path.join(self.root, "game", "disc", "SCES_508.78")))
++        with mock.patch.object(t4pal, "sha1", return_value=t4pal.ELF_SHA1):
++            self.assertEqual(a.set_source("elf", wrong), "Copied to game\\disc.")
++            self.assertIn("already there", a.set_source("elf", wrong))
++
++    def test_build_steps_are_read_from_the_script(self):
++        a = self.adapter()
++        self.assertIn("SCES_508.78", a.build_ready())
++        self.built()
++        self.assertEqual(a.build_ready(), "")
++        for line in ("[1/4] tools - host tools", "noise", "[2/4] recomp - recompile"):
++            a._on_line(line)
++        self.assertEqual(a.build_done, {"tools": True})
++        self.assertEqual((a.build_step, a.build_step_no), ("recomp", (2, 4)))
++
++
++if __name__ == "__main__":
++    unittest.main()

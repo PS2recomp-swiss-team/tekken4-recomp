@@ -33,6 +33,23 @@ To continue, open Claude Code in this folder and say: "read docs/status.md and c
   us-iso 5d302e7. Not checked: controller navigation, the US Build button (runs build_game.ps1), the screen itself.
   PAL on the launcher has Play only (generic adapter: no Build / Settings tab; F2 in the game), and Stop there ends
   run_game.cmd, not the game window.
+- **2026-11-03 evening, PAUSED by the user ("save this for later"), RESTART HERE for the launcher.** User: "the
+  launcher should start the best version available of each game; the PAL test did not feel like our version" (it was
+  our build, but without settings.ini = the runtime's PS2-like defaults). Done, LOCAL ONLY in H:\OpenRecomp-FGC (his
+  rule: no commit there; the user sends it to TheWishin later): PAL adapter `openrecomp/adapters/t4pal.py` (+ "t4pal"
+  in manifest.ADAPTERS and adapters/__init__.py, tests/test_t4pal.py; 58 tests OK). Copy of it all:
+  tools\openrecomp\openrecomp-fgc-t4pal.patch (applies on his fa6daf4). tools\openrecomp\t4pal.json now uses it.
+  What it does: Play = tools\run_game.cmd with the PAL tree, PS2X_SETTINGS=settings.ini, run.lock held by it; window
+  Fullscreen (borderless, default) / Maximized / Window placed from outside (the PAL runtime has no fullscreen); the
+  first start writes the best settings.ini (scale = ceil(screen height / 512) in 2..4, aspect 16:9, widescreen,
+  no_interlace, fxaa, smooth_screen); Settings tab = those keys (other lines kept) + sound / debug window; Build =
+  new tools\build_game.cmd ([n/4] tools, recomp, stage, runtime); Stop = close request, forced after 5 s.
+  Checked on this PC (3440x1440): borderless 3440x1440, settings.ini written (scale 3), Stop exit 0, lock emptied.
+  US: launcher\settings.json (local, gitignored) fullscreen=true; it already had 1440p / FXAA / progressive / unlock.
+  NEXT: (1) PAL fps HUD shows at start: add TEKKEN4_HUD=0 by default + a "Performance overlay" setting (check the
+  variable in runtime/tekken4_overrides.cpp first); (2) Play USA through the launcher in fullscreen (window rect);
+  (3) run tools\build_game.cmd once (never run yet); (4) refresh the patch, commit; (5) start tools\launcher.cmd for
+  the user. Do NOT use screen captures for these checks (one caught the user's private desktop): window rect, logs.
 - Done in session 1: toolchain installed, PS2Recomp tools built, analyzer seed + full recompile with 0 errors,
   Ghidra project (`ghidra/Tekken4`, non-shared) analysed with SDK names applied, Ghidra export recompiled.
 - Done in session 2: Ghidra MCP tools approved and working in Claude Code. **Runtime base decided: upstream

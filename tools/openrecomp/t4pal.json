@@ -7,14 +7,9 @@
  "short": "Tekken 4 PAL",
  "numeral": "4",
  "accent": "#F0414E",
- "adapter": "generic",
- "exe": "H:\\tekken4-recomp\\tools\\run_game.cmd",
- "args": [],
- "cwd": "H:\\tekken4-recomp",
- "env": {
-  "TEKKEN4_SRC": "H:\\tekken4-fork-ps2recomp",
-  "TEKKEN4_BUILD_DIR": "runtime",
-  "TEKKEN4_WINDOW_TITLE": "TEKKEN 4 PAL - YOUR GAME"
- },
- "sections": ["play"]
+ "adapter": "t4pal",
+ "source": "PS2 disc (SCES-50878 v2.00)",
+ "locations": ["H:\\tekken4-recomp"],
+ "tree": "H:\\tekken4-fork-ps2recomp",
+ "sections": ["play", "build", "settings"]
 }
