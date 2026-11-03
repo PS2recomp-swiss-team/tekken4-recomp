@@ -21,8 +21,10 @@ To continue, open Claude Code in this folder and say: "read docs/status.md and c
   tree's stale `gs-gl` branch. Clearing them away is the user's call (tools\to_clean.ps1, per path).
 - **2026-11-03 later:** TheWishin is now an org owner (the user did it). His PR #1 (us-slus20328 -> master) was
   closed unmerged (user: master stays PAL); his 112 newer commits (to 10edeb3, patch 87, 101 Codex drafts) merged
-  into `us-iso` 9c1706e, t4-us 640b38d; builds, fight 60 fps, pairs 0 mismatches but rebases x2.5-4 vs caf10f5
-  (fps run 56.8 -> 52.6): US docs\NETPLAY_CHECK_PABLO_PC.md section 9, docs\REVIEW_WISHIN.md addendum.
+  into `us-iso` 9c1706e, t4-us 640b38d; builds, fight 60 fps, pairs 0 mismatches. The "rebases x2.5-4" seen first
+  is NOT a commit: a bisect found every state at ~56 fps and the final code gave 55.9 and 53.2 in two runs (run-to-run
+  variance of two instances on one PC; US docs\NETPLAY_CHECK_PABLO_PC.md section 10). Unlock always on online:
+  us-iso faf7d21 (one side at TEKKEN4_UNLOCK_ALL=0 was 198/199 hashes differing, now 0).
 - Done in session 1: toolchain installed, PS2Recomp tools built, analyzer seed + full recompile with 0 errors,
   Ghidra project (`ghidra/Tekken4`, non-shared) analysed with SDK names applied, Ghidra export recompiled.
 - Done in session 2: Ghidra MCP tools approved and working in Claude Code. **Runtime base decided: upstream
