@@ -28,6 +28,10 @@ Static recompilation of Tekken 4 (PS2) to a native Windows executable using PS2R
 - `runtime/` - our game overrides (`*_overrides.cpp`), staged into ps2xRuntime by `tools\stage_generated.cmd`
 - `tools/` - our own helper scripts
 - `docs/status.md` - current state and next steps; read it first, update it at the end of a session
+- `H:\OpenRecomp-FGC` - TheWishin's couch launcher (github.com/TheWishin/OpenRecomp-FGC, MIT; his repo: never commit
+  or push there, AGENTS.md). Started by `tools\launcher.cmd`, which installs `tools\openrecomp\t4.json` (US, his t4
+  adapter + the US repo's launcher\t4core.py) and `t4pal.json` (PAL, generic adapter -> tools\run_game.cmd with the PAL
+  tree pinned) into %LOCALAPPDATA%\OpenRecomp\games. Needs Python 3.12 (`py install 3.12`; its .venv has PySide6 6.8.2.1)
 
 ## Rules
 - Never commit or publish game files, Ghidra databases, or generated C++ from the ELF.

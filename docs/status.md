@@ -25,6 +25,14 @@ To continue, open Claude Code in this folder and say: "read docs/status.md and c
   is NOT a commit: a bisect found every state at ~56 fps and the final code gave 55.9 and 53.2 in two runs (run-to-run
   variance of two instances on one PC; US docs\NETPLAY_CHECK_PABLO_PC.md section 10). Unlock always on online:
   us-iso faf7d21 (one side at TEKKEN4_UNLOCK_ALL=0 was 198/199 hashes differing, now 0).
+- **2026-11-03: OpenRecomp-FGC is our launcher** (user: "we wanted a launcher, wishin created it"). Clone
+  H:\OpenRecomp-FGC (unchanged, his tests 48 OK), Python 3.12.10 installed for it. `tools\launcher.cmd` puts both
+  versions on its shelf (tools\openrecomp\*.json). Checked through its own adapter code: shelf = T5DR not found, T4 USA
+  Ready, T4 PAL Ready; Play USA ran H:\tekken4-fork-ps2recomp_usa's exe on SLUS_203.28, Play PAL ran run_game.cmd ->
+  H:\tekken4-fork-ps2recomp's exe on SCES_508.78; window "OpenRecomp-FGC" opens (--windowed). US t4core.py tree fix:
+  us-iso 5d302e7. Not checked: controller navigation, the US Build button (runs build_game.ps1), the screen itself.
+  PAL on the launcher has Play only (generic adapter: no Build / Settings tab; F2 in the game), and Stop there ends
+  run_game.cmd, not the game window.
 - Done in session 1: toolchain installed, PS2Recomp tools built, analyzer seed + full recompile with 0 errors,
   Ghidra project (`ghidra/Tekken4`, non-shared) analysed with SDK names applied, Ghidra export recompiled.
 - Done in session 2: Ghidra MCP tools approved and working in Claude Code. **Runtime base decided: upstream

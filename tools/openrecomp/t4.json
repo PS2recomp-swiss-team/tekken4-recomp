@@ -1,0 +1,14 @@
+{
+ "id": "t4",
+ "order": 20,
+ "title": "Tekken 4",
+ "subtitle": "USA version",
+ "platform": "PS2",
+ "short": "Tekken 4 USA",
+ "numeral": "4",
+ "accent": "#5B93FF",
+ "adapter": "t4",
+ "source": "PS2 ISO (SLUS-20328)",
+ "locations": ["H:\\tekken4-recomp_usa", "D:\\tekken4-us", "C:\\tekken4-us", "%USERPROFILE%\\Desktop\\T4-*"],
+ "sections": ["play", "build", "settings"]
+}
