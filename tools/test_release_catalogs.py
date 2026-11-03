@@ -39,6 +39,14 @@ class ReleaseCatalogTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue((ROOT / name).is_file(), name)
 
+    def test_source_zip_ships_the_t4_launcher_and_not_the_pal_camera_log(self):
+        names = {name for name, _ in test_zip.source_entries(ROOT)}
+        for name in ("Tekken4.cmd", "launcher/t4_launcher.pyw", "launcher/t4core.py", "tools/net_play.ps1"):
+            self.assertIn(name, names)
+        self.assertFalse(any(name.startswith("runtime/pal/") for name in names))
+        self.assertIn("runtime/tekken4_overrides.cpp", names)
+        self.assertEqual(test_zip.NOT_SHIPPED_DIRS, ("runtime/pal",))
+
     def test_starter_launcher_and_beta_documents_exist(self):
         for name in ("Tekken4.cmd", "launcher/t4core.py", "launcher/t4_launcher.pyw",
                      "docs/BETA_RELEASE_NOTES.md", "docs/KNOWN_ISSUES.md", "docs/BETA_GO_NO_GO.md",

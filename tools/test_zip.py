@@ -18,7 +18,14 @@ import publish_source
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ("config", "runtime", "patches")
-ROOT_FILES = ("LICENSE", "TEST_ONLINE_DE.txt", "docs/THIRD_PARTY.md")
+ROOT_FILES = (
+    "LICENSE", "TEST_ONLINE_DE.txt", "docs/THIRD_PARTY.md", "Tekken4.cmd",
+    "launcher/t4_launcher.pyw", "launcher/t4core.py", "launcher/COPIED_FROM_T5DR.txt",
+)
+# Folders inside SOURCE_DIRS that the US build never reads, left out by exact path (nothing else is filtered).
+# runtime/pal holds the parked PAL (SCES-50878) camera log: tools/stage_generated.cmd copies only
+# runtime/*_overrides.cpp (not recursive) and tools/gfx_stage.py skips runtime/pal, so a US build never sees it.
+NOT_SHIPPED_DIRS = ("runtime/pal",)
 TOOLS = (
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
     "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd",
@@ -78,6 +85,8 @@ def source_entries(root):
         for parent, directories, filenames in os.walk(folder, followlinks=False, onerror=_walk_error):
             for child in directories + filenames:
                 publish_source._no_links(Path(parent) / child)
+            directories[:] = [child for child in directories
+                              if (Path(parent) / child).relative_to(root).as_posix() not in NOT_SHIPPED_DIRS]
             paths.extend(Path(parent) / child for child in filenames)
     entries = []
     for path in sorted(paths):

@@ -13,6 +13,13 @@ Downloads: python.org/downloads, git-scm.com/download/win, cmake.org/download,
 github.com/ninja-build/ninja/releases, visualstudio.microsoft.com/downloads
 (dort "Build Tools for Visual Studio 2022"). Danach alte Konsolen schliessen.
 
+EINFACHER WEG MIT LAUNCHER (statt der Konsolenbefehle unten):
+Tekken4.cmd im entpackten Ordner doppelklicken (Python mit tcl/tk noetig).
+"Build game": eigene ISO waehlen, BUILD GAME, bis alles gruen ist.
+"Play offline": PLAY. "Online": A = Host (Port 7400), B = Join mit A's IPv4
+(oeffentlich oder Tailscale, siehe Schritt 2). Firewall/Router wie unten.
+Der Launcher baut nach deps\ps2recomp in diesem Ordner, wie die Befehle unten.
+
 Entpackten Ordner T4-Test im Explorer oeffnen. In die Adresszeile powershell,
 Enter. Diese Zeilen einzeln ausfuehren. ISO-Pfad bei Abfrage vollstaendig und
 ohne Anfuehrungszeichen eingeben; Konsole offen lassen:

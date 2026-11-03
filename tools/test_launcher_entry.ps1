@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $prefix = $root.TrimEnd('\') + '\'
 $starter = Join-Path $root 'Tekken4.cmd'
-$expectedHash = '9239F2525A51803E6B99BAE66718E91FB3B118C5EAE557DFB0ADD00FAE7910B1'
+$expectedHash = '4C10A05EDACEE61155ECC5FC7D919524796181F15054057E5CA5E24393A76FC0'
 $missing = 'Private Python is missing. Extract the complete player release zip first.'
 $proc = $null
 

@@ -306,7 +306,8 @@ def check_prereqs():
         "winget install Python.Python.3.12   (or python.org; tick 'Add python.exe to PATH')")
     git = _which("git")
     add("git", "Git", git, git or "not found", "winget install Git.Git   (or https://git-scm.com/download/win)")
-    vsw = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    vsw = os.path.join(os.environ.get("ProgramFiles(x86)")
+                       or os.path.join(os.environ.get("SystemDrive", "C:") + os.sep, "Program Files (x86)"),
                        "Microsoft Visual Studio", "Installer", "vswhere.exe")
     vs = None
     if os.path.isfile(vsw):
