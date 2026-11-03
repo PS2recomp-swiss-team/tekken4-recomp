@@ -117,3 +117,26 @@ Pair `pablo-n150b` (net_pair.ps1 -Rtt 150 -Jitter 5 -Loss 3 -End 12000, PHASE3 i
 
 NETDESYNC lines 0 on both sides. Logs: logs\net\pablo-n150b\{host,join}. The forced-desync run (TEKKEN4_RAND_SEED=2 on
 the joiner) was not repeated here.
+
+## 8. Update 2026-11-03 (Claude): merged line (us-iso 7875481 = us-slus20328 caf10f5 + Pablo's commits), patches 01-86
+
+PS2Recomp tree H:\tekken4-fork-ps2recomp_usa t4-us: TheWishin's patches 57-86 committed one by one (head c515561).
+`tools\build_game.ps1`: built in 237 s, build id 300283052fa73d96.
+
+- Offline: `tools\perf_fight.ps1 -Src H:\tekken4-fork-ps2recomp_usa -Build runtime -Env PS2X_PERF_STATS=1`
+  (logs\perf\merged_20261103): arena fight 29 s at 60.0 fps mean, min 60, 0 s below 59; 480p progressive and the
+  unlock override active; the char-select path still lands on Yoshimitsu with all fighters unlocked.
+- Pair `pablo-merged-n150b`: same settings as `pablo-n150b` in section 7 (RTT 150, jitter 5, loss 3, End 12000, the
+  PHASE3 inputs and fuzz, sound on). Both sides NETEND at 216 s (was 238 s). A first pair without the inputs/fuzz
+  (`pablo-merged-n150`) stayed in the menus with 0 rollbacks: it does not count.
+
+| side | fps window / run | rollbacks | resim | max depth | rollback ms p50/p90/max | stalls | displayed ms p50/p90/p99 | hashes | mismatches |
+|---|---|---|---|---|---|---|---|---|---|
+| host 11-03 | 60.0 / 56.8 | 1953 | 3686 | 7 | 10.1 / 12.5 / 87.1 | 0 | 16.7 / 24.8 / 71.5 | 399 | 0 |
+| join 11-03 | 60.0 / 56.8 | 2679 | 7526 | 9 | 11.1 / 28.7 / 51.0 | 46 (1227 ms) | 16.7 / 24.9 / 77.3 | 399 | 0 |
+| host 10-30 | 58.3 / 51.2 | 2019 | 3861 | 5 | 17.0 / 27.2 / 91.6 | 410 (3742 ms) | 16.4 / 32.9 / 75.6 | 399 | 0 |
+| join 10-30 | 59.0 / 51.2 | 2044 | 4079 | 5 | 17.6 / 26.8 / 86.8 | 426 (3670 ms) | 16.1 / 33.5 / 76.9 | 399 | 0 |
+
+NETDESYNC lines 0 on both sides; `docs\rollback\net_compare.py`: 419 frames compared, 0 differ. Frame 6000 shot: the
+arena round ends ("KAZUYA WINS"). Not tested here: unlock on/off mismatch between peers (docs\REVIEW_WISHIN.md item 1),
+the launcher, fullscreen, two PCs.
