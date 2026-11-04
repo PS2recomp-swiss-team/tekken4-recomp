@@ -35,10 +35,12 @@ The owner's two-PC test is still pending in the evidence available here.
 * Both players need a reachable UDP path and matching game/build identities.
   The beta does not configure a router or firewall. A failed connection that
   leaves an offline game running is not a successful online session.
-* Automatic VS menu navigation (`TEKKEN4_NET_AUTO_VS`) stays off without its
-  required passed pair. It uses timed inputs, not verified screen detection;
-  personal saves or dialogs can change the boot path. Use manual navigation
-  until the required cases pass.
+* Online games boot straight to VS character select (`TEKKEN4_NET_AUTO_VS`,
+  default on since 2026-11-04; docs/DIRECTFIGHT_T4.md "Online boot"). The
+  presses follow the game's own scene/menu state; an unknown screen makes the
+  automation wait, and after `TEKKEN4_NET_AUTO_VS_END` (3000 frames) the
+  players take over with their pads. Online games use an empty memory card in
+  their run folder (`TEKKEN4_NET_CARD`), not the offline save.
 * The portable path B scripts exist, but this source copy proves no complete
   player zip, clean-PC build or integration with the new launcher. The standalone
   `Tekken4.cmd` starter does not establish that integration. Microsoft build

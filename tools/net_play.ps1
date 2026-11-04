@@ -3,14 +3,15 @@
 #   join (P2): powershell -ExecutionPolicy Bypass -File tools\net_play.ps1 -Join <HOST-IP> -Port 7400
 # Preflight compares the two builds and checks UDP before launching the game.
 # Each default run has its own logs/net directory; cards stay local and are never collected.
-# Default profile: docs/ROLLBACK_ASYMMETRY.md Sunday settings, AUTO_VS off.
+# Default profile: docs/ROLLBACK_ASYMMETRY.md Sunday settings; the game boots straight to VS character select
+# (TEKKEN4_NET_AUTO_VS=1, docs/DIRECTFIGHT_T4.md "Online boot"). -NoAutoVs: walk the menus yourself (both PCs alike).
 # -UseInheritedProfile is for separate maintainer experiments, not beta acceptance.
 param([Alias("Host")][switch]$AsHost, [string]$Join = "", [ValidateRange(1,65535)][int]$Port = 7400,
       [int]$Pad = 0, [string]$Delay = "auto", [int]$Sound = 1, [string]$Sim = "", [string]$RunDir = "",
       [string]$Src = $env:TEKKEN4_SRC, [string]$BuildDir = $env:TEKKEN4_BUILD_DIR,
       [Alias("IsoPath")][string]$Iso = $env:TEKKEN4_ISO, [switch]$NoDiagnostics,
       [switch]$SkipPreflight, [ValidateRange(5,600)][int]$PreflightTimeoutSeconds = 90,
-      [switch]$UseInheritedProfile)
+      [switch]$UseInheritedProfile, [switch]$NoAutoVs)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if ($AsHost -and $Join) { throw 'Give either -Host or -Join <host>, not both.' }
@@ -79,13 +80,13 @@ $stampJson = Join-Path $exeDir 't4net_build.json'
 $identity = $null
 # Keep runtime experimental fallbacks OFF. Only this human-test launch profile
 # enables coalescing for its measured traffic saving, plus timing diagnostics.
-# No supplied AUTO_VS pair passed: automatic menu navigation stays OFF here.
+# Automatic VS (state-driven, proven by pairs: docs/DIRECTFIGHT_T4.md "Online boot") is ON unless -NoAutoVs.
 if (-not $UseInheritedProfile) {
     $profile = @{
         TEKKEN4_NET_STRICT_HELLO = '0'; TEKKEN4_RB_AUDIO_TIMELINE = '0'
         TEKKEN4_NET_DELAY_MATCH = '0'; TEKKEN4_NET_COST_PROFILE = '0'
         TEKKEN4_NET_HASH_PROFILE = '0'; TEKKEN4_NET_SIM_SAFE_WAIT = '0'
-        TEKKEN4_NET_REFRESH_RC = '0'; TEKKEN4_NET_AUTO_VS = '0'
+        TEKKEN4_NET_REFRESH_RC = '0'; TEKKEN4_NET_AUTO_VS = $(if ($NoAutoVs) { '0' } else { '1' })
         TEKKEN4_NET_TIMESYNC = '1'; TEKKEN4_NET_MAXPRED = '8'
         TEKKEN4_NET_EARLY = '1'; TEKKEN4_NET_LAZY = '1'; TEKKEN4_NET_LOCALPAD = '1'
     }
@@ -116,6 +117,7 @@ elseif (-not $UseInheritedProfile -and $env:TEKKEN4_NET_DIAG -ne '0') { $env:TEK
 elseif (-not $env:TEKKEN4_NET_DIAG) { $env:TEKKEN4_NET_DIAG = '1' }
 $env:TEKKEN4_NET = if ($AsHost) { "host:$Port" } else { "join:${Join}:$Port" }
 $env:TEKKEN4_NET_DELAY = $Delay
+if ($NoAutoVs) { $env:TEKKEN4_NET_AUTO_VS = '0' }
 $env:TEKKEN4_NET_PAD = "$Pad"
 $env:TEKKEN4_SOUND = "$Sound"
 if ($Sim) { $env:TEKKEN4_NET_SIM = $Sim }

@@ -725,18 +725,27 @@ class App(tk.Tk):
             row.pack(anchor="w", pady=5)
             ttk.Label(row, text=text, width=31).pack(side="left")
             ttk.Entry(row, textvariable=var, width=30).pack(side="left")
+        self.var_auto_vs = tk.BooleanVar(value=self.settings.get("auto_vs", True))
+        ttk.Checkbutton(f, text="Start at VS character select (the game walks the menus itself; both players "
+                        "must use the same setting)", variable=self.var_auto_vs,
+                        command=self.on_auto_vs).pack(anchor="w", pady=(8, 0))
         row = ttk.Frame(f)
         row.pack(anchor="w", pady=12)
         self.btn_online = ttk.Button(row, text="START ONLINE", command=self.on_online)
         self.btn_online.pack(side="left")
         ttk.Button(row, text="Stop session", command=self.on_stop).pack(side="left", padx=8)
         ttk.Button(row, text="Open session log", command=lambda: self.open_path(core.LAST_RUN_LOG)).pack(side="left")
-        ttk.Label(f, text="Sound stays on for this test. Player 1 navigates the menus manually. Each new opponent "
-                  "needs a fresh start; automatic VS navigation is off. Close both games before reconnecting. "
+        ttk.Label(f, text="Sound stays on for this test. Both games go to VS character select by themselves "
+                  "(about 20 seconds); then each player picks a fighter. Each new opponent needs a fresh start. "
+                  "Close both games before reconnecting. "
                   "Intro music and one-sided stalls remain known issues.", wraplength=800,
                   style="Muted.TLabel", justify="left").pack(anchor="w", pady=(2, 12))
         self.lbl_online_status = ttk.Label(f, text="", wraplength=800, justify="left")
         self.lbl_online_status.pack(anchor="w")
+
+    def on_auto_vs(self):
+        self.settings["auto_vs"] = bool(self.var_auto_vs.get())
+        self.save()
 
     def on_online(self):
         if self.game or self.build_busy:

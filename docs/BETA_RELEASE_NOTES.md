@@ -54,9 +54,9 @@ Use sound on, automatic delay, time sync on, maximum prediction 8 and no network
 simulator. There is no evidence here to force a different delay, raise the
 prediction cap or change the pacing thresholds.
 
-`TEKKEN4_NET_AUTO_VS` stays off: no passing AUTO_VS pair report was supplied.
-Use manual menus. Automatic menu input must not be advertised as a verified
-shortcut to a fight.
+Since 2026-11-04 (branch t4-autovs) online games boot straight to VS character
+select (`TEKKEN4_NET_AUTO_VS`, default on, `0` = manual menus); pair evidence in
+docs/DIRECTFIGHT_T4.md "Online boot". Older beta builds keep manual menus.
 
 ## Limits players should know
 

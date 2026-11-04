@@ -44,6 +44,15 @@ class OnlineCommandTests(unittest.TestCase):
                 self.assertNotIn("-SkipPreflight", command)
                 self.assertEqual(["-Host"] if role == "host" else ["-Join", "127.0.0.1"], command[-1:] if role == "host" else command[-2:])
 
+    def test_auto_vs_is_default_and_can_be_turned_off(self):
+        self.ready()
+        self.assertTrue(core.DEFAULTS["auto_vs"])
+        self.assertNotIn("-NoAutoVs", core.online_command({}, "host"))
+        self.assertNotIn("-NoAutoVs", core.online_command({"auto_vs": True}, "host"))
+        command = core.online_command({"auto_vs": False}, "join", "127.0.0.1")
+        self.assertIn("-NoAutoVs", command)
+        self.assertEqual(["-Join", "127.0.0.1"], command[-2:])
+
     def test_invalid_role_port_and_peer_fail_before_play_checks(self):
         cases = (("lobby", "", 7400), ("host", "", 0), ("host", "", 65536),
                  ("host", "", "bad"), ("join", "host.invalid", 7400),
