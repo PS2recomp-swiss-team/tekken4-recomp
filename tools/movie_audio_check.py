@@ -4,7 +4,9 @@ disc. Stdlib only. Run with python -I.
   python -I tools/movie_audio_check.py <iso> <wav> [--from 0] [--to 40] [--win 1.0] [--step 2.0] [--hz 44100]
 
 Reference: the intro movie (DATA.BIN sector 67289, 0x27 video + 2 audio sectors per unit; audio = SPU ADPCM, left
-and right alternating every 16-byte block, 3584 stereo frames per unit), decoded at --hz and resampled to 48 kHz.
+and right alternating every 512 bytes, 3584 stereo frames per unit), decoded at --hz and resampled to 48 kHz.
+The original driver's 512-byte channel transfers establish this layout; the old
+16-byte assumption matched the former runtime bug and gave misleading evidence.
 1. Finds where the movie starts in the WAV (100 Hz loudness envelopes, cross-correlation).
 2. Every --step seconds, correlates a --win second window of the WAV with the reference near the expected place
    (+-60 ms) and prints the lag and the correlation. Right pitch and speed: lag constant (drift ~0 ms) and
@@ -52,9 +54,10 @@ def reference(iso_path, seconds, hz):
         for u in range(units):
             iso.seek((DATA_BIN_LBN + MOVIE_SECTOR) * 2048 + u * UNIT + VIDEO)
             a = iso.read(AUDIO)
-            for k in range(0, AUDIO, 32):
-                decode_block(a[k:k + 16], sl, left)
-                decode_block(a[k + 16:k + 32], sr, right)
+            for k in range(0, AUDIO, 1024):
+                for block in range(0, 512, 16):
+                    decode_block(a[k + block:k + block + 16], sl, left)
+                    decode_block(a[k + 512 + block:k + 512 + block + 16], sr, right)
     # linear resample to 48 kHz (good enough for correlation)
     n = int(len(left) * 48000 / hz) - 2
     step = hz / 48000.0

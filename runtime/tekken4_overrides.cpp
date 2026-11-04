@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -172,7 +173,7 @@ namespace tekken4
     uint32_t g_movieVideoPos = 0u; // video bytes already delivered
     bool g_movieEnded = false;
     // Predictor state for the two SPU ADPCM channels. The 4096-byte audio pair after each video unit is
-    // 16-byte left blocks interleaved with 16-byte right blocks (flag byte 0x02 on every block).
+    // four 512-byte left/right channel chunk pairs (flag byte 0x02 on every block).
     int32_t g_movieHist[2][2] = {};
     uint32_t g_movieAudioUnits = 0u;
     // The audio sectors are 44.1 kHz stereo: 3584 frames per unit = 81.3 ms, and the 1519 units that carry audio
@@ -203,9 +204,34 @@ namespace tekken4
         else if (count != 0u)
             ps2PushMoviePcm(frames, count);
     }
-    // Streaming 4-point (Catmull-Rom) resampler, source rate -> the mixer's 48 kHz, continuous across units.
-    std::vector<int16_t> g_movieCarry; // stereo source frames not consumed yet (the first is the cubic's x[-1])
+    // The HLE bypasses the movie voices on SPU2. Restore their authored base,
+    // category and core-1 master gain instead of substituting a guessed volume.
+    // Only host output uses this value; the original driver still owns guest state.
+    uint32_t g_movieBaseVolume = 0x3FFFu;
+    double movieOutputGain(PS2Runtime *runtime)
+    {
+        uint32_t category = 128u;
+        if (runtime)
+            (void)runtime->readIopMemory(0x00052558u, &category, sizeof(category));
+        const uint32_t voice = std::min(0x3FFFu, g_movieBaseVolume * std::min(category, 255u) / 128u);
+        const double original = (voice / 16384.0) * (0x3F00u / 16384.0) * (32767.0 / 32768.0);
+        // Optional absolute output gain, retained for local comparison and player
+        // adjustment. Reject malformed/nonfinite values and disallow amplification.
+        static const double overrideGain = []() {
+            const char *env = std::getenv("TEKKEN4_MOVIE_GAIN");
+            if (!env || !*env) return -1.0;
+            char *end = nullptr;
+            const double gain = std::strtod(env, &end);
+            return end != env && *end == '\0' && std::isfinite(gain) && gain >= 0.0 && gain <= 1.0 ? gain : -1.0;
+        }();
+        return overrideGain >= 0.0 ? overrideGain : original;
+    }
+
+    // Streaming linear interpolation matches this port's native SPU voice path.
+    // It stays between source samples, avoiding cubic overshoot and pre-gain clipping.
+    std::vector<int16_t> g_movieCarry; // stereo source frames retained across unit boundaries
     double g_moviePos = 1.0;           // read position in g_movieCarry frames
+    uint64_t g_movieResampleClipped = 0u;
     // TEKKEN4_MOVIE_SYNC=1: once a second while a movie plays (from the per-frame sound call), pictures handed out
     // vs audio played (A/V offset) and gaps; at the close, picture intervals (stutter) and the totals.
     bool g_movieSyncLog = false;
@@ -215,30 +241,31 @@ namespace tekken4
     {
         g_movieCarry.clear();
         g_moviePos = 1.0;
+        g_movieResampleClipped = 0u;
     }
 
-    void resampleMovieAudio(const int16_t *frames, size_t count, std::vector<int16_t> &out)
+    void resampleMovieAudio(const int16_t *frames, size_t count, double gain, std::vector<int16_t> &out)
     {
         const bool first = g_movieCarry.empty();
-        if (first) // x[-1] = x[0] for the very first output
+        if (first) // retain the same continuous source origin across units
             g_movieCarry.insert(g_movieCarry.end(), frames, frames + 2u);
         g_movieCarry.insert(g_movieCarry.end(), frames, frames + count * 2u);
         const double step = g_movieSourceHz / 48000.0;
         const size_t have = g_movieCarry.size() / 2u;
-        while (g_moviePos + 2.0 < static_cast<double>(have))
+        while (g_moviePos + 1.0 < static_cast<double>(have))
         {
             const size_t i = static_cast<size_t>(g_moviePos);
             const double t = g_moviePos - static_cast<double>(i);
             for (size_t c = 0; c < 2u; ++c)
             {
-                const double p0 = g_movieCarry[(i - 1u) * 2u + c], p1 = g_movieCarry[i * 2u + c];
-                const double p2 = g_movieCarry[(i + 1u) * 2u + c], p3 = g_movieCarry[(i + 2u) * 2u + c];
-                const double v = p1 + 0.5 * t * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)));
+                const double a = g_movieCarry[i * 2u + c], b = g_movieCarry[(i + 1u) * 2u + c];
+                const double v = (a + (b - a) * t) * gain;
+                g_movieResampleClipped += v < -32768.0 || v > 32767.0;
                 out.push_back(static_cast<int16_t>(std::clamp(v, -32768.0, 32767.0)));
             }
             g_moviePos += step;
         }
-        const size_t drop = static_cast<size_t>(g_moviePos) - 1u; // keep x[-1] of the next output
+        const size_t drop = static_cast<size_t>(g_moviePos) - 1u;
         g_movieCarry.erase(g_movieCarry.begin(), g_movieCarry.begin() + static_cast<std::ptrdiff_t>(drop * 2u));
         g_moviePos -= static_cast<double>(drop);
     }
@@ -282,7 +309,7 @@ namespace tekken4
                                                 << ", max " << v.maxIntervalMs << " ms; audio played "
                                                 << static_cast<double>(a.played) / 48000.0 << " s, gaps "
                                                 << static_cast<double>(a.missing) / 48.0 << " ms, " << g_movieAudioUnits
-                                                << " units\n");
+                                                << " units, resampler clipped samples " << g_movieResampleClipped << "\n");
     }
 
     void decodeMovieAdpcm(const uint8_t *block, int32_t &hist1, int32_t &hist2, int16_t *out)
@@ -312,7 +339,7 @@ namespace tekken4
 
     // One interleave unit is 81.3 ms of 44.1 kHz stereo (128 block pairs x 28 samples), resampled to 48 kHz and
     // queued onto the mixer clock, so a read-ahead ring plays out in guest time instead of as a burst.
-    void queueMovieAudio(uint32_t unit)
+    void queueMovieAudio(uint32_t unit, PS2Runtime *runtime)
     {
         if (!g_realSound || !openDisc())
             return;
@@ -331,8 +358,16 @@ namespace tekken4
         for (uint32_t block = 0; block < kBlocks; ++block)
         {
             int16_t left[28], right[28];
-            decodeMovieAdpcm(raw + block * 32u, g_movieHist[0][0], g_movieHist[0][1], left);
-            decodeMovieAdpcm(raw + block * 32u + 16u, g_movieHist[1][0], g_movieHist[1][1], right);
+            // The movie driver copies each 4 KiB audio unit without rearranging it.
+            // Its stereo DMA reads 512 bytes at base/base+512, then advances both
+            // channel pointers by 1024. Alternating individual ADPCM blocks mixes
+            // the channels' predictor histories and produces periodic crackle.
+            constexpr uint32_t kChannelBytes = 512u;
+            constexpr uint32_t kChannelBlocks = kChannelBytes / 16u;
+            const uint32_t offset = (block / kChannelBlocks) * (2u * kChannelBytes) +
+                                    (block % kChannelBlocks) * 16u;
+            decodeMovieAdpcm(raw + offset, g_movieHist[0][0], g_movieHist[0][1], left);
+            decodeMovieAdpcm(raw + offset + kChannelBytes, g_movieHist[1][0], g_movieHist[1][1], right);
             for (uint32_t i = 0; i < 28u; ++i)
             {
                 pcm[(block * 28u + i) * 2u] = left[i];
@@ -341,26 +376,26 @@ namespace tekken4
         }
         std::vector<int16_t> out;
         out.reserve((static_cast<size_t>(kFrames * 48000.0 / g_movieSourceHz) + 8u) * 2u);
-        resampleMovieAudio(pcm.data(), kFrames, out);
-        // The movie tracks are mastered hot and we play them at full scale: TEKKEN4_MOVIE_GAIN (default 0.7) keeps the
-        // mix out of clipping. Host-side audio only, no guest state.
-        static const float movieGain = []() {
-            const char *env = std::getenv("TEKKEN4_MOVIE_GAIN");
-            return env ? static_cast<float>(std::atof(env)) : 0.7f;
-        }();
-        for (int16_t &sample : out)
-            sample = static_cast<int16_t>(static_cast<float>(sample) * movieGain);
+        const double gain = movieOutputGain(runtime);
+        resampleMovieAudio(pcm.data(), kFrames, gain, out);
         pushMoviePcm(out.data(), out.size() / 2u);
         if (g_movieAudioUnits++ == 0u)
             RUNTIME_LOG("[tekken4] movie audio: unit " << unit << " -> " << kFrames << " stereo frames at "
-                                                       << g_movieSourceHz << " Hz -> " << out.size() / 2u << " at 48000 Hz\n");
+                                                       << g_movieSourceHz << " Hz -> " << out.size() / 2u << " at 48000 Hz, gain " << gain << "\n");
     }
 
-    void movieOpen(uint8_t *rdram, uint32_t sendAddr)
+    void movieOpen(uint8_t *rdram, uint32_t sendAddr, PS2Runtime *runtime)
     {
         uint32_t args[4] = {};
         if (const uint8_t *send = getMemPtr(rdram, sendAddr))
             std::memcpy(args, send, sizeof(args));
+        // Read the selected record from the loaded original driver, rather than
+        // embedding its volume table. Mode 1 uses the driver's alternate index.
+        const uint32_t index = args[3] == 0u ? args[2] : args[2] - 0x1Cu;
+        uint32_t base = 0x3FFFu;
+        if (runtime && index < 8u)
+            (void)runtime->readIopMemory(0x00050030u + index * 16u + 12u, &base, sizeof(base));
+        g_movieBaseVolume = std::min(base, 0x3FFFu);
         g_movieSector = args[0];
         g_movieSize = args[1];
         g_movieVideoPos = 0u;
@@ -380,7 +415,7 @@ namespace tekken4
                                                    << (args[3] != 0u ? " (mode 1 layout unverified)" : "") << "\n");
     }
 
-    void movieRead(uint8_t *rdram, uint32_t sendAddr)
+    void movieRead(uint8_t *rdram, uint32_t sendAddr, PS2Runtime *runtime)
     {
         uint32_t args[2] = {};
         if (const uint8_t *send = getMemPtr(rdram, sendAddr))
@@ -396,7 +431,7 @@ namespace tekken4
             const uint32_t unit = g_movieVideoPos / kMovieVideoBytes;
             const uint32_t inUnit = g_movieVideoPos % kMovieVideoBytes;
             if (inUnit == 0u)
-                queueMovieAudio(unit);
+                queueMovieAudio(unit, runtime);
             const uint64_t fileOffset = static_cast<uint64_t>(unit) * (kMovieVideoBytes + kMovieAudioBytes) + inUnit;
             if (fileOffset >= g_movieSize)
             {
@@ -889,9 +924,9 @@ namespace tekken4
         if (function == kDiscReadCall)
             discRead(rdram, getRegU32(ctx, 7));
         else if (function == kMovieOpenCall)
-            movieOpen(rdram, getRegU32(ctx, 7));
+            movieOpen(rdram, getRegU32(ctx, 7), runtime);
         else if (function == kMovieReadCall)
-            movieRead(rdram, getRegU32(ctx, 7));
+            movieRead(rdram, getRegU32(ctx, 7), runtime);
         else if (function == kMovieCloseCall)
         {
             if (g_movieAudioUnits != 0u)

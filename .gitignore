@@ -30,3 +30,6 @@ __pycache__/
 help/
 to clean/
 imgui.ini
+
+# Local runtime dependency source and builds
+/deps/

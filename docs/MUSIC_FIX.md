@@ -154,6 +154,14 @@ sections as above; "before" = `music_ab_fix_full`, the state after the BGM fix a
 
 ## Intro movie (fixed 2026-10-30, override movie code + fork commits `dac4e50`, `d578f3c` = patches 90/91)
 
+**Superseded format/validation evidence:** see [MOVIE_AUDIO.md](MOVIE_AUDIO.md).
+The historical checker below copied the runtime's incorrect 16-byte stereo
+layout; the original driver establishes 512-byte channel chunks. Its WAV also
+measured the guest mixer rather than the separate device queue. The earlier
+rate correction remains, but these historical correlations do not prove correct
+stereo decoding or device playback. Current before/after evidence is in the new report.
+
+
 **Symptom (user).** The intro FMV's sound was "garbage": choppy and broken, high-pitched.
 
 **Cause: the sound played at the wrong rate, with a gap after every unit.** The movie file (DATA.BIN sector
