@@ -1,5 +1,8 @@
 # T4 client rank text, package 5
 
+> **Superseded 2026-11-04 (owner):** T4 ranked uses Tekken 7's rank names, our own badge pictures and in-game name
+> plates -- see [T4_RANKED.md](T4_RANKED.md). The text below is the earlier package-5 requirement, kept for history.
+
 The owner's requirement is Tekken 8 rank names as text in the client only.
 Nothing in the T4 game changes for that display. No rank icons, screenshots or
 other Bandai Namco art belong in this work. These are Bandai Namco's names;
