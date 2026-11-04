@@ -33,6 +33,17 @@ To continue, open Claude Code in this folder and say: "read docs/status.md and c
   us-iso 5d302e7. Not checked: controller navigation, the US Build button (runs build_game.ps1), the screen itself.
   PAL on the launcher has Play only (generic adapter: no Build / Settings tab; F2 in the game), and Stop there ends
   run_game.cmd, not the game window.
+- **2026-11-04, user closed the PC ("keep this knowledge and do nothing"), RESTART HERE.** Launcher started for the
+  user (tools\launcher.cmd, fullscreen 3440x1440); no game was played from it. Remote state: TheWishin pushed 7
+  commits on us-slus20328 (10edeb3..d2886d3) after the user's own 2-PC test (11-03 23:25-23:42, Tailscale, RTT 17 ms,
+  0 mismatches, "online works, but the fps are not right"): a627eb9 NETSUMMARY percentiles via a fixed histogram (the
+  10 s summary cost 9 ms after 3 min, 31 ms after 16 min = a growing hitch), df994ee time sync spread over 8 frames
+  (TEKKEN4_NET_SYNC_SPREAD, 0/1 = old single-frame pause), dc530ff us_tree rule in launcher + portable scripts (review
+  items 2, 3, tools/test_us_tree.py), e91e0d2 / 99b95b9 / 6a094e1 test zip + Tekken4.cmd + dry-run fix, d2886d3
+  docs/NETPLAY_FPS.md. He had merged us-iso up to 68a5eef. us-iso = 1 ahead (5d302e7), 7 behind; merging conflicts
+  only in launcher/t4core.py (his us_tree() = same rule as our 5d302e7, with tests: take his). NOT done (user: do
+  nothing): merge us-slus20328 into us-iso taking his t4core.py, US rebuild, net_pair x3 vs the 11-03 runs, push.
+  Then the launcher NEXT list below.
 - **2026-11-03 evening, PAUSED by the user ("save this for later"), RESTART HERE for the launcher.** User: "the
   launcher should start the best version available of each game; the PAL test did not feel like our version" (it was
   our build, but without settings.ini = the runtime's PS2-like defaults). Done, LOCAL ONLY in H:\OpenRecomp-FGC (his
