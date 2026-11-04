@@ -630,6 +630,7 @@ class App(tk.Tk):
         self.var_prog = tk.BooleanVar(value=s["progressive"])
         self.var_excl = tk.BooleanVar(value=s["fullscreen_exclusive"])
         self.var_unlock = tk.BooleanVar(value=s["unlock_all"])
+        self.var_wide = tk.BooleanVar(value=s.get("widescreen", False))
         self.chk = {}
         rows = [("sound", "Sound (music, effects, voices)", self.var_sound, "TEKKEN4_SOUND"),
                 ("debug", "Show the debug panel at start (off for normal play; F1 toggles it in the game)",
@@ -639,19 +640,22 @@ class App(tk.Tk):
                 ("prog", "Progressive scan (sharper picture, no interlace flicker)", self.var_prog, "progressive"),
                 ("excl", "Exclusive fullscreen (a little less input lag; F11 / Alt+Enter toggle)", self.var_excl,
                  "TEKKEN4_FULLSCREEN"),
-                ("unlock", "All characters unlocked (your save is not changed)", self.var_unlock, "TEKKEN4_UNLOCK_ALL")]
+                ("unlock", "All characters unlocked (your save is not changed)", self.var_unlock, "TEKKEN4_UNLOCK_ALL"),
+                ("wide", "Widescreen 16:9 (wider view in fights, HUD and menus stay 4:3; F9 in the game; plays online "
+                 "with 4:3 players)", self.var_wide, "widescreen")]
         for i, (key, text, var, _) in enumerate(rows):
             c = ttk.Checkbutton(f, text=text, variable=var, command=self.on_setting)
             c.grid(row=4 + i, column=0, columnspan=2, sticky="w", pady=4)
             n = ttk.Label(f, text="", style="Muted.TLabel", wraplength=300)
             n.grid(row=4 + i, column=2, sticky="w")
             self.chk[key] = (c, n)
-        ttk.Separator(f).grid(row=10, column=0, columnspan=3, sticky="we", pady=14)
-        ttk.Label(f, text="Game build:").grid(row=11, column=0, sticky="w")
+        r = 4 + len(rows)
+        ttk.Separator(f).grid(row=r, column=0, columnspan=3, sticky="we", pady=14)
+        ttk.Label(f, text="Game build:").grid(row=r + 1, column=0, sticky="w")
         self.lbl_exe = ttk.Label(f, text="", style="Muted.TLabel", wraplength=700)
-        self.lbl_exe.grid(row=11, column=1, columnspan=2, sticky="w", padx=10)
-        ttk.Label(f, text="Saves go to:").grid(row=12, column=0, sticky="w", pady=4)
-        ttk.Label(f, text=core.SAVE_DIR, style="Muted.TLabel").grid(row=12, column=1, columnspan=2, sticky="w", padx=10)
+        self.lbl_exe.grid(row=r + 1, column=1, columnspan=2, sticky="w", padx=10)
+        ttk.Label(f, text="Saves go to:").grid(row=r + 2, column=0, sticky="w", pady=4)
+        ttk.Label(f, text=core.SAVE_DIR, style="Muted.TLabel").grid(row=r + 2, column=1, columnspan=2, sticky="w", padx=10)
         self.update_settings_notes()
 
     def update_settings_notes(self):
@@ -661,7 +665,8 @@ class App(tk.Tk):
         names = core.graphics_env_names()
         self.lbl_res.config(text="-> TEKKEN4_INTERNAL_RES=%s" % core.internal_res(s) +
                             (" (your screen: %dp)" % core.screen_height() if s["resolution"] == "auto" else ""))
-        for key, flag in (("full", "fullscreen"), ("aa", "aa"), ("prog", "progressive")):
+        names = dict(names, widescreen="TEKKEN4_WIDESCREEN")
+        for key, flag in (("full", "fullscreen"), ("aa", "aa"), ("prog", "progressive"), ("wide", "widescreen")):
             c, n = self.chk[key]
             if sup[flag]:
                 c.state(["!disabled"])
@@ -681,6 +686,7 @@ class App(tk.Tk):
         s["sound"], s["debug_panel"] = bool(self.var_sound.get()), bool(self.var_debug.get())
         s["fullscreen"], s["aa"], s["progressive"] = bool(self.var_full.get()), bool(self.var_aa.get()), bool(self.var_prog.get())
         s["fullscreen_exclusive"], s["unlock_all"] = bool(self.var_excl.get()), bool(self.var_unlock.get())
+        s["widescreen"] = bool(self.var_wide.get())
         self.save()
         self.update_settings_notes()
         self.refresh_play()

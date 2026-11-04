@@ -64,6 +64,7 @@ DEFAULTS = {
     "unlock_all": True,        # TEKKEN4_UNLOCK_ALL: all characters unlocked from the start (save file untouched)
     "aa": True,                # TEKKEN4_AA: on = fxaa (the runtime's default), off = off
     "progressive": True,       # TEKKEN4_PROGRESSIVE: the game's own 480p mode (no interlace lines)
+    "widescreen": False,       # TEKKEN4_WIDESCREEN: 16:9 fights (wider view, HUD kept 4:3); works online with any mix
     "runtime_exe": "",         # optional: use this ps2EntryRunner.exe instead of the one the build made
     "last_run": None,          # {"time":..., "seconds":..., "exit":..., "ok":bool, "log":path, "note":...}
     "last_build": None,        # {"time":..., "ok":bool, "dry_run":bool, "log":path}
@@ -528,9 +529,11 @@ def graphics_env_names():
 
 
 def graphics_support(exe):
-    """{'aa': bool, 'progressive': bool, 'fullscreen': bool}: which switches this runtime build knows."""
+    """{'aa': bool, 'progressive': bool, 'fullscreen': bool, 'widescreen': bool}: which switches this build knows."""
     names = graphics_env_names()
-    return {k: bool(exe) and exe_knows(exe, v) for k, v in names.items()}
+    out = {k: bool(exe) and exe_knows(exe, v) for k, v in names.items()}
+    out["widescreen"] = bool(exe) and exe_knows(exe, "TEKKEN4_WIDESCREEN")
+    return out
 
 
 def game_env(s, exe=None):
@@ -559,6 +562,11 @@ def game_env(s, exe=None):
         env[names["aa"]] = "fxaa" if s.get("aa") else "off"
     if sup["progressive"]:
         env[names["progressive"]] = "1" if s.get("progressive") else "0"
+    env.pop("TEKKEN4_WIDESCREEN", None)  # the launcher's setting, never a value left in the shell
+    if sup.get("widescreen"):
+        # Only the picture: the simulation is the same with and without it, so it is the player's own choice online
+        # too (docs/WIDESCREEN.md).
+        env["TEKKEN4_WIDESCREEN"] = "1" if s.get("widescreen") else "0"
     return env
 
 
