@@ -21,12 +21,14 @@ SOURCE_DIRS = ("config", "runtime", "patches")
 ROOT_FILES = (
     "LICENSE", "TEST_ONLINE_DE.txt", "docs/THIRD_PARTY.md", "Tekken4.cmd",
     "launcher/t4_launcher.pyw", "launcher/t4core.py", "launcher/COPIED_FROM_T5DR.txt",
+    "docs/PYTHON_PLAYER_PATHS.md",
 )
 # Folders inside SOURCE_DIRS that the US build never reads, left out by exact path (nothing else is filtered).
 # runtime/pal holds the parked PAL (SCES-50878) camera log: tools/stage_generated.cmd copies only
 # runtime/*_overrides.cpp (not recursive) and tools/gfx_stage.py skips runtime/pal, so a US build never sees it.
 NOT_SHIPPED_DIRS = ("runtime/pal",)
 TOOLS = (
+    "build_game.py", "net_play.py", "net_preflight.py", "player_common.py", "player_python.ps1", "us_tree.py",
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
     "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd",
     "run_game.cmd", "run_lock.ps1", "set_window_title.ps1", "iso_extract.py", "vu1_micro_from_elf.py",

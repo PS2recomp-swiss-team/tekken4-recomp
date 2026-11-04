@@ -33,9 +33,10 @@ class OnlineCommandTests(unittest.TestCase):
         for role in ("host", "join"):
             with self.subTest(role=role):
                 command = core.online_command({}, role, "127.0.0.1", 7401)
-                self.assertEqual("powershell.exe", command[0])
-                self.assertIn("-NoProfile", command)
-                self.assertIn("-NonInteractive", command)
+                self.assertEqual(core.player_python(), command[0])
+                self.assertEqual(["-I", "-u"], command[1:3])
+                self.assertTrue(command[3].endswith("net_play.py"))
+                self.assertFalse(any("powershell" in arg.lower() for arg in command))
                 self.assertEqual("own game.iso", command[command.index("-Iso") + 1])
                 self.assertEqual("7401", command[command.index("-Port") + 1])
                 self.assertEqual("runtime", command[command.index("-BuildDir") + 1])
@@ -68,6 +69,16 @@ class OnlineCommandTests(unittest.TestCase):
             with patch.object(core.os.path, "isfile", return_value=False):
                 with self.assertRaisesRegex(ValueError, "identity"):
                     core.online_command({}, "host")
+
+
+class BuildCommandTests(unittest.TestCase):
+    def test_build_uses_console_python_with_legacy_flags_and_dry_run_never_accepts_license(self):
+        command = core.build_command("own game.iso", dry_run=True, accept_microsoft_license=True)
+        self.assertEqual(command[:3], [core.player_python(), "-I", "-u"])
+        self.assertTrue(command[3].endswith("build_game.py"))
+        self.assertEqual(command[-3:], ["-Iso", "own game.iso", "-WhatIf"])
+        self.assertNotIn("-AcceptMicrosoftLicense", command)
+        self.assertIn("-AcceptMicrosoftLicense", core.build_command("own.iso", accept_microsoft_license=True))
 
 
 class EnvironmentTests(unittest.TestCase):

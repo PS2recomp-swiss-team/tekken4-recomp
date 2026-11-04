@@ -34,7 +34,7 @@ class UsTreeRuleTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.base, ignore_errors=True)
         self.repo = self.base / "tekken4-us"
         (self.repo / "tools").mkdir(parents=True)
-        for name in ("us_tree.cmd", "us_tree.ps1"):
+        for name in ("us_tree.cmd", "us_tree.ps1", "us_tree.py", "player_common.py", "player_python.ps1"):
             shutil.copy2(ROOT / "tools" / name, self.repo / "tools" / name)
         self.plain = self.base / "tekken4-fork-ps2recomp"
         self.own = self.base / "tekken4-fork-ps2recomp_usa"

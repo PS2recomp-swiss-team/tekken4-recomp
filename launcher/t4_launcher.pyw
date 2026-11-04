@@ -509,7 +509,7 @@ class App(tk.Tk):
                 self.post("bline", raw.decode("utf-8", "replace").rstrip("\r\n"))
             code = self.build_proc.wait()
         except OSError as e:
-            self.post("bline", "Could not start PowerShell: %s" % e)
+            self.post("bline", "Could not start Python: %s" % e)
             code = 1
         self.post("bdone", code)
 

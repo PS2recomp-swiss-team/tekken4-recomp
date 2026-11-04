@@ -29,23 +29,14 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from player_common import build_tree
 
 
 def us_tree():
     """tools/us_tree.ps1's rule: TEKKEN4_SRC, else ../tekken4-fork-ps2recomp_usa when it exists, else the plain sibling
     when it is free or on branch t4-us, else ../tekken4-fork-ps2recomp_usa (the plain one is the PAL cousin project's)."""
-    if os.environ.get("TEKKEN4_SRC"):
-        return os.environ["TEKKEN4_SRC"]
-    parent = os.path.dirname(ROOT)
-    own = os.path.join(parent, "tekken4-fork-ps2recomp_usa")
-    plain = os.path.join(parent, "tekken4-fork-ps2recomp")
-    if os.path.isdir(own):
-        return own
-    if not os.path.isdir(os.path.join(plain, ".git")):
-        return plain
-    branch = subprocess.run(["git", "-C", plain, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
-                            text=True).stdout.strip()
-    return plain if branch == "t4-us" else own
+    return str(build_tree(ROOT))
 
 
 def sha1_file(path, chunk=1 << 20):
@@ -145,11 +136,12 @@ def code_id(src, tool_lines):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default=us_tree())
+    ap.add_argument("--src")
     ap.add_argument("--out", help="directory for t4net_build.txt/.json (default: print only)")
     ap.add_argument("--build", help="CMake build directory (default: the parent of --out, else <src>/out/$TEKKEN4_BUILD_DIR or out/runtime)")
     ap.add_argument("--elf", default=os.path.join(ROOT, "game", "disc", "SLUS_203.28"))
     a = ap.parse_args()
+    a.src = a.src or us_tree()
     cmake_build = a.build or (os.path.dirname(os.path.abspath(a.out)) if a.out else
                               os.path.join(a.src, "out", os.environ.get("TEKKEN4_BUILD_DIR") or "runtime"))
     tool_lines = toolchain(cmake_build)

@@ -1,27 +1,16 @@
-# Same rule as tools\us_tree.cmd for PowerShell scripts: dot-source it, then Resolve-UsTree <repo root> gives the US
-# PS2Recomp tree. TEKKEN4_SRC wins; else ..\tekken4-fork-ps2recomp_usa when it exists, or ..\tekken4-fork-ps2recomp when
-# that one is free or on branch t4-us, else ..\tekken4-fork-ps2recomp_usa (to be cloned: the plain name holds the PAL
-# cousin project's tree). An existing tree not on branch t4-us is refused (never build into the PAL tree).
-function Get-UsTreeBranch([string]$Tree)
-{
-    return (git -C $Tree rev-parse --abbrev-ref HEAD 2>$null)
+# US tree compatibility API; all selection and branch checks live in us_tree.py.
+. (Join-Path $PSScriptRoot 'player_python.ps1')
+function Get-UsTreeBranch([string]$Tree) {
+    $py = Get-PlayerPython
+    & $py.Exe @($py.Pre) -I (Join-Path $PSScriptRoot 'us_tree.py') -Branch $Tree
 }
-
-function Resolve-UsTree([string]$Root)
-{
-    $parent = Split-Path -Parent $Root
-    $plain = Join-Path $parent "tekken4-fork-ps2recomp"
-    $own = Join-Path $parent "tekken4-fork-ps2recomp_usa"
-    $tree = if ($env:TEKKEN4_SRC) { $env:TEKKEN4_SRC }
-            elseif (Test-Path $own) { $own }
-            elseif (-not (Test-Path (Join-Path $plain ".git")) -or (Get-UsTreeBranch $plain) -eq "t4-us") { $plain }
-            else { $own }
-    $tree = [IO.Path]::GetFullPath($tree).TrimEnd('\')
-    if (Test-Path (Join-Path $tree ".git")) {
-        $branch = Get-UsTreeBranch $tree
-        if ($branch -ne "t4-us") {
-            throw "$tree is on branch '$branch', not t4-us: not the US PS2Recomp tree. Set TEKKEN4_SRC to the US tree."
-        }
-    }
+function Resolve-UsTree([string]$Root) {
+    $py = Get-PlayerPython
+    $savedConsoleEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $tree = & $py.Exe @($py.Pre) -I (Join-Path $PSScriptRoot 'us_tree.py') -Root $Root
+    } finally { [Console]::OutputEncoding = $savedConsoleEncoding }
+    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the US PS2Recomp tree (see error above).' }
     return $tree
 }

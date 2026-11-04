@@ -342,7 +342,13 @@ def check_prereqs():
 # ------------------------------------------------------------------ build script
 def build_script():
     """The common entry point selects the bundled toolchain using its marker."""
-    return os.path.join(ROOT, "tools", "build_game.ps1")
+    return os.path.join(ROOT, "tools", "build_game.py")
+
+
+def player_python():
+    """Console interpreter beside the launcher's pythonw, including the private release Python."""
+    console = os.path.join(os.path.dirname(sys.executable), "python.exe")
+    return console if os.path.isfile(console) else sys.executable
 
 
 def sysroot_ready():
@@ -372,7 +378,7 @@ def microsoft_license_terms():
 
 
 def build_command(iso, dry_run=False, accept_microsoft_license=False):
-    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", build_script()]
+    cmd = [player_python(), "-I", "-u", build_script()]
     if iso:
         cmd += ["-Iso", iso]
     if dry_run:
@@ -663,8 +669,7 @@ def online_command(s, role, peer="", port=7400):
         raise ValueError("Online needs a local build under <source>/out/<build>/ps2xRuntime. Select that runtime first.")
     if not os.path.isfile(os.path.join(exe_dir, "t4net_build.json")):
         raise ValueError("Online build identity is missing. Finish the local build and see TEST_ONLINE_DE.txt.")
-    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-           os.path.join(ROOT, "tools", "net_play.ps1"), "-Port", str(port), "-Iso", effective_iso(s),
+    cmd = [player_python(), "-I", "-u", os.path.join(ROOT, "tools", "net_play.py"), "-Port", str(port), "-Iso", effective_iso(s),
            "-Src", os.path.dirname(out_dir), "-BuildDir", os.path.basename(build_dir), "-Delay", "auto", "-Sound", "1"]
     return cmd + (["-Host"] if role == "host" else ["-Join", peer])
 

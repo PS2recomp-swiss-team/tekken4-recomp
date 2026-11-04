@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 class ReleaseCatalogTests(unittest.TestCase):
     def test_portable_bundle_contains_online_launcher_dependencies(self):
-        for name in ("net_play.ps1", "net_preflight.ps1", "collect_test_logs.ps1", "t4_buildid.py"):
+        for name in ("net_play.ps1", "net_preflight.ps1", "collect_test_logs.ps1", "t4_buildid.py",
+                     "build_game.py", "net_play.py", "net_preflight.py", "player_common.py",
+                     "player_python.ps1", "us_tree.py", "us_tree.ps1", "us_tree.cmd"):
             with self.subTest(name=name):
                 self.assertIn(name, package_release.TOOLS)
 
@@ -33,7 +35,9 @@ class ReleaseCatalogTests(unittest.TestCase):
         self.assertIn("TEST_ONLINE_DE.txt", test_zip.ROOT_FILES)
         self.assertIn("docs/THIRD_PARTY.md", test_zip.ROOT_FILES)
         self.assertNotIn("make_player_zip.ps1", test_zip.TOOLS)
-        for name in ("build_game.ps1", "net_play.ps1", "net_preflight.ps1", "t4_buildid.py"):
+        for name in ("build_game.ps1", "net_play.ps1", "net_preflight.ps1", "t4_buildid.py",
+                     "build_game.py", "net_play.py", "net_preflight.py", "player_common.py",
+                     "player_python.ps1", "us_tree.py"):
             self.assertIn(name, test_zip.TOOLS)
         for name in test_zip.ROOT_FILES:
             with self.subTest(name=name):
