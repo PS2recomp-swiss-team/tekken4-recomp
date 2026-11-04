@@ -33,3 +33,5 @@ imgui.ini
 
 # Local PS2Recomp clone and its generated game code
 deps/
+# Local runtime dependency source and builds
+/deps/

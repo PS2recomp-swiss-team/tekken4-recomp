@@ -1,0 +1,346 @@
+Subject: [PATCH] Movie audio: preserve host media deadlines and expose device capture
+
+Keep the offline movie's vblank deadlines through host stalls so its independent
+48 kHz playback queue does not starve. The fight catch-up cap is unchanged.
+
+Expose a host-only movie PCM active flag. Add opt-in capture of final device
+callback samples and an explicitly labelled no-endpoint diagnostic host clock,
+plus movie device consumption counters. Muted test runs still execute callbacks.
+No guest state, serialization, hash masks, or net protocol changes.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_audio.h b/ps2xRuntime/include/runtime/ps2_audio.h
+--- a/ps2xRuntime/include/runtime/ps2_audio.h
++++ b/ps2xRuntime/include/runtime/ps2_audio.h
+@@ -51,6 +51,9 @@
+ // No effect when TEKKEN4_SOUND is off (nothing is queued, the mixer is not running).
+ void ps2PushMoviePcm(const int16_t *stereoInterleaved, size_t frames);
+ void ps2ClearMoviePcm();
++// Host-side movie playback/pacing hint, true from the first PCM push until clear.
++// Reading this flag does not inspect or mutate any guest/net state.
++bool ps2MoviePcmActive();
+ // Movie PCM since the last ps2ClearMoviePcm: frames mixed, mixer frames that found the queue short after the first
+ // push (gaps), frames still queued. 48 kHz stereo frames.
+ struct Ps2MoviePcmStats
+diff --git a/ps2xRuntime/src/lib/ps2_audio.cpp b/ps2xRuntime/src/lib/ps2_audio.cpp
+--- a/ps2xRuntime/src/lib/ps2_audio.cpp
++++ b/ps2xRuntime/src/lib/ps2_audio.cpp
+@@ -13,6 +13,8 @@
+ #include <fstream>
+ #include <mutex>
+ #include <vector>
++#include <thread>
++#include <chrono>
+ 
+ namespace
+ {
+@@ -342,6 +344,9 @@
+ // Movie PCM accounting since the last ps2ClearMoviePcm (sync / gap measurement): frames mixed from the queue, and
+ // mixer frames that found the queue short after the first push (a gap in the movie's sound).
+ bool g_movieStarted = false;
++// Host pacing hint only: never serialized or included in the guest/net state.
++std::atomic<bool> g_movieActive{false};
++uint64_t g_movieMixClipped = 0u;
+ uint64_t g_moviePlayedFrames = 0u;
+ uint64_t g_movieMissingFrames = 0u;
+ // Tekken 4 port: the audio device plays the movie's sound from its own copy of the PCM, pulled by the device callback,
+@@ -354,6 +359,9 @@
+ size_t g_movieDevRead = 0u;      // samples already played from the front of g_movieDevPcm
+ bool g_movieDevStarted = false;
+ std::atomic<uint64_t> g_movieDevMissing{0u}; // device frames asked for after the first push that found the copy empty
++std::atomic<uint64_t> g_movieDevPlayed{0u}, g_movieDevTotalMissing{0u};
++std::atomic<size_t> g_movieDevQueued{0u};
++std::atomic<uint64_t> g_movieDevClipped{0u};
+ 
+ namespace
+ {
+@@ -460,9 +468,11 @@
+             m_statMaxRate = std::max(m_statMaxRate, rate);
+             if (m_statPulled < 240000u)
+                 return;
+-            std::fprintf(stderr, "[audio-device] pulled=%zu missing=%zu dropped=%zu level=%zu-%zu rate=%.3f-%.3f movie-missing=%llu\n",
++            std::fprintf(stderr, "[audio-device] pulled=%zu missing=%zu dropped=%zu level=%zu-%zu rate=%.3f-%.3f movie-missing=%llu movie-played=%llu movie-total-missing=%llu movie-queued=%zu\n",
+                          m_statPulled, m_missing, m_dropped, m_statMinLevel, m_statMaxLevel, m_statMinRate,
+-                         m_statMaxRate, static_cast<unsigned long long>(g_movieDevMissing.exchange(0u)));
++                         m_statMaxRate, static_cast<unsigned long long>(g_movieDevMissing.exchange(0u)),
++                         static_cast<unsigned long long>(g_movieDevPlayed.load()),
++                         static_cast<unsigned long long>(g_movieDevTotalMissing.load()), g_movieDevQueued.load());
+             m_statPulled = m_missing = m_dropped = m_statMaxLevel = 0u;
+             m_statMinLevel = SIZE_MAX;
+             m_statMinRate = m_statMaxRate = 1.0;
+@@ -496,16 +506,125 @@
+         for (size_t i = 0; i < n * 2u; ++i)
+         {
+             const int32_t sum = static_cast<int32_t>(out[i]) + static_cast<int32_t>(in[i]);
++            g_movieDevClipped += sum > 32767 || sum < -32768;
+             out[i] = static_cast<int16_t>(sum > 32767 ? 32767 : sum < -32768 ? -32768 : sum);
+         }
+         g_movieDevRead += n * 2u;
++        g_movieDevPlayed += n;
++        g_movieDevQueued = have - n;
+         if (frames > n)
++        {
+             g_movieDevMissing += frames - n;
++            g_movieDevTotalMissing += frames - n;
++        }
+         if (g_movieDevRead >= 48000u * 2u)
+         {
+             g_movieDevPcm.erase(g_movieDevPcm.begin(), g_movieDevPcm.begin() + static_cast<std::ptrdiff_t>(g_movieDevRead));
+             g_movieDevRead = 0u;
+         }
++    }
++
++    // Debug capture of the callback result, after both queues and before master volume.
++    // TEKKEN4_SOUND_WAV remains the producer/guest-clock capture for comparison.
++    class DeviceWavDump
++    {
++    public:
++        void push(const int16_t *pcm, size_t frames)
++        {
++            std::lock_guard<std::mutex> lock(m_mutex);
++            if (m_finished)
++                return;
++            if (!m_tried)
++            {
++                m_tried = true;
++                const char *path = std::getenv("TEKKEN4_AUDIO_DEVICE_WAV");
++                if (!path || !*path)
++                    return;
++                std::error_code ec;
++                const std::filesystem::path file(path);
++                if (file.has_parent_path())
++                    std::filesystem::create_directories(file.parent_path(), ec);
++                m_file.open(file, std::ios::binary | std::ios::trunc);
++                if (!m_file)
++                {
++                    std::fprintf(stderr, "[audio-device] wav open failed %s\n", path);
++                    return;
++                }
++                const char header[44] = {};
++                m_file.write(header, sizeof(header));
++                patchHeader();
++                std::fprintf(stderr, "[audio-device] wav %s (before master volume)\n", path);
++            }
++            if (!m_file)
++                return;
++            m_file.write(reinterpret_cast<const char *>(pcm), static_cast<std::streamsize>(frames * 4u));
++            m_frames += frames;
++            m_sinceFlush += frames;
++            if (m_sinceFlush >= 48000u)
++            {
++                patchHeader();
++                m_file.flush();
++                m_sinceFlush = 0u;
++            }
++        }
++
++        ~DeviceWavDump() { finish(); }
++
++        void finish()
++        {
++            std::lock_guard<std::mutex> lock(m_mutex);
++            if (!m_finished && m_file.is_open())
++            {
++                patchHeader();
++                m_file.flush();
++                m_file.close();
++            }
++            m_finished = true;
++        }
++
++    private:
++        void patchHeader()
++        {
++            uint8_t h[44] = {};
++            const auto le32 = [&h](size_t offset, uint32_t value) {
++                for (size_t b = 0; b < 4u; ++b)
++                    h[offset + b] = static_cast<uint8_t>(value >> (b * 8u));
++            };
++            const uint32_t bytes = static_cast<uint32_t>(std::min<uint64_t>(m_frames * 4u, 0xFFFFFFD8u));
++            std::memcpy(h, "RIFF", 4u);
++            le32(4u, 36u + bytes);
++            std::memcpy(h + 8u, "WAVEfmt ", 8u);
++            le32(16u, 16u);
++            h[20] = 1u; h[22] = 2u;
++            le32(24u, 48000u); le32(28u, 192000u);
++            h[32] = 4u; h[34] = 16u;
++            std::memcpy(h + 36u, "data", 4u);
++            le32(40u, bytes);
++            const auto end = m_file.tellp();
++            m_file.seekp(0);
++            m_file.write(reinterpret_cast<const char *>(h), sizeof(h));
++            m_file.seekp(end);
++        }
++
++        std::mutex m_mutex;
++        std::ofstream m_file;
++        bool m_tried = false, m_finished = false;
++        uint64_t m_frames = 0u, m_sinceFlush = 0u;
++    };
++    bool deviceWavEnabled()
++    {
++        static const bool enabled = []() {
++            const char *path = std::getenv("TEKKEN4_AUDIO_DEVICE_WAV");
++            return path && *path;
++        }();
++        return enabled;
++    }
++
++    DeviceWavDump &deviceWavDump()
++    {
++        // The audio callback may outlive ordinary static destructors. MixedOutput explicitly closes the file.
++        static DeviceWavDump *dump = new DeviceWavDump();
++        return *dump;
+     }
+ 
+     void onDeviceRequest(void *buffer, unsigned int frames)
+@@ -513,6 +632,8 @@
+         int16_t *out = static_cast<int16_t *>(buffer);
+         deviceQueue().pull(out, frames);
+         mixDeviceMovie(out, frames);
++        if (deviceWavEnabled())
++            deviceWavDump().push(out, frames);
+     }
+ #endif
+ 
+@@ -549,6 +670,13 @@
+ 
+         ~MixedOutput()
+         {
++#if !defined(PLATFORM_VITA)
++            m_testClockStop = true;
++            if (m_testClock.joinable())
++                m_testClock.join();
++            if (deviceWavEnabled())
++                deviceWavDump().finish();
++#endif
+             std::lock_guard<std::mutex> lock(m_mutex);
+             if (m_wav)
+             {
+@@ -619,11 +747,38 @@
+ #if !defined(PLATFORM_VITA)
+         void pumpDevice(const int16_t *pcm, size_t frames)
+         {
+-            if (!m_deviceGaveUp && !m_streamOn && IsAudioDeviceReady())
++            // Explicit diagnostic clock for machines without an audio endpoint. It exercises the identical
++            // callback and host queues at 48 kHz independently of the guest; this is not a hardware capture.
++            if (!m_streamOn && !m_testClockOn && !IsAudioDeviceReady())
++            {
++                const char *testClock = std::getenv("TEKKEN4_AUDIO_TEST_CLOCK");
++                if (testClock && testClock[0] == '1' && testClock[1] == '\0')
++                {
++                    m_testClockOn = true;
++                    m_testClock = std::thread([this]() {
++                        int16_t block[480u * 2u];
++                        auto deadline = std::chrono::steady_clock::now();
++                        while (!m_testClockStop.load())
++                        {
++                            deadline += std::chrono::milliseconds(10);
++                            std::this_thread::sleep_until(deadline);
++                            if (m_testClockStop.load())
++                                break;
++                            onDeviceRequest(block, 480u);
++                        }
++                    });
++                    std::fprintf(stderr, "[audio-device] diagnostic host clock 48000 Hz, 480 frames/10 ms; no hardware endpoint\n");
++                }
++            }
++            if (!m_deviceGaveUp && !m_streamOn && !m_testClockOn && IsAudioDeviceReady())
+             {
+                 m_stream = LoadAudioStream(48000, 16, 2);
+                 if (m_stream.sampleRate == 48000)
+                 {
++                    // Keep diagnostic callbacks running while background test runs are inaudible.
++                    const char *mute = std::getenv("PS3_AUDIO_MUTE");
++                    if (mute && mute[0] == '1' && mute[1] == '\0')
++                        SetMasterVolume(0.0f);
+                     SetAudioStreamCallback(m_stream, &onDeviceRequest);
+                     PlayAudioStream(m_stream);
+                     m_streamOn = true;
+@@ -632,10 +787,13 @@
+                 else
+                     m_deviceGaveUp = true;
+             }
+-            if (m_streamOn)
++            if (m_streamOn || m_testClockOn)
+                 deviceQueue().push(pcm, frames);
+         }
+ 
++        std::thread m_testClock;
++        std::atomic<bool> m_testClockStop{false};
++        bool m_testClockOn = false;
+         AudioStream m_stream{};
+         bool m_streamOn = false;
+         bool m_deviceGaveUp = false;
+@@ -673,6 +831,7 @@
+                 for (size_t i = 0; i < n * 2u; ++i)
+                 {
+                     const int32_t sum = static_cast<int32_t>(mixed[i]) + static_cast<int32_t>(g_moviePcm[i]);
++                    g_movieMixClipped += sum > 32767 || sum < -32768;
+                     mixed[i] = static_cast<int16_t>(sum > 32767 ? 32767 : sum < -32768 ? -32768 : sum);
+                 }
+                 g_moviePcm.erase(g_moviePcm.begin(), g_moviePcm.begin() + static_cast<std::ptrdiff_t>(n * 2u));
+@@ -712,6 +871,8 @@
+     g_movieDevPcm.insert(g_movieDevPcm.end(), stereoInterleaved, stereoInterleaved + frames * 2u);
+     if ((g_movieDevPcm.size() - g_movieDevRead) / 2u > kMaxFrames)
+         g_movieDevRead = g_movieDevPcm.size() - kMaxFrames * 2u;
++    g_movieDevQueued = (g_movieDevPcm.size() - g_movieDevRead) / 2u;
++    g_movieActive.store(true, std::memory_order_relaxed);
+ }
+ 
+ void ps2ClearMoviePcm()
+@@ -719,12 +880,31 @@
+     std::lock_guard<std::mutex> lock(g_movieMutex);
+     g_moviePcm.clear();
+     g_movieStarted = false;
++    g_movieActive.store(false, std::memory_order_relaxed);
+     g_moviePlayedFrames = 0u;
+     g_movieMissingFrames = 0u;
+     std::lock_guard<std::mutex> deviceLock(g_movieDevMutex);
++    if (g_movieDevStarted && std::getenv("TEKKEN4_AUDIO_STATS"))
++        std::fprintf(stderr, "[audio-movie-device] played=%llu missing=%llu queued=%zu clipped-samples=%llu producer-clipped-samples=%llu\n",
++                     static_cast<unsigned long long>(g_movieDevPlayed.load()),
++                     static_cast<unsigned long long>(g_movieDevTotalMissing.load()),
++                     (g_movieDevPcm.size() - g_movieDevRead) / 2u,
++                     static_cast<unsigned long long>(g_movieDevClipped.load()),
++                     static_cast<unsigned long long>(g_movieMixClipped));
+     g_movieDevPcm.clear();
+     g_movieDevRead = 0u;
+     g_movieDevStarted = false;
++    g_movieDevMissing = 0u;
++    g_movieDevPlayed = 0u;
++    g_movieDevTotalMissing = 0u;
++    g_movieDevQueued = 0u;
++    g_movieDevClipped = 0u;
++    g_movieMixClipped = 0u;
++}
++
++bool ps2MoviePcmActive()
++{
++    return g_movieActive.load(std::memory_order_relaxed);
+ }
+ 
+ Ps2MoviePcmStats ps2MoviePcmStats()
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "ps2_log.h"
+ #include "ps2_runtime.h"
++#include "runtime/ps2_audio.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "ps2_runtime_macros.h"
+ #include "runtime/ps2_input_latency.h"
+@@ -2031,7 +2032,11 @@
+                     const char *v = std::getenv("PS2X_VBLANK_CATCHUP");
+                     return v && *v ? std::atoi(v) : 2;
+                 }();
+-                if (!m_cycleOrderedEvents && catchUpFrames > 0)
++                // Movie PCM is consumed by an independent host audio clock. Rebasing its
++                // vblank chain after each hitch permanently loses media time and starves
++                // that queue, even while the guest-clock WAV reports no gaps. Preserve
++                // the deadlines until the offline movie closes; fights retain the cap.
++                if (!m_cycleOrderedEvents && catchUpFrames > 0 && !ps2MoviePcmActive())
+                 {
+                     const auto floor = std::chrono::steady_clock::now() - kVBlankPeriod * catchUpFrames;
+                     if (hostBase < floor)
