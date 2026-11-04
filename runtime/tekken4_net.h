@@ -133,6 +133,9 @@ namespace t4net
     void pushHash(uint32_t frame, uint64_t hash);
     bool takeMismatch(uint32_t *frame, uint64_t *local, uint64_t *remote);
     uint32_t hashesCompared();
+    // One hashed frame's comparison: 1 = equal on both sides, -1 = different, 0 = not decided yet,
+    // 2 = passed without a comparison (no hash of that frame from the peer within the window).
+    int hashAgreement(uint32_t frame);
     uint32_t hashMismatches();
 
     struct Stats

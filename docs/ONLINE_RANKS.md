@@ -14,15 +14,11 @@ Host/Join and explicitly says there is no lobby or ranked play. Neither it nor
 The shared OpenRecomp-FGC launcher and private lobby sources are absent from
 this copy. This document records requirements, not a working rank feature.
 
-The historical [lobby notes](LOBBY.md) say a result file is pending. More
-precisely, [the current session report](../runtime/tekken4_online_result.h)
-opts in through `TEKKEN4_NET_RESULT` and is called by
-[the rollback code](../runtime/tekken4_rollback_overrides.cpp). It writes
-diagnostics with `winner: null`, `score: null` and
-`match_result_proven: false`. Its source explicitly has no game match-end
-detector. A finished report means session reporting ended; it does not prove
-a match finished or who won. Its latest sampled hash does not prove peer
-agreement. This path was inspected, not built or run here.
+The historical [lobby notes](LOBBY.md) say a result file is pending. Since 2026-11-04 the online game writes a
+proven result itself ([MATCH_RESULT_T4.md](MATCH_RESULT_T4.md)): winner, round score, fighters and stage, decided
+on frames both games had confirmed, with the compared state hash. The lobby client reports it with source `game`
+and the T4 server stores it (history, per-fighter statistics); the manual answer stays as the fallback. Ranked
+T4 (ratings from these results) is still off on the server.
 
 ## Implementation boundary
 

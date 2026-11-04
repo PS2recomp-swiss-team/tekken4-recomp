@@ -1,7 +1,12 @@
-// Tekken 4 online session report. No game-state address is read here.
+// Tekken 4 online session report + the match result. No game-state address is read here: the match comes from
+// tekken4_match_state.h (decided on confirmed frames only) through matchEnded().
 // TEKKEN4_NET_RESULT=<path> opts in; unset/empty/0 disables it. One path per process.
-// Winner, score and match end remain unknown until the state probe proves them.
+// The first match of the session is the lobby match: its result is written once its deciding frame is confirmed
+// and the state hash of the first hashed frame at or after it has been compared with the peer's (or after a bound).
 #pragma once
+
+#include "tekken4_match_state.h"
+#include <vector>
 
 #include <cmath>
 #include <chrono>
@@ -47,6 +52,15 @@ namespace tekken4_online_result
         uint64_t frame = 0, hashFrame = 0, hash = 0;
         double fps = 0;
         std::string reason = "session_configured";
+        // the match (first one of the session)
+        std::string matchId;              // TEKKEN4_NET_MATCH (the lobby's match id), "" offline
+        bool haveMatch = false, matchFinal = false;
+        tekken4_match::MatchEnd match;
+        uint64_t matchHashTarget = 0;     // first hashed frame >= the deciding frame
+        bool haveMatchHash = false;
+        uint64_t matchHash = 0;
+        int matchHashAgreement = 0;       // t4net::hashAgreement of that frame (1 equal, -1 different, 0/2 unknown)
+        uint32_t desync = 0, hashesCompared = 0;
     };
 
     // The rollback thread owns this cache. The exit callback uses only cached host
@@ -90,13 +104,55 @@ namespace tekken4_online_result
             return false;
         std::ostringstream out;
         out.imbue(std::locale::classic());
-        out << "{\n  \"schema\": \"tekken4-online-session-v1\",\n"
+        // winner 0 = P1, 1 = P2, null = draw or no result: read it only when match_result_proven is true.
+        const bool proven = s.matchFinal && s.match.consistent;
+        out << "{\n  \"schema\": \"tekken4-online-session-v2\",\n"
                "  \"run_id\": " << jsonString(s.runId) << ",\n"
+               "  \"match\": " << (s.matchId.empty() ? std::string("null") : jsonString(s.matchId)) << ",\n"
                "  \"reporting_finished\": " << (s.ended ? "true" : "false") << ",\n"
                "  \"connected\": " << (s.connected ? "true" : "false") << ",\n"
                "  \"local_slot\": " << (s.slot >= 0 ? std::to_string(s.slot + 1) : "null") << ",\n"
-               "  \"winner\": null,\n  \"score\": null,\n  \"match_result_proven\": false,\n"
-               "  \"frame\": " << (s.haveFrame ? std::to_string(s.frame) : "null") << ",\n"
+               "  \"match_result_proven\": " << (proven ? "true" : "false") << ",\n"
+               "  \"winner\": " << (proven && s.match.winner >= 0 ? std::to_string(s.match.winner) : "null") << ",\n"
+               "  \"draw\": " << (proven && s.match.winner < 0 ? "true" : "false") << ",\n"
+               "  \"score\": ";
+        if (proven)
+            out << "[" << s.match.score[0] << ", " << s.match.score[1] << "]";
+        else
+            out << "null";
+        if (s.matchFinal)
+        {
+            const tekken4_match::MatchEnd &m = s.match;
+            out << ",\n  \"chars\": [" << m.chars[0] << ", " << m.chars[1] << "],\n"
+                   "  \"costumes\": [" << m.costumes[0] << ", " << m.costumes[1] << "],\n"
+                   "  \"stage\": " << m.stage << ",\n"
+                   "  \"rounds_to_win\": " << m.roundsToWin << ",\n"
+                   "  \"match_code\": " << m.code << ",\n"
+                   "  \"match_start_frame\": " << m.startFrame << ",\n"
+                   "  \"match_end_frame\": " << m.frame << ",\n"
+                   "  \"frames\": " << m.frame << ",\n"
+                   "  \"rounds\": [";
+            for (size_t i = 0; i < m.rounds.size(); ++i)
+            {
+                const tekken4_match::Round &r = m.rounds[i];
+                out << (i ? ", " : "") << "{\"frame\": " << r.frame << ", \"winner\": "
+                    << (r.winner >= 0 ? std::to_string(r.winner) : std::string("null")) << ", \"by\": \""
+                    << (r.timeOut ? "time" : "ko") << "\", \"health\": [" << (r.health[0] >> 16) << ", "
+                    << (r.health[1] >> 16) << "]}";
+            }
+            out << "],\n  \"hash\": ";
+            if (s.haveMatchHash)
+            {
+                char hash[17];
+                std::snprintf(hash, sizeof(hash), "%016llx", static_cast<unsigned long long>(s.matchHash));
+                out << "\"" << hash << "\",\n  \"hash_frame\": " << s.matchHashTarget << ",\n  \"hash_agreed\": "
+                    << (s.matchHashAgreement == 1 ? "true" : (s.matchHashAgreement == -1 ? "false" : "null"));
+            }
+            else
+                out << "null,\n  \"hash_frame\": null,\n  \"hash_agreed\": null";
+            out << ",\n  \"desync\": " << s.desync << ",\n  \"hashes_compared\": " << s.hashesCompared;
+        }
+        out << ",\n  \"frame\": " << (s.haveFrame ? std::to_string(s.frame) : "null") << ",\n"
                "  \"final_hash\": ";
         if (s.haveHash)
         {
@@ -116,10 +172,7 @@ namespace tekken4_online_result
             out << "null";
         out << ",\n  \"fps_basis\": \"live frame intervals per wall second since handshake; includes waits; excludes resimulation; not fight-only\",\n"
                "  \"reason\": " << jsonString(s.reason) << ",\n"
-               "  \"reason_detail\": " << jsonString(s.detail) << ",\n"
-               "  \"TODO_winner\": \"Probe must confirm winner field, width, P1/P2/draw encoding and terminal-state lifetime.\",\n"
-               "  \"TODO_score\": \"Probe must confirm both round-win counters, widths, increment timing and reset lifetime.\",\n"
-               "  \"TODO_match_end\": \"Probe must distinguish round end, match end, rematch/select and abort; no game match-end detector exists.\"\n}\n";
+               "  \"reason_detail\": " << jsonString(s.detail) << "\n}\n";
 
         // Write beside the destination, then replace it. A failed replacement
         // leaves the previous report intact and retains the temporary file.
@@ -162,6 +215,8 @@ namespace tekken4_online_result
             return;
         s.reason = "process_exit";
         s.ended = true;
+        if (s.haveMatch)
+            s.matchFinal = true; // decided on confirmed frames; the hash comparison just did not finish
         write();
     }
 
@@ -176,6 +231,8 @@ namespace tekken4_online_result
             return;
         s.path = path;
         s.slot = slot;
+        if (const char *match = std::getenv("TEKKEN4_NET_MATCH"))
+            s.matchId = std::string(match).substr(0, 64);
         // Local invocation identity only, not a shared match/session identifier.
         std::ostringstream id;
         id.imbue(std::locale::classic());
@@ -212,11 +269,47 @@ namespace tekken4_online_result
     inline void confirmedHash(uint64_t frame, uint64_t hash, bool includesIop)
     {
         State &s = state();
-        if (!enabled() || s.ended || (s.haveHash && frame < s.hashFrame))
+        if (!enabled())
+            return;
+        if (s.haveMatch && !s.haveMatchHash && frame == s.matchHashTarget)
+        {
+            s.haveMatchHash = true;
+            s.matchHash = hash;
+        }
+        if (s.ended || (s.haveHash && frame < s.hashFrame))
             return;
         s.hashFrame = frame;
         s.hash = hash;
         s.hashIncludesIop = includesIop;
         s.haveHash = true;
+    }
+
+    // The session's first match ended on a confirmed frame. hashEvery: the netplay hash interval (0 = none).
+    inline void matchEnded(const tekken4_match::MatchEnd &end, uint64_t hashEvery)
+    {
+        State &s = state();
+        if (!enabled() || s.haveMatch)
+            return;
+        s.haveMatch = true;
+        s.match = end;
+        s.matchHashTarget = hashEvery ? (end.frame + hashEvery - 1u) / hashEvery * hashEvery : 0u;
+    }
+
+    inline bool matchPending() { return enabled() && state().haveMatch && !state().matchFinal; }
+    inline uint64_t matchHashTarget() { return state().matchHashTarget; }
+    inline bool matchHashKnown() { return state().haveMatchHash; }
+    inline uint64_t matchFrame() { return state().match.frame; }
+
+    // Writes the match result (once). agreement: t4net::hashAgreement(target), desync/compared: totals so far.
+    inline void finalizeMatch(int agreement, uint32_t desync, uint32_t compared)
+    {
+        State &s = state();
+        if (!enabled() || !s.haveMatch || s.matchFinal)
+            return;
+        s.matchFinal = true;
+        s.matchHashAgreement = agreement;
+        s.desync = desync;
+        s.hashesCompared = compared;
+        write();
     }
 }

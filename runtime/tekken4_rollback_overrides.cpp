@@ -113,6 +113,7 @@
 #include "runtime/ps2_rollback_cuts.h"
 #include "Stubs/Pad.h"
 #include "Stubs/SIF.h"
+#include "tekken4_match_state.h"
 #include "tekken4_state_probe.h"
 #if __has_include("tekken4_net.h") && defined(PS2X_ROLLBACK_IOP_STATE)
 #include "tekken4_net.h"
@@ -343,6 +344,9 @@ namespace tekken4_rollback
     Config g_cfg;
     PS2Runtime *g_runtime = nullptr;
     uint64_t g_frame = 0;  // logical frame = boundary count since boot; restored with the snapshot
+    // Match state (round wins, health, fighters; read only). Fed at every boundary visit; decided on confirmed
+    // frames only (docs/MATCH_RESULT_T4.md). Host state, outside the snapshots: a rollback overwrites samples.
+    tekken4_match::Tracker g_match;
     uint64_t g_wallFrames = 0;
     FILE *g_log = nullptr;
     FILE *g_pagesLog = nullptr;
@@ -1531,12 +1535,47 @@ namespace tekken4_rollback
                                 { return g_hw.todo.empty() && g_hw.busySlot < 0; });
         }
         hashCollect();
+        if (tekken4_online_result::matchPending())
+        {
+            const int agreement = g_cfg.hashEvery && tekken4_online_result::matchHashKnown()
+                                      ? t4net::hashAgreement(static_cast<uint32_t>(tekken4_online_result::matchHashTarget()))
+                                      : 0;
+            tekken4_online_result::finalizeMatch(agreement, t4net::hashMismatches(), t4net::hashesCompared());
+        }
         if (g_np.started)
         {
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_np.runT0).count();
             tekken4_online_result::liveFrame(frame, seconds > 0.0 ? static_cast<double>(g_np.runFrames) / seconds : 0.0);
         }
         tekken4_online_result::finish(reason, frame, detail);
+    }
+
+    // A match ended on a confirmed frame (tekken4_match_state.h). The first one is the lobby match: it goes to the
+    // result file once the state hash of the first hashed frame at or after it has been compared with the peer's
+    // (npMatchResultTick), so both PCs report the same result with the same compared hash.
+    void npMatchEnded(const tekken4_match::MatchEnd &end)
+    {
+        t4net::note("match ended at frame %llu: %s %d-%d", static_cast<unsigned long long>(end.frame),
+                    end.winner == 0 ? "P1 won" : (end.winner == 1 ? "P2 won" : "draw"), end.score[0], end.score[1]);
+        tekken4_online_result::matchEnded(end, g_cfg.hashEvery);
+    }
+
+    void npMatchResultTick(uint64_t f)
+    {
+        if (!tekken4_online_result::matchPending())
+            return;
+        const uint64_t target = tekken4_online_result::matchHashTarget();
+        int agreement = 0;
+        if (g_cfg.hashEvery && tekken4_online_result::matchHashKnown())
+            agreement = t4net::hashAgreement(static_cast<uint32_t>(target));
+        // decided (equal / different / passed without the peer's hash), no hashes at all, or 10 s after the match
+        const bool timeUp = f > tekken4_online_result::matchFrame() + 600u;
+        if (agreement != 0 || !g_cfg.hashEvery || timeUp)
+        {
+            tekken4_online_result::finalizeMatch(agreement, t4net::hashMismatches(), t4net::hashesCompared());
+            std::fprintf(g_log, "MATCHRESULT written f=%" PRIu64 " hash_frame=%" PRIu64 " agreement=%d desync=%u\n", f,
+                         target, agreement, t4net::hashMismatches());
+        }
     }
 
     // Both ports during a netplay frame: the inputs decided at its boundary (npDecideInputs).
@@ -2867,6 +2906,13 @@ namespace tekken4_rollback
             hashSubmit(g, slot, g_np.ringCycle[slot]);
         }
         g_np.hashNext = std::max(g_np.hashNext, upto + 1u);
+        // Round / match decisions on the same confirmed frames (no rollback can reach them any more).
+        if (g_match.confirm(upto, g_log))
+        {
+            npMatchEnded(g_match.endEvent());
+            std::fflush(g_log);
+        }
+        npMatchResultTick(f);
         uint32_t badFrame = 0;
         uint64_t mine = 0, theirs = 0;
         while (t4net::takeMismatch(&badFrame, &mine, &theirs))
@@ -3179,6 +3225,16 @@ namespace tekken4_rollback
         // its resim flag. Drawn tails and frames without render cuts are still repeated simulation.
         if (!frameIsResimulating() && tekken4_state_probe::enabled())
             tekken4_state_probe::sample(g_frame, g_runtime->memory().getRDRAM(), false);
+        // Match state: netplay samples every visit (a re-simulated visit replaces the mispredicted sample) and
+        // decides in npBoundary on confirmed frames; offline every frame is final at once; the self-test's
+        // repeated and wrong-input passes and selfnet's predictions are never sampled.
+        if (g_cfg.mode == Mode::Net)
+            g_match.observe(g_frame, g_runtime->memory().getRDRAM());
+        else if ((g_cfg.mode == Mode::Measure || g_cfg.mode == Mode::Test) && !frameIsResimulating())
+        {
+            g_match.observe(g_frame, g_runtime->memory().getRDRAM());
+            g_match.confirm(g_frame, g_log);
+        }
         std::vector<uint64_t> pages;
         const ps2_rollback::StateHash hash =
             g_cfg.frameHash ? ps2_rollback::hashState(*g_runtime, g_cfg.masks, &pages) : ps2_rollback::StateHash{};
@@ -3254,6 +3310,12 @@ namespace tekken4_rollback
         }
         if (std::find(g_cfg.dumpFrames.begin(), g_cfg.dumpFrames.end(), g_frame) != g_cfg.dumpFrames.end())
             dumpFrame(g_frame);
+#ifdef TEKKEN4_NETPLAY
+        // offline runs: TEKKEN4_NET_SHOTS pictures at exact frames too (net_shot_f<frame>.bmp; netplay takes them in
+        // npBoundary at the live frame)
+        if (g_cfg.mode == Mode::Measure && !g_np.shots.empty())
+            npShots(g_frame);
+#endif
 
         if (g_cfg.mode == Mode::Test)
             testBoundary(hash, pages, eeMs);
@@ -3401,6 +3463,15 @@ namespace tekken4_rollback
         }
         g_runtime = &runtime;
         g_start = std::chrono::steady_clock::now();
+#ifdef TEKKEN4_NETPLAY
+        if (g_cfg.mode == Mode::Measure)
+            if (const char *v = std::getenv("TEKKEN4_NET_SHOTS"))
+            {
+                for (const std::string &item : split(v, ','))
+                    g_np.shots.push_back(parseNumber(item));
+                std::sort(g_np.shots.begin(), g_np.shots.end());
+            }
+#endif
         g_cfg.masks = kBuiltinMasks;
         if (const char *masks = std::getenv("TEKKEN4_RB_MASK"))
             for (const std::string &item : split(masks, ','))

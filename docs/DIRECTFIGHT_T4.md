@@ -19,8 +19,8 @@ was copied for this work. Its MIT direct-fight implementation was read for behav
 | Select availability | `runtime/tekken4_unlock_overrides.cpp`, discovery comments and `kAvailableCheck` | Roster/costume table `0x0030e100`: 112 records of 28 bytes, u16 fighter at +0, u16 costume at +2, availability callback at +24. `FUN_001e2da0` invokes the callback; `FUN_001e2cc0` builds the selectable mask at gp-0x52d4. These are roster metadata, not each side's committed battle selection. |
 | Unlock/profile | Same file: callback `0x001ec350`, profile check `FUN_001ec0a0` | Availability depends on bit `<costume>` in byte `0x0036c2b8 + 0x60 + fighter`. The existing override returns 1 without modifying the profile. This is not a health, score, winner or mode field. |
 | Mode manager / select transition | `docs/ROLLBACK_NEXT.md`, “T4 discovery required” and “Session, result and replay contracts” | The game teardown/setup path, current/pending mode fields and transition values are still TODO. No address is proven for direct-fight entry. |
-| Round / winner / score | Same discovery section; no verified implementation in the runtime | Round phase, deciding boundary, winner encoding and two-side scores are TODO. Do not derive score from the winner or configured rounds-to-win. |
-| Health | No verified field in the inspected CSV, docs, overrides or rollback code | Both players' live health fields, widths, encodings, bases/strides, KO/timeout rules and reset timing are TODO. A HUD drain value may lag true health. |
+| Round / winner / score | [MATCH_RESULT_T4.md](MATCH_RESULT_T4.md) (2026-11-04) | Round wins player +0x8E, rounds to win 0x357d74, the game's match decision 0x2a8bf8+0x2C (FUN_001bbe70 / FUN_001bbb28), proven in scripted fights. |
+| Health | [MATCH_RESULT_T4.md](MATCH_RESULT_T4.md) (2026-11-04) | Player +0x6BC (16.16 fixed, 165.0 full), read by the round logic FUN_001bcb08; round timer 0x356064. |
 | Broad search range | `runtime/tekken4_overrides.cpp`: existing debug RAM dump at `0x00300000..0x00500000` | This was a debug comparison range containing rodata/bss/buffers. It is not evidence that gameplay fields lie there. |
 | Confirmed hash | `tekken4_rollback_overrides.cpp`: `npBoundary`, `hashSubmit`, `hashCollect`, `netHashOf` | Existing net hash jobs use snapshots whose earlier inputs are confirmed after pending corrections. A collected hash can lag the live frame. It is not necessarily the match-deciding hash or proof that the peer compared it. |
 | Frame rate | Same file: `npFrameTiming`, `npSummary` | Host live-boundary rate is available. Resimulated boundaries are not new live frames; stalls and time-sync waits affect elapsed time. This is not displayed-picture FPS or fight-only FPS. |
@@ -187,51 +187,12 @@ many candidates; it does not guarantee every semantic field has been found.
 
 ## Online-session result file
 
-Set `TEKKEN4_NET_RESULT=<path>` for an online process. Unset, empty or `0` is off. The parent
-directory must already exist. Use a unique path per process/session; concurrent writers must not
-share a destination. Successful configuration/start writes an incomplete record so a later forced kill cannot
-leave a previous session's win at that path. A write failure can leave an older destination intact;
-consumers must check run identity and must not accept this incomplete schema as a match win. Updates use a sibling `.tmp` file and replacement;
-failed writes are logged and do not alter simulation. Windows paths use the current narrow API.
-
-Schema `tekken4-online-session-v1` contains a local `run_id`, `connected`, `local_slot` (1=P1 host,
-2=P2 join, null unknown), `winner: null`, `score: null`, `match_result_proven: false`, current `frame`,
-`final_hash`, `hash_scope`, `hash_includes_iop_state`, `fps`, `reason`, `reason_detail` and named `TODO_winner`, `TODO_score`,
-`TODO_match_end`. The local clock-based run ID is not a negotiated match/session identity.
-`reporting_finished` says this report was finalized; it does not prove the game or process stopped.
-
-`final_hash` is null until an existing confirmed hash job has been collected; otherwise it contains
-hex value, frame, `kind: latest_confirmed_sampled_boundary` and `peer_agreement_proven: false`.
-It may precede the report boundary and has not been tied to a proven match-ending decision. The
-normal net hash covers RDRAM, scratchpad, VU0 data and EE cycle; `hash_includes_iop_state` records
-whether IOP state was enabled for that sample (default on in netplay). VU1 and GS
-output are excluded; full EE context/scheduler/device state and the complete saved IOP state are
-also not covered by this network hash. It must not be presented as complete-state or peer-equality
-proof. See `netHashOf` and `docs/ROLLBACK_NEXT.md`, “RNG and hashes”.
-
-`fps` measures host live-boundary progress divided by elapsed session wall time since handshake;
-resimulated passes do not add live frames, while stalls and time-sync waits add time. It is neither
-fight-only nor presented-picture FPS. Missing timing is null. Reasons include `rollback_log_failed`,
-`configure_failed`, `handshake_failed`, `desync`, `peer_lost`, `frame_limit` and
-`process_exit`, with detail where available; they describe transport/harness/process lifecycle.
-`frame_limit` is `TEKKEN4_NET_END`, not game match completion. On desync the report can finish
-while gameplay continues. Finalization drains already submitted confirmed hash jobs for at most
-250 ms before collection; this neither guarantees the latest boundary nor waits for peer agreement. A normal exit has a cached `process_exit` fallback; crashes,
-forced termination and power loss cannot guarantee a final update, so an initial pending record
-can remain. No new winner, health or score address is read by the result writer.
-
-TODOs required before winner/score can become non-null:
-
-- **TODO_MODE_PHASE:** prove fight, round-end, match-end, select, pending transition and safe teardown;
-  exclude stale match-over state on re-entry.
-- **TODO_HEALTH:** establish both live health fields and reset/KO/timeout behavior; do not consume HUD
-  animation or infer a final winner from health alone.
-- **TODO_WINNER_SCORE:** prove winner/draw encoding, separate round and match decisions, and both actual
-  round counters through 3-0/3-1/3-2, timeout, double KO and rematch resets.
-- **TODO_DECIDING_HASH:** retain the corrected confirmed deciding boundary and require an exact peer
-  equal-hash receipt for that frame. Aggregate comparison counts and a later sampled hash are insufficient.
-- **TODO_MATCH_ID:** negotiate fresh session/match/setup identity and carry it through commands/results;
-  a stale previous file must not be accepted for a new opponent.
+Since 2026-11-04 the online game writes the match result itself: see [MATCH_RESULT_T4.md](MATCH_RESULT_T4.md)
+(addresses with their evidence, how a result is decided on confirmed frames, the file schema
+`tekken4-online-session-v2`). Set `TEKKEN4_NET_RESULT=<path>` for an online process (unset, empty or `0` is off;
+the parent directory must exist; one path per process). `TEKKEN4_NET_MATCH` names the lobby match in the file.
+The session fields of v1 stay (`run_id`, `connected`, `local_slot`, `frame`, `final_hash`, `fps`, `reason`,
+`reason_detail`, `reporting_finished`); `winner`/`score` are filled only when `match_result_proven` is true.
 
 ## Direct-fight plan after discovery
 

@@ -137,7 +137,7 @@ def code_id(src, tool_lines):
             h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     runner = os.path.join(src, "ps2xRuntime", "src", "runner")
     for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h",
-                    "tekken4_state_probe.h", "tekken4_online_result.h"):
+                    "tekken4_state_probe.h", "tekken4_online_result.h", "tekken4_match_state.h"):
         for path in sorted(glob.glob(os.path.join(runner, pattern))):
             h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     return h.hexdigest()
