@@ -30,19 +30,18 @@ namespace tekken4_hud
     // ---- guest addresses (physical RDRAM), SLUS-20328 v1.00 (docs/MATCH_RESULT_T4.md, docs/DIRECTFIGHT_T4.md)
     constexpr uint32_t kScene = 0x00357d38u;       // current scene: 7 VS character select, 4 the fight
     constexpr uint32_t kGameType = 0x002a8bf8u;    // 3 = VS Battle
-    constexpr uint32_t kGameFrame = 0x00356018u; // gp - 0x6b58, incremented by the game loop
     constexpr int kSceneSelect = 7, kSceneFight = 4, kTypeVs = 3;
 
     struct Anchor
     {
         int x = 0, y = 0, scene = 0;
-        uint32_t frame = 0;
         uint8_t alpha = 0;
         bool valid = false;
     };
     std::mutex g_anchorMutex;
     Anchor g_anchor[2]; // presenter reads under the same lock; never used to decide guest writes
     PS2Runtime::RecompiledFunction g_selectOriginal = nullptr, g_fightOriginal = nullptr;
+    PS2Runtime::RecompiledFunction g_selectWidgetOriginal = nullptr;
 
     struct Side
     {
@@ -81,7 +80,7 @@ namespace tekken4_hud
         if (!tekken4_names::enqueue(ram, text, x, y, alpha))
             return false;
         std::lock_guard<std::mutex> lock(g_anchorMutex);
-        g_anchor[side] = Anchor{x, y, scene, rd32(ram, kGameFrame), alpha, true};
+        g_anchor[side] = Anchor{x, y, scene, alpha, true};
         return true;
     }
 
@@ -123,6 +122,39 @@ namespace tekken4_hud
             }
         }
         g_selectOriginal(ram, ctx, runtime);
+    }
+
+    void selectWidgetName(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = getRegU32(ctx, 31), widget = getRegU32(ctx, 4);
+        if (widget >= 0x00100000u && widget <= 0x01ffffa0u)
+        {
+            // The active VS UI keeps the side in s3, independent of fighter and local role.
+            const int side = tekken4_names::selectWidgetSide(ra, getRegU32(ctx, 19),
+                                                             rd32(ram, widget + 0x54) & 0xffffu);
+            if (side >= 0 && rd32(ram, kScene) == kSceneSelect && rd32(ram, kGameType) == kTypeVs)
+            {
+                const bool visible = (rd32(ram, widget + 0x52) & 0xffffu) != 0;
+                float opacity = 0.0f;
+                std::memcpy(&opacity, ram + widget + 0x5c, sizeof(opacity));
+                std::array<float, 16> matrix;
+                std::memcpy(matrix.data(), ram + widget + 0x10, sizeof(matrix));
+                int cx = 0, cy = 0;
+                if (visible && std::isfinite(opacity) && tekken4_names::selectWidgetCentre(matrix, cx, cy))
+                {
+                    const auto alpha = static_cast<uint8_t>(std::lround(std::clamp(opacity, 0.0f, 1.0f) * 128.0f));
+                    if (nativeName(ram, side, kSceneSelect, cx, cy, alpha))
+                    {
+                        ctx->pc = ra;
+                        return;
+                    }
+                }
+                // A hidden widget or fallback draw must not retain a badge from an earlier name.
+                std::lock_guard<std::mutex> lock(g_anchorMutex);
+                g_anchor[side].valid = false;
+            }
+        }
+        g_selectWidgetOriginal(ram, ctx, runtime);
     }
 
     Color rgb(uint32_t v, float a = 1.0f)
@@ -249,16 +281,17 @@ namespace tekken4_hud
     }
 
     // One rank badge (tools/make_rank_badges.py's svg(), element for element) into `r` (2:1).
-    void badge(int tier, Rectangle r)
+    void badge(int tier, Rectangle r, uint8_t alpha)
     {
         if (tier < 0 || tier >= tekken4_rank_badges::kCount)
             return;
         const auto &b = tekken4_rank_badges::kBadges[tier];
         const Map m{r};
-        const Color plate = rgb(b.plate), light = rgb(b.light), dark = rgb(b.dark);
+        const float opacity = std::min(1.0f, alpha / 128.0f);
+        const Color plate = rgb(b.plate, opacity), light = rgb(b.light, opacity), dark = rgb(b.dark, opacity);
         const std::vector<Vector2> hex = {m(14, 6), m(186, 6), m(198, 50), m(186, 94), m(14, 94), m(2, 50)};
         fan(m(100, 50), hex, plate);
-        fan(m(100, 27), {m(14, 10), m(186, 10), m(195, 44), m(5, 44)}, rgb(b.light, 0.22f));
+        fan(m(100, 27), {m(14, 10), m(186, 10), m(195, 44), m(5, 44)}, rgb(b.light, 0.22f * opacity));
         outline(hex, m.s(5), light);
         DrawCircleV(m(50, 50), m.s(36), dark);
         DrawRing(m(50, 50), m.s(34.5f), m.s(37.5f), 0.0f, 360.0f, 48, light);
@@ -284,7 +317,7 @@ namespace tekken4_hud
         {
             const float y = ys[i] - (b.pips ? 6.0f : 0.0f);
             const Vector2 p = m(141, y);
-            text(lines[i], p.x, p.y, m.s(size) * 1.05f, WHITE, dark, true);
+            text(lines[i], p.x, p.y, m.s(size) * 1.05f, rgb(0xffffffu, opacity), dark, true);
         }
     }
 
@@ -333,16 +366,17 @@ namespace tekken4_hud
                     std::lock_guard<std::mutex> lock(g_anchorMutex);
                     std::copy(std::begin(g_anchor), std::end(g_anchor), anchors);
                 }
-                const uint32_t frame = rd32(rdram, kGameFrame);
                 for (int side = 0; side < 2; ++side)
                 {
                     const Anchor &a = anchors[side];
-                    if (!a.valid || a.scene != scene || frame - a.frame > 1u || !a.alpha)
+                    // Live guest RAM can advance or roll back while a frame is presented.
+                    // Scene/visibility are stable guards; a current-RAM frame-age test flickers.
+                    if (!a.valid || a.scene != scene || !a.alpha)
                         continue;
                     // Badge only: its right edge is four game pixels left of the actual queued text.
                     const float sx = f.w / 640.0f, sy = f.h / 448.0f;
                     badge(g.side[side].tier, Rectangle{f.x + (a.x - 32) * sx, f.y + (a.y + 1) * sy,
-                                                      28 * sx, 16 * sy});
+                                                      28 * sx, 16 * sy}, a.alpha);
                 }
             }
         }
@@ -364,18 +398,22 @@ namespace tekken4_hud
         const auto &names = tekken4_names::settings();
         if (names.enabled())
         {
-            // Install both entry hooks together. Other callers/resume addresses keep their original functions.
-            if (!runtime.hasFunction(0x001f0a80u) || !runtime.hasFunction(0x001f2e70u))
+            // Install the entry hooks together. Other callers/resume addresses keep their original functions.
+            if (!runtime.hasFunction(0x001f0a80u) || !runtime.hasFunction(0x001f2e70u) ||
+                !runtime.hasFunction(0x00236eb8u))
             {
                 RUNTIME_LOG("[hud] native name entry points unavailable; fighter names retained\n");
                 return;
             }
             const auto fight = runtime.lookupFunction(0x001f0a80u);
             const auto select = runtime.lookupFunction(0x001f2e70u);
+            const auto selectWidget = runtime.lookupFunction(0x00236eb8u);
             if (fight != fightName) g_fightOriginal = fight;
             if (select != selectName) g_selectOriginal = select;
+            if (selectWidget != selectWidgetName) g_selectWidgetOriginal = selectWidget;
             runtime.registerFunction(0x001f0a80u, fightName);
             runtime.registerFunction(0x001f2e70u, selectName);
+            runtime.registerFunction(0x00236eb8u, selectWidgetName);
             for (int side = 0; side < 2; ++side)
                 g.side[side].name = names.names[side];
             if (const char *ranks = std::getenv("TEKKEN4_HUD_RANKS"))

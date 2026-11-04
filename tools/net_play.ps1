@@ -6,12 +6,14 @@
 # Default profile: docs/ROLLBACK_ASYMMETRY.md Sunday settings; the game boots straight to VS character select
 # (TEKKEN4_NET_AUTO_VS=1, docs/DIRECTFIGHT_T4.md "Online boot"). -NoAutoVs: walk the menus yourself (both PCs alike).
 # -UseInheritedProfile is for separate maintainer experiments, not beta acceptance.
+# -Rounds 1..5 sets the game's rounds to win; both peers must agree (HELLO rejects a mismatch).
+# Omitted: retain the game's current default, without inheriting a previous test's round override.
 param([Alias("Host")][switch]$AsHost, [string]$Join = "", [ValidateRange(1,65535)][int]$Port = 7400,
       [int]$Pad = 0, [string]$Delay = "auto", [int]$Sound = 1, [string]$Sim = "", [string]$RunDir = "",
       [string]$Src = $env:TEKKEN4_SRC, [string]$BuildDir = $env:TEKKEN4_BUILD_DIR,
       [Alias("IsoPath")][string]$Iso = $env:TEKKEN4_ISO, [switch]$NoDiagnostics,
       [switch]$SkipPreflight, [ValidateRange(5,600)][int]$PreflightTimeoutSeconds = 90,
-      [switch]$UseInheritedProfile, [switch]$NoAutoVs)
+      [switch]$UseInheritedProfile, [switch]$NoAutoVs, [ValidateRange(1,5)][Nullable[int]]$Rounds = $null)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if ($AsHost -and $Join) { throw 'Give either -Host or -Join <host>, not both.' }
@@ -99,6 +101,7 @@ if (-not $UseInheritedProfile) {
         'TEKKEN4_NET_SIM', 'TEKKEN4_NET_SEED', 'TEKKEN4_NET_END', 'TEKKEN4_NET_SHOTS',
         'TEKKEN4_NET_DESYNC_DUMP', 'TEKKEN4_NET_RBSTART', 'TEKKEN4_NET_EARLY_MS',
         'TEKKEN4_NET_LOCKDELAY', 'TEKKEN4_NET_HASH_EVERY', 'TEKKEN4_NET_AUTO_VS_END', 'TEKKEN4_NET_RESULT',
+        'TEKKEN4_NET_ROUNDS',
         'TEKKEN4_RAND_SEED')) {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
@@ -117,6 +120,7 @@ elseif (-not $UseInheritedProfile -and $env:TEKKEN4_NET_DIAG -ne '0') { $env:TEK
 elseif (-not $env:TEKKEN4_NET_DIAG) { $env:TEKKEN4_NET_DIAG = '1' }
 $env:TEKKEN4_NET = if ($AsHost) { "host:$Port" } else { "join:${Join}:$Port" }
 $env:TEKKEN4_NET_DELAY = $Delay
+if ($null -ne $Rounds) { $env:TEKKEN4_NET_ROUNDS = [string]$Rounds }
 if ($NoAutoVs) { $env:TEKKEN4_NET_AUTO_VS = '0' }
 $env:TEKKEN4_NET_PAD = "$Pad"
 $env:TEKKEN4_SOUND = "$Sound"

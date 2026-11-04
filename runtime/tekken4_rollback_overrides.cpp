@@ -70,6 +70,8 @@
 //                          and both PCs' real pads stay neutral. Test scripts only apply after the hand-over.
 // TEKKEN4_NET_AUTO_VS_END  bound in logical frames (default 3000, 1..3600): no VS select by then = the players take
 //                          over with their pads. Both PCs must use the same switch and bound (checked at HELLO).
+// TEKKEN4_NET_ROUNDS      1..5 round wins per match (ranked: 3); unset retains the game's Round option. Included
+//                          in HELLO; applied at the native match-init setter on every guest call, including replay.
 // TEKKEN4_NET_CARD         "session" (default): the memory card is mc0/mc1 in the working directory (a new run dir
 //                          per match = an empty card on both PCs); "shared": the game folder's card (offline saves)
 // TEKKEN4_NET_PAD          the local device: 0 keyboard + first gamepad (default), -1 keyboard, n n-th gamepad
@@ -119,6 +121,7 @@
 #include "Stubs/SIF.h"
 #include "tekken4_match_state.h"
 #include "tekken4_native_names.h"
+#include "tekken4_rounds.h"
 #include "tekken4_state_probe.h"
 #if __has_include("tekken4_net.h") && defined(PS2X_ROLLBACK_IOP_STATE)
 #include "tekken4_net.h"
@@ -3115,6 +3118,22 @@ namespace tekken4_rollback
         return true;
     }
 
+    PS2Runtime::RecompiledFunction g_roundsOriginal = nullptr;
+
+    void onlineRoundSetting(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        // Replace the argument at the game's own setter, before match setup computes its maximum
+        // rounds and before the HUD is created. Every guest call, including replay, repeats this.
+        // No host frame/already-applied flag can suppress the write after a snapshot restore.
+        if (ctx->pc == tekken4_rounds::kSetter)
+        {
+            SET_GPR_U32(ctx, 4, tekken4_rounds::settings().value);
+            std::fprintf(g_log, "NETROUNDS set f=%" PRIu64 " rounds=%u active=%08x\n", g_frame,
+                         tekken4_rounds::settings().value, tekken4_rounds::kActive);
+        }
+        g_roundsOriginal(rdram, ctx, runtime);
+    }
+
     bool npConfigure(PS2Runtime &runtime)
     {
         // Default ON for every netplay session (lobby, Easy Launcher Host/Join); TEKKEN4_NET_AUTO_VS=0 turns it off.
@@ -3269,10 +3288,19 @@ namespace tekken4_rollback
         }
         if (!npConfigureAutoVs(c))
             return false;
+        const auto &rounds = tekken4_rounds::settings();
+        if (!rounds.valid || (rounds.value && !runtime.hasFunction(tekken4_rounds::kSetter)))
+        {
+            std::fprintf(g_log, "NETROUNDS aborted: TEKKEN4_NET_ROUNDS must be 1..5 and the US setter available\n");
+            return false;
+        }
         // Native names modify the guest draw queue. Always check their effective P1/P2 values, even when
         // AUTO_VS is off. Local role, rank badges and host presentation never enter this contract.
         c.autoVsFingerprint = tekken4_names::fingerprint(c.autoVsFingerprint, tekken4_names::settings());
         std::fprintf(g_log, "NETNAMES shared boot/name fingerprint=%016" PRIx64 "\n", c.autoVsFingerprint);
+        c.autoVsFingerprint = tekken4_rounds::fingerprint(c.autoVsFingerprint, rounds);
+        std::fprintf(g_log, "NETROUNDS target=%u (0=game option) boot fingerprint=%016" PRIx64 "\n",
+                     rounds.value, c.autoVsFingerprint);
         const size_t ring = static_cast<size_t>(g_np.maxPred + 3u);
         g_np.ring.resize(ring);
         g_np.ringFrame.assign(ring, ~0ull);
@@ -3284,6 +3312,11 @@ namespace tekken4_rollback
             return false;
         }
         g_np.on = true;
+        if (rounds.value)
+        {
+            g_roundsOriginal = runtime.lookupFunction(tekken4_rounds::kSetter);
+            runtime.registerFunction(tekken4_rounds::kSetter, onlineRoundSetting);
+        }
         if (g_np.fastSync)
             RUNTIME_LOG("[rollback] TEKKEN4_NET_FAST_SYNC=1: lead window 8, RTT settling hold unchanged\n");
         return true;

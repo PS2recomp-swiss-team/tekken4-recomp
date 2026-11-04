@@ -91,12 +91,21 @@ def toolchain(build):
     lines = []
     for lang, name in (("C", "CMakeCCompiler.cmake"), ("CXX", "CMakeCXXCompiler.cmake")):
         path = os.path.join(build, "CMakeFiles", cmake, name)
-        text = open(path, encoding="utf-8", errors="replace").read() if os.path.isfile(path) else ""
+        if not os.path.isfile(path):
+            # Visual Studio bundles CMake versions such as 3.31.6-msvc6, while the cache's
+            # numeric version fields contain 3.31.6. Never fall back to a different version.
+            candidates = glob.glob(os.path.join(build, "CMakeFiles", cmake + "-*", name))
+            if len(candidates) == 1:
+                path = candidates[0]
+        text = ""
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8", errors="replace") as compiler_file:
+                text = compiler_file.read()
         for key in ("ID", "VERSION", "ARCHITECTURE_ID"):
-            m = re.search(rf'set\(CMAKE_{lang}_COMPILER_{key} "([^"]+)"\)', text)
+            m = re.search(rf'set\(CMAKE_{lang}_COMPILER_{key}\s+(?:"([^"]+)"|([A-Za-z0-9_.+\-]+))\s*\)', text)
             if not m:
                 sys.exit(f"{path}: no CMAKE_{lang}_COMPILER_{key}")
-            lines.append(f"{lang}_{key}={m.group(1)}")
+            lines.append(f"{lang}_{key}={m.group(1) or m.group(2)}")
     build_type = cache.get("CMAKE_BUILD_TYPE", ("", ""))[1]
     lines.append(f"build_type={build_type}")
     for var in ("CMAKE_C_FLAGS", "CMAKE_CXX_FLAGS", f"CMAKE_C_FLAGS_{build_type.upper()}",
@@ -137,7 +146,8 @@ def code_id(src, tool_lines):
             h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     runner = os.path.join(src, "ps2xRuntime", "src", "runner")
     for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h",
-                    "tekken4_state_probe.h", "tekken4_online_result.h", "tekken4_match_state.h"):
+                    "tekken4_state_probe.h", "tekken4_online_result.h", "tekken4_match_state.h",
+                    "tekken4_native_names.h", "tekken4_rounds.h"):
         for path in sorted(glob.glob(os.path.join(runner, pattern))):
             h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     return h.hexdigest()
