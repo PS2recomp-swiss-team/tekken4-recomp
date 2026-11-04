@@ -5,7 +5,11 @@ interpreter (~12 fps instead of full speed). The image used to be captured at ru
 the 18-overlay VU1 program group copied out of .vudata, so it can be assembled from the ELF: the recipe below
 holds only addresses (VU micro address, EE address in .vudata, length), no game bytes. The rest is zero.
 Checked against the capture of 2026-10-29 (SHA-256 below); the PAL build captured the same image name.
-Usage: python -I tools/vu1_micro_from_elf.py [elf] [out_dir]   (defaults: game/disc/SLUS_203.28, game/vu1/micro)
+Usage: python -I tools/vu1_micro_from_elf.py [elf] [out_dir] [vu0_out_dir]
+(defaults: game/disc/SLUS_203.28, game/vu1/micro, <out_dir>/../../vu0/micro)
+
+The VU0 micro memory (micro-mode programs the EE starts with VCALLMS; 4 KB, five uploads from .vudata, checked against
+the run-time capture PS2X_VU_CAPTURE of 2026-11-04) is rebuilt the same way for tools/vu/vu_lift.py (t4vurecomp).
 """
 import hashlib
 import os
@@ -23,6 +27,13 @@ RECIPE = [
     (0x1dc8, 0x306d18, 0x1a0), (0x1f68, 0x306ec0, 0x348), (0x22b0, 0x305390, 0x98), (0x2348, 0x3072a8, 0x360),
     (0x26a8, 0x307610, 0x468), (0x2c40, 0x307a80, 0x3a0), (0x32a0, 0x307e28, 0x650), (0x3c00, 0x308480, 0x290),
 ]
+
+
+VU0_NAME = "vu0_fb532704.bin"
+VU0_SIZE = 0x1000
+VU0_SHA256 = "4b7fb5fcbdcb40447bc486492f848d400b5922ed6c224af8dd791c981f33d78b"
+VU0_RECIPE = [(0x000, 0x309528, 0x1b8), (0x1b8, 0x308960, 0x80), (0x250, 0x3089e8, 0x4a0), (0x750, 0x308e90, 0x3b0),
+              (0xc30, 0x309248, 0x288)]
 
 
 def ee_reader(elf):
@@ -52,6 +63,17 @@ def main():
     with open(os.path.join(out_dir, NAME), "wb") as f:
         f.write(image)
     print(f"{os.path.join(out_dir, NAME)}: {SIZE} bytes, SHA-256 ok")
+    vu0_dir = sys.argv[3] if len(sys.argv) > 3 else os.path.join(out_dir, "..", "..", "vu0", "micro")
+    image = bytearray(VU0_SIZE)
+    for vu, ee, length in VU0_RECIPE:
+        image[vu:vu + length] = read(ee, length)
+    digest = hashlib.sha256(image).hexdigest()
+    if digest != VU0_SHA256:
+        sys.exit(f"VU0 image SHA-256 {digest} does not match {VU0_SHA256}: not SLUS-20328 v1.00?")
+    os.makedirs(vu0_dir, exist_ok=True)
+    with open(os.path.join(vu0_dir, VU0_NAME), "wb") as f:
+        f.write(image)
+    print(f"{os.path.join(vu0_dir, VU0_NAME)}: {VU0_SIZE} bytes, SHA-256 ok")
 
 
 if __name__ == "__main__":

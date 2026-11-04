@@ -253,6 +253,7 @@ namespace tekken4_rollback
         bool boundaryVblank = true;
         std::vector<ps2_rollback::MaskRange> masks;
         std::vector<uint64_t> dumpFrames;
+        std::vector<uint64_t> shotFrames; // TEKKEN4_RB_SHOTS
         uint64_t pagesFrom = ~0ull, pagesTo = 0;
         uint64_t testStart = 600, testEvery = 30, testDepth = 8;
         bool testWords = false;
@@ -3254,6 +3255,22 @@ namespace tekken4_rollback
         }
         if (std::find(g_cfg.dumpFrames.begin(), g_cfg.dumpFrames.end(), g_frame) != g_cfg.dumpFrames.end())
             dumpFrame(g_frame);
+#ifdef TEKKEN4_NETPLAY
+        if (std::find(g_cfg.shotFrames.begin(), g_cfg.shotFrames.end(), g_frame) != g_cfg.shotFrames.end())
+        {
+            std::vector<uint8_t> pixels;
+            uint32_t width = 0u, height = 0u;
+            if (g_runtime->gs().copyLatchedHostPresentationFrame(pixels, width, height) && width && height &&
+                pixels.size() >= static_cast<size_t>(width) * height * 4u)
+            {
+                uint64_t ph = 1469598103934665603ull;
+                for (size_t i = 0; i < static_cast<size_t>(width) * height * 4u; ++i)
+                    ph = (ph ^ pixels[i]) * 1099511628211ull;
+                writeBmp("rb_shot_f" + std::to_string(g_frame) + ".bmp", pixels, width, height);
+                std::fprintf(g_log, "SHOT f=%" PRIu64 " %ux%u pix=%016" PRIx64 "\n", g_frame, width, height, ph);
+            }
+        }
+#endif
 
         if (g_cfg.mode == Mode::Test)
             testBoundary(hash, pages, eeMs);
@@ -3460,6 +3477,11 @@ namespace tekken4_rollback
         if (const char *dump = std::getenv("TEKKEN4_RB_DUMP"))
             for (const std::string &item : split(dump, ','))
                 g_cfg.dumpFrames.push_back(parseNumber(item));
+        // TEKKEN4_RB_SHOTS="<frame>,...": rb_shot_f<frame>.bmp = the presented picture at that frame boundary, and a
+        // SHOT line with its pixel hash in rb_frames.log (frame-exact picture comparisons between builds; t4vurecomp)
+        if (const char *shots = std::getenv("TEKKEN4_RB_SHOTS"))
+            for (const std::string &item : split(shots, ','))
+                g_cfg.shotFrames.push_back(parseNumber(item));
         if (const char *pagesSpec = std::getenv("TEKKEN4_RB_PAGES"))
         {
             const auto parts = split(pagesSpec, ':');
