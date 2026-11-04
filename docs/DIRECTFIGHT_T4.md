@@ -1,8 +1,9 @@
 ﻿# Tekken 4: direct-fight discovery and session results
 
-2026-10-31. Source work for **SLUS-20328 v1.00 only**. Default-off diagnostics, scripted
-online boot navigation and an incomplete online-session result are implemented;
-direct fight and a persistent game are plans.
+2026-10-31. Source work for **SLUS-20328 v1.00 only**. Default-off diagnostics and an incomplete
+online-session result are implemented; direct fight and a persistent game are plans.
+2026-11-04: online games boot straight to VS character select from the game's own scene state
+(default on, real-game pairs: "Online boot: straight to VS select").
 Nothing was built or run in this working copy. Existing documents report real-game tests elsewhere;
 those reports are not new validation of these changes.
 
@@ -18,9 +19,15 @@ was copied for this work. Its MIT direct-fight implementation was read for behav
 | Main-loop observation | `runtime/tekken4_overrides.cpp`: `kSoundFrameCall = 0x100`, `g_frames`; `runtime/tekken4_rollback_overrides.cpp`: `boundary` | There is a host observation point for frame progress. The rollback VBlank boundary is the probe's clock, not a proven fight-update boundary. |
 | Select availability | `runtime/tekken4_unlock_overrides.cpp`, discovery comments and `kAvailableCheck` | Roster/costume table `0x0030e100`: 112 records of 28 bytes, u16 fighter at +0, u16 costume at +2, availability callback at +24. `FUN_001e2da0` invokes the callback; `FUN_001e2cc0` builds the selectable mask at gp-0x52d4. These are roster metadata, not each side's committed battle selection. |
 | Unlock/profile | Same file: callback `0x001ec350`, profile check `FUN_001ec0a0` | Availability depends on bit `<costume>` in byte `0x0036c2b8 + 0x60 + fighter`. The existing override returns 1 without modifying the profile. This is not a health, score, winner or mode field. |
+<<<<<<< ours.lf.md
 | Mode manager / select transition | `docs/ROLLBACK_NEXT.md`, “T4 discovery required” and “Session, result and replay contracts” | The game teardown/setup path, current/pending mode fields and transition values are still TODO. No address is proven for direct-fight entry. |
 | Round / winner / score | [MATCH_RESULT_T4.md](MATCH_RESULT_T4.md) (2026-11-04) | Round wins player +0x8E, rounds to win 0x357d74, the game's match decision 0x2a8bf8+0x2C (FUN_001bbe70 / FUN_001bbb28), proven in scripted fights. |
 | Health | [MATCH_RESULT_T4.md](MATCH_RESULT_T4.md) (2026-11-04) | Player +0x6BC (16.16 fixed, 165.0 full), read by the round logic FUN_001bcb08; round timer 0x356064. |
+=======
+| Mode manager / select transition | Found 2026-11-04: scene manager `FUN_001978d0`, record at `0x357d38` (see "Online boot") | Current/requested/previous scene and the MODE SELECT menu/cursor/game type are proven by probe runs and the online boot pairs. The teardown/setup contract for a direct fight (skipping select) is still TODO. |
+| Round / winner / score | Same discovery section; no verified implementation in the runtime | Round phase, deciding boundary, winner encoding and two-side scores are TODO. Do not derive score from the winner or configured rounds-to-win. |
+| Health | No verified field in the inspected CSV, docs, overrides or rollback code | Both players' live health fields, widths, encodings, bases/strides, KO/timeout rules and reset timing are TODO. A HUD drain value may lag true health. |
+>>>>>>> theirs.lf.md
 | Broad search range | `runtime/tekken4_overrides.cpp`: existing debug RAM dump at `0x00300000..0x00500000` | This was a debug comparison range containing rodata/bss/buffers. It is not evidence that gameplay fields lie there. |
 | Confirmed hash | `tekken4_rollback_overrides.cpp`: `npBoundary`, `hashSubmit`, `hashCollect`, `netHashOf` | Existing net hash jobs use snapshots whose earlier inputs are confirmed after pending corrections. A collected hash can lag the live frame. It is not necessarily the match-deciding hash or proof that the peer compared it. |
 | Frame rate | Same file: `npFrameTiming`, `npSummary` | Host live-boundary rate is available. Resimulated boundaries are not new live frames; stalls and time-sync waits affect elapsed time. This is not displayed-picture FPS or fight-only FPS. |
@@ -31,82 +38,99 @@ does not repair a semantic label. Re-find callers/writers in the actual US build
 such name as a mode-manager anchor. The unlock constants above are explicitly documented US
 constants; no guessed gameplay address is published here.
 
-## Default-off online boot navigation
+## Online boot: straight to VS select
 
-`TEKKEN4_NET_AUTO_VS=1` enables a bounded script for a netplay session. Unset or any
-other value is off. It uses the existing pad/input exchange, with the same presses for both
-players on both PCs at the same logical input frames. Real pad input is held neutral in this
-window. This is a first step toward entering VS without menu clicks; it does not call a game
-mode manager or skip a loader by writing memory.
+2026-11-04 (branch `t4-autovs`). Every netplay session (lobby match, Easy Launcher Host/Join,
+`tools/net_play.ps1`) boots straight to **VS character select**; the players only pick fighters.
+`TEKKEN4_NET_AUTO_VS=0` (Easy Launcher: untick "Start at VS character select"; `net_play.ps1 -NoAutoVs`)
+gives the old manual menus. Both PCs must use the same setting: the HELLO fingerprint refuses a peer
+with the other switch, bound or card mode ("AUTO_VS script/window differs").
 
-The default script is the existing pair-test prefix:
+### The game state it reads (US SLUS-20328 v1.00, found 2026-11-04)
 
-```
-500:Start,800:Start,960:Down,1020:Down,1080:Cross
-```
+Scene manager `FUN_001978d0` (getter `FUN_001978a0`, both read/write `lui 0x35` + `0x7D38`):
 
-Presses last six frames by default, using the existing script parser. The prefix is intended to
-reach VS character select; it omits the later character/stage confirms used by the fight test.
-`TEKKEN4_RB_INPUT` can supply a shared boot script; an explicitly empty value supplies neutral
-input for the whole window. Malformed presses abort netplay configuration with a log line and
-restore native offline input. Invalid auto-VS/netplay configuration, a failed handshake or
-detected peer loss also logs `NETAUTO_VS aborted:` and restores the native pad path, without
-retaining a scripted provider. Peer loss uses the transport's existing timeout; its last remote
-boot press cannot repeat forever after that abort.
-Presses are clipped by the window and cannot extend it. During the window,
-pad 2's separate script, fuzz input and local devices do not affect either player's buttons.
-Both peers must agree on the normalized boot schedule, window, effective rollback start and
-boundary configuration before the handshake can succeed; enabling the switch on only one peer
-or using a different schedule is rejected.
+| Address | Meaning | Values seen |
+|---|---|---|
+| `0x357d38` | current scene | 0 boot, 5 Namco logo, 8 title, 1 (one frame) then 2 MODE SELECT, 7 VS character select, 6 Story's select, 4 the next mode's load/fight (VS) or Story's prologue |
+| `0x357d3c` | requested scene | 14 = none; the manager moves it to current at the next update |
+| `0x357d40` | previous scene | |
+| `0x357d44` | phase inside the scene | resets to 0 at every scene change |
+| `0x357724` | active menu in MODE SELECT | 1 = SET GAME DIFFICULTY (only shown when no save was loaded), 2 = the mode list, 0 after it |
+| `0x357720` | that menu's cursor | mode list: 0 Story, 1 Arcade / Time Attack, 2 VS Battle, 3 Team, ... 8 Options |
+| `0x2a8bf8` | game type, written by the mode list's confirm | 2 Story, 3 VS Battle |
 
-`TEKKEN4_NET_AUTO_VS_END` is the logical handoff frame, default 1200, bounded to 1..3600.
-Frame END supplies neutral input to release the last scripted press; the normal input path
-resumes from END+1. Finite per-slot presses whose start frame is at or before END are discarded
-after handoff, so a long boot press cannot leak into manual select. Later per-slot presses,
-fuzz and local devices use the normal path. Boot runs in lockstep through this handoff even if
-the configured rollback start was earlier. The script depends on logical frames, not elapsed host time, keyboard
-sampling, local slot, or replay count.
+Found with the read-only probe (below) over `.data`/`.sdata`/`.sbss`/the start of `.bss` and frame
+shots of the same pair, then confirmed in the lifted code (the manager's store) and by the runs below.
 
-There is no proven select/mode field, so reaching the end cannot prove that select was reached.
-The `NETAUTO_VS` timeout log always describes an unverified handoff and restores ordinary
-input. If a save or language dialog consumed a press, players can recover manually after the
-bounded window. The script neither retries indefinitely nor reports a successful select detection.
-The bound is in simulated frames: it cannot resolve an unrelated stalled loader. Peer loss uses
-the separate transport timeout and abort path above.
+### How it works
 
-The maintainer must run the real pair with sound on in three separate cases: fresh/fresh cards,
-matching existing/existing cards, and mixed fresh/existing cards. Require **0 mismatches**,
-visible VS character select without manual menu input, neutral physical pads during boot,
-and working normal input after handoff.
-Continue through character/stage confirms into a VS fight using the existing pair-test tail.
-Mixed cards may expose save-dependent divergence or a different menu path; support for them is
-unproved until this case passes, and automatic input must still release on its scheduled frame.
-Also hold physical buttons during the boot window, use an altered dialog path to check manual
-recovery after the timeout line, and verify mismatched on/off/scripts are rejected. Equal hashes
-alone can mean both games reached the same wrong screen. Compare with the switch off and retain
-the effective script, handoff frame, save identity and both logs. Two physical PCs must repeat the
-checks; no such run was performed here.
+- Lockstep from the start until VS select shows (`TEKKEN4_NET_RBSTART` still sets the earliest
+  rollback start, default 600). Every boundary is final in lockstep, so both PCs see the same state.
+- Only the host's pad (P1) presses; P2 and both PCs' real pads/keyboards are neutral meanwhile.
+- Every `max(24, input delay + 16)` target frames the host decides one press for 4 frames from the
+  state at the boundary where that input is sampled: scene 5 or 8 -> Start; scene 2 with the difficulty
+  prompt -> Start (keeps the default); scene 2 with the mode list -> Down / Up towards cursor 2, Cross
+  on it; anything else -> nothing. A press that was not taken is simply decided again.
+- Hand-over: at the first boundary with scene 7 and game type 3 (`NETAUTO_VS select f=...` in
+  `rb_frames.log`, the same frame on both PCs) every input not yet sampled is normal input; test scripts
+  only apply from there on. If no VS select by `TEKKEN4_NET_AUTO_VS_END` (default 3000 frames, ~50 s),
+  `NETAUTO_VS timeout` names the scene/menu it stopped in and the players take over.
+- Peer lost or handshake failed during the window: the session ends and the native pad comes back
+  (unchanged from the earlier version).
 
-Full direct fight remains deferred until the state probe and writer investigation prove T4's
-mode manager, select state and safe transition contract. No new game addresses are guessed.
+### Memory card online (`TEKKEN4_NET_CARD`)
 
-## Save and boot-path evidence
+The runtime's memory card is `game\disc\mc0` next to the ELF, shared with offline play (the `mc0`/`mc1`
+folders net_pair/net_play create in the run directory were never used). A save there changes the boot
+path (no difficulty prompt; the old fixed script then walked into Story Battle and King's prologue,
+run `av_save1`) and loads that player's options and records into the game: two PCs with different saves
+would not start from the same state. Online games now use `mc0`/`mc1` in their working directory
+(`session`, default): `net_play.ps1` and the lobby start every match in a new run directory, so both PCs
+boot with an empty card. `TEKKEN4_NET_CARD=shared` keeps the game folder's card (both PCs then need the
+same save). Characters are unaffected (`TEKKEN4_UNLOCK_ALL`).
 
-The older T4 netplay reports used cold, empty memory cards (`docs/ROLLBACK_PHASE3.md`,
-"The loop" and "What is left"). That document and `docs/ROLLBACK_PHASE01.md`, phase 0 item 7,
-explicitly warn that a player's own card changes the boot path. No inspected T4 source or
-document proves the exact fresh-card versus existing-card dialog sequence, or a language/save
-dialog state address. A timed input sequence cannot infer which screen accepted a press.
+### Timing
 
-`tools/net_pair.ps1` keeps `mc0`/`mc1` in each side's run directory. Its directory creation
-does not reset an existing card: reusing a pair name can reuse saves. Use distinct run names
-for fresh-card checks and deliberately prepared, matching existing cards for the old-save checks
-in the real game setup. Do not put those cards in this clean copy.
+Boot to VS select (frame 241 at RTT 0-60, process start to select ~4-6 s) instead of ~1100 frames
+(~19 s) with the old fixed script: Start at the Namco logo skips logo and title. 
+### Pairs (this PC, 2026-11-04, build `out\avs` id 237631523a2b1e8d, `tools/net_pair.ps1 -AutoVs`)
 
-The current unlock override answers the save-dependent fighter/costume availability callback
-without changing the profile or memory card (`runtime/tekken4_unlock_overrides.cpp`). It does
-not normalize saved options or boot dialogs. A fixed online profile remains future work;
-automatic menu input does not make different personal cards equivalent.
+Each pair: two games over loopback with the in-process network simulator, host + join, P1/P2 confirm
+fighter, handicap and stage with Cross after the hand-over (frames 1500/1700/1900), then pseudo-random
+fight input from 2400; frame shots and the host's state probe show the screens. "Fight" = the VS load
+scene (4) after select, then READY/FIGHT/KO/replay in the shots.
+
+| Run | Path | Card | Mode | Select at (both) | Mismatching hashes | Fight |
+|---|---|---|---|---|---|---|
+| av_n1 | RTT 0 | session (empty) | rollback | f 241 | 0 / 119 | yes |
+| av_n2_saved | RTT 0 | shared, existing save | rollback | f 241 | 0 / 89 | yes |
+| av_m1_r17 | RTT 17 j3 | session | rollback | f 241 | 0 / 119 | yes |
+| av_m1_r60l1 | RTT 60 j5 loss 1 % | session | rollback | f 241 | 0 / 119 | yes |
+| av_m1_r150l3 | RTT 150 j5 loss 3 % | session | rollback | f 241 | 0 / 119 | yes |
+| av_m1_r150l3sv | RTT 150 j5 loss 3 % | shared, existing save | rollback | f 241 | 0 / 119 | yes |
+| av_m1_r250l5 | RTT 250 j10 loss 5 % (lock delay 10) | session | rollback | f 261 | 0 / 139 | yes |
+| av_m1_ls_r100 | RTT 100 j5 | session | lockstep | f 241 | 0 / 119 | yes |
+| av_m1_ls_r150sv | RTT 150 j5 loss 2 % | shared, existing save | lockstep | f 241 | 0 / 119 | yes |
+| av_m1_ls_r0 | RTT 0 | session | lockstep | f 241 | 0 / 119 | yes |
+| av_m1_r30 | RTT 30 j3 | session | rollback | f 241 | 0 / 119 | yes |
+| av_m1_r150l3b | RTT 150 j5 loss 3 % | session | rollback | f 241 | 0 / 119 | yes |
+| av_m1_r0sv | RTT 0 | shared, existing save | rollback | f 241 | 0 / 119 | yes |
+
+13 of 13: both games at VS select at the same frame, 0 mismatching hashes, 0 NETDESYNC, a fight after.
+Lockstep = `TEKKEN4_NET_RBSTART=1000000`. Rollback pairs had 4-505 rollbacks per side.
+
+Refusals and the bound (`av_neg_*`): host on / joiner `TEKKEN4_NET_AUTO_VS=0` -> the two never connect
+(protocol v5 with the fingerprint vs v1: both keep "waiting for the opponent's game to answer", no
+explicit message: an older behaviour of the transport); session card vs `shared` -> `auto_vs_mismatch`
+on both sides, "use the same settings on both PCs"; `TEKKEN4_NET_AUTO_VS_END=150` -> both
+`NETAUTO_VS timeout f=150 ... (scene=2 menu=1 ...)`, players take over at 152, in sync.
+
+Before (old fixed script, `av_disc1` / `av_save1`): fresh card reached select at ~1082 (18 s of
+frames); with an existing save the same presses chose Story Battle and started King's prologue.
+
+Not covered: two physical PCs (the owner's next test), physical pads pressed during the boot window
+(the code returns before any device is sampled).
 
 ## Default-off read-only probe
 

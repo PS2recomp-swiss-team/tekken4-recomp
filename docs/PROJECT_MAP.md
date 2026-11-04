@@ -72,7 +72,7 @@ adds the control.
 
 ## Runtime switches (env)
 `TEKKEN4_INTERNAL_RES`, `TEKKEN4_AA`, `TEKKEN4_ANISO`, `TEKKEN4_HUD`, `TEKKEN4_WINDOW_FILTER`, `TEKKEN4_FULLSCREEN` (1 | exclusive), `TEKKEN4_PROGRESSIVE`,
-`TEKKEN4_UNLOCK_ALL`, `TEKKEN4_SOUND`, `TEKKEN4_ISO`, `TEKKEN4_MOVIE_GAIN`, `TEKKEN4_AUDIO_BUFFER_MS`, `TEKKEN4_RUNAHEAD`, `TEKKEN4_RB_MODE`, `TEKKEN4_NET*` (including default-off `TEKKEN4_NET_AUTO_VS` and its bounded `TEKKEN4_NET_AUTO_VS_END` deadline; see `docs/DIRECTFIGHT_T4.md`),
+`TEKKEN4_UNLOCK_ALL`, `TEKKEN4_SOUND`, `TEKKEN4_ISO`, `TEKKEN4_MOVIE_GAIN`, `TEKKEN4_AUDIO_BUFFER_MS`, `TEKKEN4_RUNAHEAD`, `TEKKEN4_RB_MODE`, `TEKKEN4_NET*` (including `TEKKEN4_NET_AUTO_VS`, default on: boot straight to VS select, its bound `TEKKEN4_NET_AUTO_VS_END`, and the online card `TEKKEN4_NET_CARD`; see `docs/DIRECTFIGHT_T4.md`),
 `PS2X_DEBUG_PANEL`, `PS2X_PERF_STATS`, `PS2X_GS_HW_SCALE` (raw override, wins over the resolution step). Details in the docs above.
 
 Rollback switch results and the exact Sunday two-PC settings are in `docs/ROLLBACK_ASYMMETRY.md`;

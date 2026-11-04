@@ -64,6 +64,7 @@ DEFAULTS = {
     "unlock_all": True,        # TEKKEN4_UNLOCK_ALL: all characters unlocked from the start (save file untouched)
     "aa": True,                # TEKKEN4_AA: on = fxaa (the runtime's default), off = off
     "progressive": True,       # TEKKEN4_PROGRESSIVE: the game's own 480p mode (no interlace lines)
+    "auto_vs": True,           # online: boot straight to VS character select (net_play.ps1 -NoAutoVs when off)
     "runtime_exe": "",         # optional: use this ps2EntryRunner.exe instead of the one the build made
     "last_run": None,          # {"time":..., "seconds":..., "exit":..., "ok":bool, "log":path, "note":...}
     "last_build": None,        # {"time":..., "ok":bool, "dry_run":bool, "log":path}
@@ -666,6 +667,8 @@ def online_command(s, role, peer="", port=7400):
     cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
            os.path.join(ROOT, "tools", "net_play.ps1"), "-Port", str(port), "-Iso", effective_iso(s),
            "-Src", os.path.dirname(out_dir), "-BuildDir", os.path.basename(build_dir), "-Delay", "auto", "-Sound", "1"]
+    if not s.get("auto_vs", True):
+        cmd.append("-NoAutoVs")    # both PCs must agree: the game refuses a peer with the other setting
     return cmd + (["-Host"] if role == "host" else ["-Join", peer])
 
 
