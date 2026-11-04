@@ -74,7 +74,7 @@ namespace t4net
         int delaySetting = -1;         // -1 = auto (by round trip), else frames
         uint64_t buildId = 0;          // a peer with another build id is refused at HELLO
         uint32_t seed = 0;             // host: the session seed (0 = the session id)
-        uint64_t autoVsFingerprint = 0; // 0 = off; nonzero normalized boot script/window contract, checked at HELLO
+        uint64_t autoVsFingerprint = 0; // 0 = legacy; normalized boot/native-name contract, checked at HELLO
         std::string key;               // optional match secret: SipHash-2-4 tag on every packet
         int timeoutS = 20;             // peer silent this long = lost
         int connectTimeoutS = 120;     // no handshake within this = failed

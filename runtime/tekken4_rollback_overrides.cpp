@@ -118,6 +118,7 @@
 #include "Stubs/Pad.h"
 #include "Stubs/SIF.h"
 #include "tekken4_match_state.h"
+#include "tekken4_native_names.h"
 #include "tekken4_state_probe.h"
 #if __has_include("tekken4_net.h") && defined(PS2X_ROLLBACK_IOP_STATE)
 #include "tekken4_net.h"
@@ -3268,6 +3269,10 @@ namespace tekken4_rollback
         }
         if (!npConfigureAutoVs(c))
             return false;
+        // Native names modify the guest draw queue. Always check their effective P1/P2 values, even when
+        // AUTO_VS is off. Local role, rank badges and host presentation never enter this contract.
+        c.autoVsFingerprint = tekken4_names::fingerprint(c.autoVsFingerprint, tekken4_names::settings());
+        std::fprintf(g_log, "NETNAMES shared boot/name fingerprint=%016" PRIx64 "\n", c.autoVsFingerprint);
         const size_t ring = static_cast<size_t>(g_np.maxPred + 3u);
         g_np.ring.resize(ring);
         g_np.ringFrame.assign(ring, ~0ull);

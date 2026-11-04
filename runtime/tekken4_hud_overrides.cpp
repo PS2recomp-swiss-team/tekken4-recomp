@@ -1,23 +1,8 @@
-// Tekken 4 (SLUS-20328, NTSC-U v1.00): the online players' NAME PLATES -- who plays which side, with their lobby name
-// and T4 rank badge (Tekken 7's rank names, our own badge drawing: tekken4_rank_badges.h). docs/T4_RANKED.md.
-//
-// Drawn by the presenter over the game's picture (patch 88, ps2_host_overlay.h): host-only, it only READS guest RAM
-// (the scene manager and the fight's player objects) and never writes it, so online state hashes, rollback and
-// replays are the same with and without the plates.
-//
-//   TEKKEN4_HUD_NAMES   "<P1 name>|<P2 name>"   the lobby's names, P1 = the host's side (the launcher passes them;
-//                                               unset = no plates, e.g. offline play)
-//   TEKKEN4_HUD_RANKS   "<P1 tier>,<P2 tier>"   T4 rank tiers 0..46 (t4lobby/ranks.py); -1 or empty = no badge (guest,
-//                                               casual without a rank)
-//   TEKKEN4_HUD_PLATES  0                       off (the launcher's setting "Name plates in the game")
-//   TEKKEN4_HUD_SHOTS   <s>[,<s>...]            test hook: the WINDOW (picture + plates) saved as hud_<s>s.png in
-//                                               the working directory at those seconds after start
-//   TEKKEN4_HUD_WINDOW  <w>x<h>                 test hook: the window's size (pictures at 1280x896 etc.)
-//
-// Where (owner 2026-11-04: "instead of the CHARACTER name use the PLAYER's name, the rank badge LEFT of the name"):
-// over the game's fighter name -- at VS character select (scene 7, game type 3 VS Battle, t4autovs's scene record)
-// under each side's preview, in the fight (scene 4 with a round running) under each life bar. [badge][name] on both
-// sides (P2 right-aligned like the game's P2 name). Plates off: the game's own fighter names show.
+// Tekken 4 (SLUS-20328 v1.00): game-rendered online names and host-only rank badges.
+// TEKKEN4_HUD_NAMES=P1|P2, TEKKEN4_HUD_RANKS=tier,tier, TEKKEN4_HUD_PLATES=0 restores fighter names.
+// Names enter the guest font queue at the original name draw calls, including resimulation. The net HELLO
+// fingerprint requires identical effective names/settings. Badge drawing never writes guest memory.
+// See docs/T4_RANKED.md for the static trace, queue contract and required coordinator pair runs.
 #include "game_overrides.h"
 #include "ps2_host_overlay.h"
 #include "ps2_log.h"
@@ -25,9 +10,10 @@
 #include "raylib.h"
 #include "rlgl.h"
 #include "tekken4_rank_badges.h"
+#include "tekken4_native_names.h"
 
 #include <algorithm>
-#include <atomic>
+#include <mutex>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -44,11 +30,19 @@ namespace tekken4_hud
     // ---- guest addresses (physical RDRAM), SLUS-20328 v1.00 (docs/MATCH_RESULT_T4.md, docs/DIRECTFIGHT_T4.md)
     constexpr uint32_t kScene = 0x00357d38u;       // current scene: 7 VS character select, 4 the fight
     constexpr uint32_t kGameType = 0x002a8bf8u;    // 3 = VS Battle
-    constexpr uint32_t kPlayerTable = 0x002a9420u; // two pointers P1, P2 (player objects, stride 0xF20)
-    constexpr uint32_t kOffHealth = 0x6bcu;        // s32 16.16, 165.0 full
-    constexpr uint32_t kRoundTimer = 0x00356064u;  // s32 frames left
-    constexpr uint32_t kRoundNumber = 0x00356078u; // u32, 1-based
+    constexpr uint32_t kGameFrame = 0x00356018u; // gp - 0x6b58, incremented by the game loop
     constexpr int kSceneSelect = 7, kSceneFight = 4, kTypeVs = 3;
+
+    struct Anchor
+    {
+        int x = 0, y = 0, scene = 0;
+        uint32_t frame = 0;
+        uint8_t alpha = 0;
+        bool valid = false;
+    };
+    std::mutex g_anchorMutex;
+    Anchor g_anchor[2]; // presenter reads under the same lock; never used to decide guest writes
+    PS2Runtime::RecompiledFunction g_selectOriginal = nullptr, g_fightOriginal = nullptr;
 
     struct Side
     {
@@ -75,20 +69,60 @@ namespace tekken4_hud
         return v;
     }
 
-    // Lobby names are shown as typed, but the font has ASCII only (and '|' separates the two).
-    std::string clean(const std::string &s)
+    // The renderer and the queue use 640x448 game coordinates. The select quad has already been
+    // projected to GS 12.4 integers by FUN_001d5d90, with origin (1728, 1824).
+    bool nativeName(uint8_t *ram, int side, int scene, int cx, int cy, uint8_t alpha)
     {
-        std::string out;
-        for (unsigned char c : s)
+        if (side < 0 || rd32(ram, kGameType) != kTypeVs || rd32(ram, kScene) != static_cast<uint32_t>(scene))
+            return false;
+        const auto &name = tekken4_names::settings().names[side];
+        const auto text = tekken4_names::fit(ram, name);
+        const int x = cx - text.width / 2, y = cy - 10; // font 6: 20-pixel glyph quad
+        if (!tekken4_names::enqueue(ram, text, x, y, alpha))
+            return false;
+        std::lock_guard<std::mutex> lock(g_anchorMutex);
+        g_anchor[side] = Anchor{x, y, scene, rd32(ram, kGameFrame), alpha, true};
+        return true;
+    }
+
+    void fightName(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = getRegU32(ctx, 31);
+        const int side = tekken4_names::fightSide(ra);
+        // Original HUD caller supplies the centre in 12.4 pixels: (86,57) / (557,57).
+        if (nativeName(ram, side, kSceneFight, static_cast<int32_t>(getRegU32(ctx, 6)) / 16,
+                       static_cast<int32_t>(getRegU32(ctx, 7)) / 16, 128))
+            ctx->pc = ra;
+        else
+            g_fightOriginal(ram, ctx, runtime);
+    }
+
+    void selectName(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = getRegU32(ctx, 31);
+        // $s1 survives in FUN_001f4da8 and identifies the side's object, even in a mirror match.
+        const int side = tekken4_names::selectSide(ra, getRegU32(ctx, 17));
+        const uint32_t quad = getRegU32(ctx, 6);
+        if (side >= 0 && quad >= 0x00100000u && quad <= 0x01ffffc0u && std::isfinite(ctx->f[14]))
         {
-            if (out.size() >= 16)
-                break;
-            if (c >= 0x20 && c < 0x7f)
-                out.push_back(static_cast<char>(c));
-            else if (c >= 0xc0)
-                out.push_back('?'); // the start of a UTF-8 character outside ASCII
+            int32_t minX = INT32_MAX, minY = INT32_MAX, maxX = INT32_MIN, maxY = INT32_MIN;
+            for (uint32_t i = 0; i < 4; ++i)
+            {
+                const int32_t x = static_cast<int32_t>(rd32(ram, quad + i * 16));
+                const int32_t y = static_cast<int32_t>(rd32(ram, quad + i * 16 + 4));
+                minX = std::min(minX, x); maxX = std::max(maxX, x);
+                minY = std::min(minY, y); maxY = std::max(maxY, y);
+            }
+            const int cx = static_cast<int>((static_cast<int64_t>(minX) + maxX) / 32 - 1728);
+            const int cy = static_cast<int>((static_cast<int64_t>(minY) + maxY) / 32 - 1824);
+            const auto alpha = static_cast<uint8_t>(std::lround(std::clamp(ctx->f[14], 0.0f, 1.0f) * 128.0f));
+            if (nativeName(ram, side, kSceneSelect, cx, cy, alpha))
+            {
+                ctx->pc = ra;
+                return;
+            }
         }
-        return out;
+        g_selectOriginal(ram, ctx, runtime);
     }
 
     Color rgb(uint32_t v, float a = 1.0f)
@@ -198,11 +232,6 @@ namespace tekken4_hud
         DrawTextEx(f, s.c_str(), Vector2{left, top}, size, spacing, fill);
     }
 
-    float textWidth(const std::string &s, float size)
-    {
-        return MeasureTextEx(font(), s.c_str(), size, size * 0.04f).x;
-    }
-
     std::vector<std::string> nameLines(const std::string &name)
     {
         std::string up = name;
@@ -259,44 +288,6 @@ namespace tekken4_hud
         }
     }
 
-    // The player's name where the game prints the fighter's name, the rank badge directly LEFT of the name (owner,
-    // 2026-11-04). `cover` = the box over the game's own name text (frame pixels): a dark panel hides it, the badge and
-    // the name sit on it -- left-aligned for P1 (x = cover.x + pad), right-aligned for P2 (the game's P2 name is
-    // right-aligned), centred at the select screen. Both orders are [badge][name]: the badge is always left.
-    enum class Align { Left, Right, Centre };
-    void nameplate(int side, Rectangle cover, float nameSize, Align align)
-    {
-        const Side &s = g.side[side];
-        if (s.name.empty())
-            return;
-        const float h = cover.height;
-        const float pad = h * 0.16f;
-        const float badgeH = h * 0.92f, badgeW = s.tier >= 0 ? badgeH * 2.0f : 0.0f;
-        const float nameW = textWidth(s.name, nameSize);
-        const float content = (badgeW > 0 ? badgeW + pad : 0.0f) + nameW;
-        // the panel covers the game's name and grows with a long player name
-        const float panelW = std::max(cover.width, content + 2 * pad);
-        Rectangle panel{cover.x, cover.y, panelW, h};
-        if (align == Align::Right)
-            panel.x = cover.x + cover.width - panelW;
-        else if (align == Align::Centre)
-            panel.x = cover.x + (cover.width - panelW) * 0.5f;
-        DrawRectangleRounded(panel, 0.3f, 8, Color{8, 10, 16, 225});
-        DrawRectangleRoundedLinesEx(panel, 0.3f, 8, std::max(1.0f, h * 0.04f),
-                                    side == 0 ? Color{235, 70, 60, 160} : Color{70, 130, 245, 160});
-        float x = panel.x + pad;
-        if (align == Align::Right)
-            x = panel.x + panel.width - pad - content;
-        else if (align == Align::Centre)
-            x = panel.x + (panel.width - content) * 0.5f;
-        if (badgeW > 0)
-        {
-            badge(s.tier, Rectangle{x, cover.y + (h - badgeH) * 0.5f, badgeW, badgeH});
-            x += badgeW + pad;
-        }
-        text(s.name, x, cover.y + h * 0.5f, nameSize, WHITE, BLACK, false);
-    }
-
     void maybeShot()
     {
         if (g.nextShot >= g.shots.size())
@@ -335,45 +326,31 @@ namespace tekken4_hud
         {
             const int32_t scene = static_cast<int32_t>(rd32(rdram, kScene));
             const int32_t type = static_cast<int32_t>(rd32(rdram, kGameType));
-            if (type == kTypeVs && scene == kSceneSelect)
+            if (type == kTypeVs && (scene == kSceneSelect || scene == kSceneFight))
             {
-                // over the fighter's name under each side's preview (VS select: centred at 16.5 % / 83.5 %)
-                const float w = f.w * 0.25f, h = f.h * 0.064f, y = f.y + f.h * 0.458f, size = f.h * 0.04f;
-                nameplate(0, Rectangle{f.x + f.w * 0.165f - w * 0.5f, y, w, h}, size, Align::Centre);
-                nameplate(1, Rectangle{f.x + f.w * 0.835f - w * 0.5f, y, w, h}, size, Align::Centre);
-            }
-            else if (type == kTypeVs && scene == kSceneFight)
-            {
-                bool running = false;
-                const uint32_t round = rd32(rdram, kRoundNumber);
-                const int32_t timer = static_cast<int32_t>(rd32(rdram, kRoundTimer));
-                if (round >= 1 && round <= 9 && timer > 0 && timer <= 99 * 60)
-                    for (int side = 0; side < 2; ++side)
-                    {
-                        const uint32_t p = rd32(rdram, kPlayerTable + 4u * side);
-                        if (p >= 0x100000u && p < 0x2000000u)
-                        {
-                            const int32_t hp = static_cast<int32_t>(rd32(rdram, p + kOffHealth));
-                            running = running || (hp > 0 && hp <= (200 << 16));
-                        }
-                    }
-                if (running)
+                Anchor anchors[2];
                 {
-                    // over the fighter's name under each life bar: P1 from 5.2 % (left-aligned), P2 up to 94.8 %
-                    // (right-aligned), the round markers (from 35 % / to 65 %) stay visible
-                    const float w = f.w * 0.235f, h = f.h * 0.05f, y = f.y + f.h * 0.104f, size = f.h * 0.034f;
-                    nameplate(0, Rectangle{f.x + f.w * 0.052f, y, w, h}, size, Align::Left);
-                    nameplate(1, Rectangle{f.x + f.w * 0.948f - w, y, w, h}, size, Align::Right);
+                    std::lock_guard<std::mutex> lock(g_anchorMutex);
+                    std::copy(std::begin(g_anchor), std::end(g_anchor), anchors);
+                }
+                const uint32_t frame = rd32(rdram, kGameFrame);
+                for (int side = 0; side < 2; ++side)
+                {
+                    const Anchor &a = anchors[side];
+                    if (!a.valid || a.scene != scene || frame - a.frame > 1u || !a.alpha)
+                        continue;
+                    // Badge only: its right edge is four game pixels left of the actual queued text.
+                    const float sx = f.w / 640.0f, sy = f.h / 448.0f;
+                    badge(g.side[side].tier, Rectangle{f.x + (a.x - 32) * sx, f.y + (a.y + 1) * sy,
+                                                      28 * sx, 16 * sy});
                 }
             }
         }
         maybeShot();
     }
 
-    void apply(PS2Runtime &)
+    void apply(PS2Runtime &runtime)
     {
-        const char *names = std::getenv("TEKKEN4_HUD_NAMES");
-        const char *plates = std::getenv("TEKKEN4_HUD_PLATES");
         const char *shots = std::getenv("TEKKEN4_HUD_SHOTS");
         if (shots && *shots)
         {
@@ -384,13 +361,23 @@ namespace tekken4_hud
             std::sort(g.shots.begin(), g.shots.end());
         }
         g.start = std::chrono::steady_clock::now();
-        const bool off = plates && std::strcmp(plates, "0") == 0;
-        if (!off && names && *names)
+        const auto &names = tekken4_names::settings();
+        if (names.enabled())
         {
-            const std::string all(names);
-            const size_t bar = all.find('|');
-            g.side[0].name = clean(all.substr(0, bar));
-            g.side[1].name = bar == std::string::npos ? std::string() : clean(all.substr(bar + 1));
+            // Install both entry hooks together. Other callers/resume addresses keep their original functions.
+            if (!runtime.hasFunction(0x001f0a80u) || !runtime.hasFunction(0x001f2e70u))
+            {
+                RUNTIME_LOG("[hud] native name entry points unavailable; fighter names retained\n");
+                return;
+            }
+            const auto fight = runtime.lookupFunction(0x001f0a80u);
+            const auto select = runtime.lookupFunction(0x001f2e70u);
+            if (fight != fightName) g_fightOriginal = fight;
+            if (select != selectName) g_selectOriginal = select;
+            runtime.registerFunction(0x001f0a80u, fightName);
+            runtime.registerFunction(0x001f2e70u, selectName);
+            for (int side = 0; side < 2; ++side)
+                g.side[side].name = names.names[side];
             if (const char *ranks = std::getenv("TEKKEN4_HUD_RANKS"))
             {
                 std::stringstream list(ranks);
@@ -403,14 +390,13 @@ namespace tekken4_hud
                                             ? static_cast<int>(v) : -1;
                 }
             }
-            RUNTIME_LOG("[hud] name plates: P1 \"" << g.side[0].name << "\" tier " << g.side[0].tier << ", P2 \""
+            RUNTIME_LOG("[hud] native font names: P1 \"" << g.side[0].name << "\" tier " << g.side[0].tier << ", P2 \""
                                                    << g.side[1].name << "\" tier " << g.side[1].tier << "\n");
         }
         else
         {
             g.side[0] = g.side[1] = Side{};
-            if (off)
-                RUNTIME_LOG("[hud] name plates off (TEKKEN4_HUD_PLATES=0)\n");
+            RUNTIME_LOG("[hud] native names off or absent; fighter names retained\n");
         }
         if ((g.side[0].name.size() || g.side[1].name.size()) || !g.shots.empty())
             ps2_host_overlay::set(draw, nullptr);

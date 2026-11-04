@@ -660,7 +660,7 @@ namespace t4net
                         {
                             sendRejectLocked(from, REJ_AUTO_VS);
                             failLocked("auto_vs_mismatch", addrText(from) +
-                                       " has a different AUTO_VS script/window; use the same settings on both PCs");
+                                       " has different boot/native-name settings; use the same settings on both PCs");
                         }
                         return;
                     }
@@ -748,7 +748,7 @@ namespace t4net
                 else if (why == REJ_AUTO_VS)
                 {
                     if (!s.connected)
-                        failLocked("auto_vs_mismatch", addrText(from) + " refused us: AUTO_VS script/window differs");
+                        failLocked("auto_vs_mismatch", addrText(from) + " refused us: boot/native-name settings differ");
                 }
                 else if (!s.connected)
                     failLocked("rejected", addrText(from) + " is playing another session");
@@ -1250,7 +1250,7 @@ namespace t4net
         if (s.matchDelay)
             note("TEKKEN4_NET_DELAY_MATCH=1: protocol v%u uses equal explicit settings or measured-RTT auto, fixed for this session", s.netVersion);
         if (s.cfg.autoVsFingerprint)
-            note("TEKKEN4_NET_AUTO_VS=1: protocol v%u requires matching boot script/window fingerprint %016llx",
+            note("protocol v%u requires matching boot/native-name fingerprint %016llx",
                  s.netVersion, static_cast<unsigned long long>(s.cfg.autoVsFingerprint));
         if (s.sim)
             note("network simulator on this side's sends: one-way %.1f ms +- %.1f ms, %.1f %% loss", config.simLatencyMs,
