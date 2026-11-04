@@ -24,7 +24,7 @@ PS2_HEAD = "eb8688b2fd191129f103a39543002c005b33409c"
 FETCH = ("raylib", "imgui", "rlimgui", "sse2neon", "elfio", "toml11", "fmt", "libdwarf", "rabbitizer")
 TOOLS = (
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
-    "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd",
+    "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd", "cpu_needs_baseline.ps1",
     "run_game.cmd", "run_lock.ps1", "set_window_title.ps1", "iso_extract.py", "vu1_micro_from_elf.py", "t4_buildid.py",
     "toolchain_env.cmd", "t4_toolchain_clangcl.cmake", "fetch_msvc_sysroot.py",
     "prepare_portable_tree.py", "release_payload.py", "package_release.py", "release_toolchain.json",

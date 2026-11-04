@@ -1,0 +1,259 @@
+From c020a65d2dd07640c59a5f3410a214bfb2136db0 Mon Sep 17 00:00:00 2001
+From: t5dr <t5dr@local>
+Date: Wed, 4 Nov 2026 09:49:18 +0100
+Subject: [PATCH 2/2] 
+ 90-Old-PCs-SSE2-baseline-build-option-OpenGL-4.3-4.6-context-audio-mute-hook
+
+Tekken 4 port (t4-perf, old PCs).
+- PS2X_SIMD_BASELINE=ON (CMake): include/ps2_simd_baseline.h is force-included into every C++ file and replaces the
+  SSE3/SSSE3/SSE4.1 intrinsics the runtime and the recompiled code use (_mm_blendv_ps/epi8, _mm_blend_ps,
+  _mm_extract_epi32/64, _mm_insert_epi8, _mm_mullo_epi32, _mm_min/max_epi32, _mm_abs_epi8/16/32,
+  _mm_shuffle_epi8) by SSE2 code with the same bits. The exe then needs only x86-64 (SSE2): AMD Phenom II /
+  Athlon II, Core 2 (65 nm). Everything else above SSE2 in the exe is MSVC's runtime-dispatched code
+  (STL vector algorithms, auto-vectorized loops behind __isa_available checks). Same game state as the default
+  build (measure-mode full state hash: 6115 of 6115 frames identical).
+- The GL GS backend asks for the newest OpenGL 4.x core context down to 4.3 (was 4.6 only: drivers that stop at
+  4.3-4.5 were refused); [gs-gl] logs the version when it is not 4.6. PS2X_GL_MAX_MINOR=<n> test hook.
+- TEKKEN4_AUDIO_MUTE=1: the audio device plays silence (test runs next to a player); emulation unchanged.
+---
+ ps2xRuntime/CMakeLists.txt              |   7 ++
+ ps2xRuntime/include/ps2_simd_baseline.h | 113 ++++++++++++++++++++++++
+ ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp    |  39 +++++---
+ ps2xRuntime/src/lib/gs/gpu/gs_gl.h      |   1 +
+ ps2xRuntime/src/lib/ps2_audio.cpp       |   8 ++
+ 5 files changed, 158 insertions(+), 10 deletions(-)
+ create mode 100644 ps2xRuntime/include/ps2_simd_baseline.h
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 8a8cca3..9b6f8e4 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -7,6 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+ option(PS2X_ENABLE_RUNNER_UNITY_BUILD "Build ps2EntryRunner with CMake unity build" ON)
+ set(PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE 32 CACHE STRING "Unity build batch size for ps2EntryRunner")
++# Tekken 4 port (old PCs): SSE2-only x86-64 build. The few SSE3/SSSE3/SSE4.1 intrinsics are replaced by bit-identical
++# SSE2 code (include/ps2_simd_baseline.h, force-included into C++), so the game state is the same as the default build.
++option(PS2X_SIMD_BASELINE "SSE2-only x86-64 build (runs without SSE4.1/SSSE3), same results as the default build" OFF)
++if(PS2X_SIMD_BASELINE AND MSVC)
++    add_compile_definitions(PS2X_SIMD_BASELINE)
++    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_simd_baseline.h>")
++endif()
+ option(PS2X_ENABLE_RUNNER_PCH "Precompile the heavy runtime headers for ps2EntryRunner" ON)
+ option(PS2X_ENABLE_SCCACHE "Use sccache as compiler launcher when available" ON)
+ 
+diff --git a/ps2xRuntime/include/ps2_simd_baseline.h b/ps2xRuntime/include/ps2_simd_baseline.h
+new file mode 100644
+index 0000000..69a8fe0
+--- /dev/null
++++ b/ps2xRuntime/include/ps2_simd_baseline.h
+@@ -0,0 +1,113 @@
++#pragma once
++// Tekken 4 port (old PCs, t4-perf): the SSE3/SSSE3/SSE4.1 intrinsics the runtime and the recompiled code use, written
++// with SSE2 instructions only, so the game runs on any x86-64 processor (AMD Phenom II / Athlon II, the first Core 2 --
++// no SSE4.1 there). Force-included into every source file when the build has PS2X_SIMD_BASELINE=ON (CMake). Every
++// replacement gives the same bits as the instruction it replaces (pure selects, integer arithmetic, byte moves), so a
++// baseline build computes the same game state as the default build: online peers may mix them.
++#if defined(PS2X_SIMD_BASELINE) && (defined(_M_X64) || defined(__x86_64__))
++#include <immintrin.h> // declares the originals first; the macros below then only rename the later uses
++#include <intrin.h>
++#include <cstdint>
++
++static inline __m128 ps2x_bl_blendv_ps(__m128 a, __m128 b, __m128 mask)
++{
++    const __m128 select = _mm_castsi128_ps(_mm_srai_epi32(_mm_castps_si128(mask), 31));
++    return _mm_or_ps(_mm_and_ps(select, b), _mm_andnot_ps(select, a));
++}
++
++static inline __m128i ps2x_bl_blendv_epi8(__m128i a, __m128i b, __m128i mask)
++{
++    const __m128i select = _mm_cmplt_epi8(mask, _mm_setzero_si128());
++    return _mm_or_si128(_mm_and_si128(select, b), _mm_andnot_si128(select, a));
++}
++
++static inline __m128 ps2x_bl_blend_ps(__m128 a, __m128 b, int imm)
++{
++    const __m128 select = _mm_castsi128_ps(_mm_set_epi32((imm & 8) ? -1 : 0, (imm & 4) ? -1 : 0, (imm & 2) ? -1 : 0,
++                                                         (imm & 1) ? -1 : 0));
++    return _mm_or_ps(_mm_and_ps(select, b), _mm_andnot_ps(select, a));
++}
++
++static inline int32_t ps2x_bl_extract_epi32(__m128i v, int index)
++{
++    alignas(16) int32_t lanes[4];
++    _mm_store_si128(reinterpret_cast<__m128i *>(lanes), v);
++    return lanes[index & 3];
++}
++
++static inline int64_t ps2x_bl_extract_epi64(__m128i v, int index)
++{
++    return (index & 1) ? _mm_cvtsi128_si64(_mm_unpackhi_epi64(v, v)) : _mm_cvtsi128_si64(v);
++}
++
++static inline __m128i ps2x_bl_insert_epi8(__m128i v, int value, int index)
++{
++    alignas(16) uint8_t bytes[16];
++    _mm_store_si128(reinterpret_cast<__m128i *>(bytes), v);
++    bytes[index & 15] = static_cast<uint8_t>(value);
++    return _mm_load_si128(reinterpret_cast<const __m128i *>(bytes));
++}
++
++static inline __m128i ps2x_bl_mullo_epi32(__m128i a, __m128i b)
++{
++    // the low 32 bits of a product are the same signed or unsigned
++    const __m128i even = _mm_mul_epu32(a, b);
++    const __m128i odd = _mm_mul_epu32(_mm_srli_si128(a, 4), _mm_srli_si128(b, 4));
++    return _mm_unpacklo_epi32(_mm_shuffle_epi32(even, _MM_SHUFFLE(0, 0, 2, 0)),
++                              _mm_shuffle_epi32(odd, _MM_SHUFFLE(0, 0, 2, 0)));
++}
++
++static inline __m128i ps2x_bl_min_epi32(__m128i a, __m128i b)
++{
++    const __m128i aGreater = _mm_cmpgt_epi32(a, b);
++    return _mm_or_si128(_mm_and_si128(aGreater, b), _mm_andnot_si128(aGreater, a));
++}
++
++static inline __m128i ps2x_bl_max_epi32(__m128i a, __m128i b)
++{
++    const __m128i aGreater = _mm_cmpgt_epi32(a, b);
++    return _mm_or_si128(_mm_and_si128(aGreater, a), _mm_andnot_si128(aGreater, b));
++}
++
++static inline __m128i ps2x_bl_abs_epi32(__m128i v)
++{
++    const __m128i sign = _mm_srai_epi32(v, 31);
++    return _mm_sub_epi32(_mm_xor_si128(v, sign), sign);
++}
++
++static inline __m128i ps2x_bl_abs_epi16(__m128i v)
++{
++    const __m128i sign = _mm_srai_epi16(v, 15);
++    return _mm_sub_epi16(_mm_xor_si128(v, sign), sign);
++}
++
++static inline __m128i ps2x_bl_abs_epi8(__m128i v)
++{
++    const __m128i sign = _mm_cmpgt_epi8(_mm_setzero_si128(), v);
++    return _mm_sub_epi8(_mm_xor_si128(v, sign), sign);
++}
++
++static inline __m128i ps2x_bl_shuffle_epi8(__m128i v, __m128i control)
++{
++    alignas(16) uint8_t in[16], ctl[16], out[16];
++    _mm_store_si128(reinterpret_cast<__m128i *>(in), v);
++    _mm_store_si128(reinterpret_cast<__m128i *>(ctl), control);
++    for (int i = 0; i < 16; ++i)
++        out[i] = (ctl[i] & 0x80u) ? 0u : in[ctl[i] & 15u];
++    return _mm_load_si128(reinterpret_cast<const __m128i *>(out));
++}
++
++#define _mm_blendv_ps(a, b, m) ps2x_bl_blendv_ps((a), (b), (m))
++#define _mm_blendv_epi8(a, b, m) ps2x_bl_blendv_epi8((a), (b), (m))
++#define _mm_blend_ps(a, b, imm) ps2x_bl_blend_ps((a), (b), (imm))
++#define _mm_extract_epi32(v, i) ps2x_bl_extract_epi32((v), (i))
++#define _mm_extract_epi64(v, i) ps2x_bl_extract_epi64((v), (i))
++#define _mm_insert_epi8(v, x, i) ps2x_bl_insert_epi8((v), (x), (i))
++#define _mm_mullo_epi32(a, b) ps2x_bl_mullo_epi32((a), (b))
++#define _mm_min_epi32(a, b) ps2x_bl_min_epi32((a), (b))
++#define _mm_max_epi32(a, b) ps2x_bl_max_epi32((a), (b))
++#define _mm_abs_epi32(v) ps2x_bl_abs_epi32(v)
++#define _mm_abs_epi16(v) ps2x_bl_abs_epi16(v)
++#define _mm_abs_epi8(v) ps2x_bl_abs_epi8(v)
++#define _mm_shuffle_epi8(v, c) ps2x_bl_shuffle_epi8((v), (c))
++#endif
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+index 387febe..6ac8e29 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+@@ -448,14 +448,33 @@ namespace GSGL
+         HGLRC context = nullptr;
+         if (createAttribs)
+         {
+-            const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, 6, kContextProfileMask, kContextCoreProfileBit,
+-                                      kContextFlags, 0, 0};
+-            context = createAttribs(dc, s_hostContext, attributes);
+-            m_shared = context && s_hostContext;
+-            if (!context && s_hostContext)
++            // Tekken 4 port (old PCs): the newest core context the driver gives, down to 4.3 (what the renderer's
++            // shaders and buffers need; glBufferStorage / glTextureBarrier then come from their extensions). Before,
++            // only 4.6 was asked for, which a driver that stops at 4.3-4.5 refuses.
++            // PS2X_GL_MAX_MINOR=<3..6>: test hook, asks for at most OpenGL 4.<n> (an older driver's offer).
++            const char *maxMinorEnv = std::getenv("PS2X_GL_MAX_MINOR");
++            const int maxMinor = maxMinorEnv ? std::atoi(maxMinorEnv) : 6;
++            for (const int minor : {6, 5, 4, 3})
+             {
+-                std::fprintf(stderr, "[gs-present] WGL sharing failed (%lu); using RAM presentation\n", GetLastError());
+-                context = createAttribs(dc, nullptr, attributes);
++                if (minor > maxMinor && minor != 3)
++                    continue;
++                const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, minor, kContextProfileMask,
++                                          kContextCoreProfileBit, kContextFlags, 0, 0};
++                context = createAttribs(dc, s_hostContext, attributes);
++                m_shared = context && s_hostContext;
++                if (!context && s_hostContext)
++                {
++                    std::fprintf(stderr, "[gs-present] WGL sharing failed (%lu) at 4.%d; using RAM presentation\n",
++                                 GetLastError(), minor);
++                    context = createAttribs(dc, nullptr, attributes);
++                }
++                if (context)
++                {
++                    m_minorVersion = minor;
++                    if (minor != 6)
++                        std::fprintf(stderr, "[gs-gl] OpenGL 4.%d core context (4.6 not offered by the driver)\n", minor);
++                    break;
++                }
+             }
+         }
+         wglMakeCurrent(nullptr, nullptr);
+@@ -466,7 +485,7 @@ namespace GSGL
+                 wglDeleteContext(context);
+             ReleaseDC(window, dc);
+             DestroyWindow(window);
+-            error = "OpenGL 4.6 core context unavailable";
++            error = "OpenGL 4.3 core context unavailable (the graphics driver offers no OpenGL 4.3-4.6)";
+             return false;
+         }
+         m_window = window;
+@@ -599,8 +618,8 @@ namespace GSGL
+         const auto createAttribs = reinterpret_cast<CreateContextAttribs>(wglGetProcAddress("wglCreateContextAttribsARB"));
+         if (!createAttribs || !m_context || !m_dc)
+             return nullptr;
+-        const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, 6, kContextProfileMask, kContextCoreProfileBit,
+-                                  kContextFlags, 0, 0};
++        const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, m_minorVersion, kContextProfileMask,
++                                  kContextCoreProfileBit, kContextFlags, 0, 0};
+         return createAttribs(static_cast<HDC>(m_dc), static_cast<HGLRC>(m_context), attributes);
+     }
+ 
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl.h b/ps2xRuntime/src/lib/gs/gpu/gs_gl.h
+index 5b24b43..84d1975 100644
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_gl.h
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl.h
+@@ -201,6 +201,7 @@ namespace GSGL
+         void *m_context = nullptr;
+         Api m_api;
+         bool m_shared = false;
++        int m_minorVersion = 6; // OpenGL 4.x core context the driver gave (Create)
+     };
+ 
+     bool PublishShared(const Api &gl, GLuint buffer, uint32_t width, uint32_t height, uint64_t renderSequence,
+diff --git a/ps2xRuntime/src/lib/ps2_audio.cpp b/ps2xRuntime/src/lib/ps2_audio.cpp
+index 7abe27c..75480b4 100644
+--- a/ps2xRuntime/src/lib/ps2_audio.cpp
++++ b/ps2xRuntime/src/lib/ps2_audio.cpp
+@@ -513,6 +513,14 @@ namespace
+         int16_t *out = static_cast<int16_t *>(buffer);
+         deviceQueue().pull(out, frames);
+         mixDeviceMovie(out, frames);
++        // TEKKEN4_AUDIO_MUTE=1: the device plays silence; everything before it (IOP, SPU2 mix, queue, movie copy) runs
++        // as usual. Host output only (test runs next to a player on the same PC).
++        static const bool mute = [] {
++            const char *env = std::getenv("TEKKEN4_AUDIO_MUTE");
++            return env && std::strcmp(env, "1") == 0;
++        }();
++        if (mute)
++            std::memset(out, 0, static_cast<size_t>(frames) * 4u);
+     }
+ #endif
+ 

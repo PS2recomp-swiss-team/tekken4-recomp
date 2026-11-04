@@ -103,7 +103,9 @@ def toolchain(build):
                 f"CMAKE_CXX_FLAGS_{build_type.upper()}"):
         lines.append(f"{var}={' '.join(cache.get(var, ('', ''))[1].split())}")
     for name in sorted(cache):
-        if name.startswith("PS2X_") and cache[name][0] == "BOOL":
+        # PS2X_SIMD_BASELINE (SSE2-only build for old CPUs) computes the same game state bit for bit (patch 90, pairs
+        # in docs/PERF.md "Old PCs"): players with and without it must meet, so it is not part of the id.
+        if name.startswith("PS2X_") and cache[name][0] == "BOOL" and name != "PS2X_SIMD_BASELINE":
             lines.append(f"{name}={cache[name][1]}")
     # native VU1 blocks or the interpreter; the directory itself is a path
     lines.append(f"vu1_native={1 if cache.get('PS2X_VU1_MICROCODE_DIR', ('', ''))[1] else 0}")

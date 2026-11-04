@@ -28,7 +28,7 @@ ROOT_FILES = (
 NOT_SHIPPED_DIRS = ("runtime/pal",)
 TOOLS = (
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
-    "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd",
+    "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd", "cpu_needs_baseline.ps1",
     "run_game.cmd", "run_lock.ps1", "set_window_title.ps1", "iso_extract.py", "vu1_micro_from_elf.py",
     "t4_buildid.py", "toolchain_env.cmd", "t4_toolchain_clangcl.cmake", "fetch_msvc_sysroot.py",
     "release_payload.py", "net_play.ps1", "net_preflight.ps1", "collect_test_logs.ps1",

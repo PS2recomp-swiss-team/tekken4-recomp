@@ -45,6 +45,7 @@ STEPS = [  # (script step name, short label shown in the Build tab)
 
 # ------------------------------------------------------------------ settings
 RESOLUTIONS = [  # key = TEKKEN4_INTERNAL_RES value (docs/GRAPHICS.md), label; the same steps as T5DR's launcher
+    ("low", "Low: 480p native, no smoothing (old PCs)", None),
     ("lowest", "Lowest (0.5x, weak graphics)", None),
     ("native", "Native (640x448)", None),
     ("1080p", "1080p", None),
@@ -84,7 +85,8 @@ def load_settings(path=None):
         if s["resolution"] not in RES_LABEL:
             s["resolution"] = DEFAULTS["resolution"]
     except FileNotFoundError:
-        pass
+        if weak_pc():
+            s["resolution"] = "low"
     except (OSError, ValueError) as e:       # unreadable or damaged: keep it for the player, start fresh
         try:
             os.replace(path, path + ".bad")
@@ -112,8 +114,21 @@ def screen_height():
 
 
 def internal_res(s):
-    """TEKKEN4_INTERNAL_RES value; the runtime picks the scale (auto = the screen's step, see docs/GRAPHICS.md)."""
-    return s["resolution"] if s.get("resolution") in RES_LABEL else "native"
+    """TEKKEN4_INTERNAL_RES value; the runtime picks the scale (auto = the screen's step, see docs/GRAPHICS.md).
+    "low" is the old-PC preset: the PS2's own 480p (native) with anti-aliasing and anisotropic filtering off."""
+    r = s.get("resolution")
+    if r == "low":
+        return "native"
+    return r if r in RES_LABEL else "native"
+
+
+def weak_pc():
+    """True on a PC with at most 4 logical processors: the first start then picks the Low preset (docs/PERF.md
+    "Old PCs"). The player can change it in Settings."""
+    try:
+        return (os.cpu_count() or 8) <= 4
+    except Exception:
+        return False
 
 
 # ------------------------------------------------------------------ finding things
@@ -555,8 +570,11 @@ def game_env(s, exe=None):
     if sup["fullscreen"] and s.get("fullscreen"):
         env[names["fullscreen"]] = "exclusive" if s.get("fullscreen_exclusive") else "1"
     env["TEKKEN4_UNLOCK_ALL"] = "1" if s.get("unlock_all", True) else "0"
+    low = s.get("resolution") == "low"
     if sup["aa"]:
-        env[names["aa"]] = "fxaa" if s.get("aa") else "off"
+        env[names["aa"]] = "fxaa" if s.get("aa") and not low else "off"
+    if low:
+        env["TEKKEN4_ANISO"] = "1"
     if sup["progressive"]:
         env[names["progressive"]] = "1" if s.get("progressive") else "0"
     return env

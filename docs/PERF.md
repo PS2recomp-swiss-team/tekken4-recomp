@@ -9,6 +9,104 @@ results unchanged: rollback self-test 0 mismatches (sound off and on), live-fram
 changes on and off. 14 commits on PS2Recomp branch `t4-perf`, exported as `docs/perf/patches/43..56-*.patch` (against
 t4-us 239c212 = patches 01-42; checked: t4-us + 43..56 gives exactly the tree of t4-perf).
 
+## 2026-11-04: VU1 + GS on worker threads (patch 89), old PCs (patch 90)
+
+Owner: "keep working on performance", "T4 should run on old PCs", "faster than an emulator on the same PC".
+Measured with sound ON (the real Namco driver on the emulated IOP, what players run), fights of a scripted VS
+match (both pads fuzzed), `TEKKEN4_RB_MODE=measure` without the frame hash, per frame: EE thread time and its
+**processor cycles** (`mcyc`, QueryThreadCycleTime: other programs do not inflate it), VU1 / GS / VIF time.
+PC: Ryzen 9 7950X + RTX 3090, shared with other agents' games (30-70 % load): interleaved A/B pairs only.
+
+### What a fight frame cost before (EE thread, sound on)
+
+| part | ms per fight frame (mean) | share |
+|---|---|---|
+| EE thread total | 13.0-15.2 (p99 18.8-22.6); 1,555 of 5,311 frames over 16.7 ms | 100 % |
+| VIF1 processing incl. VU1 microprograms (native blocks + their timing model) | 7.4-8.0, of it VU1 6.0-6.9 | ~55 % |
+| GS frontend (GIF packets: PATH1 XGKICK, PATH2, PATH3) | 1.8-2.3 (inside the VIF time for XGKICKs) | |
+| sound: IOP interpreter (Namco driver) + SPU2 mixer | ~5 (15.2 with sound vs 10.1 silent HLE) | ~33 % |
+| game code (recompiled EE C++), scheduler, timers | the rest, ~3 | |
+
+So the "emulated" parts -- not the recompiled game code -- were the cost: VU1 + GS + IOP/SPU2 ~13 of ~15 ms.
+
+### Patch 89: VU1 and the GS frontend on their own threads (`PS2X_VU1_ASYNC`, default on)
+
+On the PS2 the VU1 and the GS run beside the EE. Here the EE thread ran them inside its own DMA writes. Now the EE
+thread records that work in order (VIF1 UNPACKs with the VIF registers they read, MPG uploads, MSCAL/MSCNT with
+TOP/ITOP and MXCSR, every GIF packet) and a **VU1 worker** runs it; with 3+ logical processors a **GS frontend
+worker** takes the GIF packets (`PS2X_GS_SPLIT=0`: one worker). The EE waits for empty queues before it could
+see their results: every VBlankStart (the presenter's latch), GS privileged register reads/writes, EE loads/stores
+to VU1 memory, the GS stubs, rollback capture/restore/hash and every change of the rollback cuts. Frames with
+rollback cuts and VU runs with D/T stop bits stay synchronous. Design + rules: `ps2xRuntime/include/runtime/ps2_vu1_async.h`.
+
+| fight, all 32 logical processors, interleaved (`v2_all`) | before (`PS2X_VU1_ASYNC=0`) | after |
+|---|---|---|
+| EE thread ms per frame mean / p99 | 13.0 / 18.8 | **6.3 / 16.0** |
+| EE thread Mcycles per frame mean / p99 | 56.2 / 79.1 | **27.1 / 41.1** (-52 %) |
+| fight frames with EE work > 16.7 ms | 233 of 3,376 | **25 of 3,385** |
+| guest frames > 20 ms (menus -> fight, 45 s) | 10 | **1** |
+| repeated frames per minute (picture shown twice) | 26.7 | **1.3** |
+| 4c/4t stand-in (mask 0x55): EE Mcycles, frames > 16.7 ms, guest > 20 ms | 53.3, 98, 23 | **27.3, 21, 1** |
+
+The VU1 (6-7 ms) and GS frontend (2-4 ms) now run beside the game code. A 2-core PC (masks 0x5 = 2c/2t, 0xF =
+2c/4t) stays CPU-bound: the whole frame is EE ~6 + VU1 ~7 + GS frontend ~4 + GL thread ~8 ms of a fast core,
+more than two cores of an old CPU give in 16.7 ms; the remaining levers are the VU1 timing model and the sound
+(agents t4vurecomp: VU1 microprograms lifted to native code; t4iop: IOP/SPU2) and the GL thread.
+
+Determinism: `TEKKEN4_RB_MODE=measure` with the **full per-frame state hash** (RDRAM, scratchpad, VU0/VU1 memory
+and registers, scheduler, device and GS privileged registers): 6,005 / 6,071 / 6,093 frames identical to the old path
+(three builds of the change). Netplay pairs: see "Pairs" below.
+
+### Patch 90 + tools: old PCs
+
+**Hard requirements found in the build (before):**
+
+| | what the build needed | why | now |
+|---|---|---|---|
+| CPU instruction set | **SSE4.1 + SSSE3** (Core 2 Penryn 2008+, any Core i, AMD Bulldozer 2011+; NOT AMD Phenom II / Athlon II, Core 2 65 nm) | intrinsics in the recompiled code's macros (`_mm_blendv_ps` at 2,494 sites, `_mm_extract_epi32`, `_mm_mullo_epi32`, `_mm_shuffle_epi8`, `_mm_abs_*`) | default build unchanged; **`PS2X_SIMD_BASELINE=ON` = SSE2 only (any x86-64 CPU)**, chosen by BUILD GAME on a CPU without SSSE3/SSE4.1 (`tools/cpu_needs_baseline.ps1`, `TEKKEN4_SIMD_BASELINE=1/0` forces) |
+| AVX / AVX2 / FMA / BMI | **none required**: the exe's AVX/AVX2/BMI/POPCNT code is all MSVC runtime-dispatched (STL vector algorithms, auto-vectorized loops behind `__isa_available` checks); the few "AVX" hits inside recompiled functions are jump tables read as code | `/arch:AVX2` exists only in `ReleaseMode.cmake` for CMAKE_BUILD_TYPE=Release, which no T4 build uses (RelWithDebInfo) | checked by disassembling both exes with their PDBs (D:\t4perf\isa_count.py) |
+| GPU API | an **OpenGL 4.6** core context was requested; the renderer uses GL 4.3-4.5 functions (glBufferStorage, glClearBufferData, glTextureBarrier; a compute shader only for a frame-hash diagnostic); shaders `#version 430` with GLSL 3.30-level features | | asks 4.6, 4.5, 4.4, then 4.3 (`[gs-gl]` logs the version); minimum now **OpenGL 4.3 + ARB_buffer_storage + texture barrier**: NVIDIA GeForce GTX 400 (2010)+, AMD Radeon HD 5000/6000 with their last drivers (GL 4.4) or HD 7000 (2012)+, Intel HD 4600 (Haswell, 2013, GL 4.3) maybe, Intel HD 2000-4000 (2nd/3rd gen Core iGPU, GL 3.1-4.0) **no** |
+| RAM | see "Pairs" (working set of one game) | | |
+| cores | 2 run, 4 needed for 60 in fights today (above) | | |
+
+SSE2 baseline cost: EE Mcycles +0.5 % (all LPs) / +5 % (2c/4t), VU1 worker +8-9 % (`blab_*`): small, so it is used
+only where it is needed. Same game state: measure-mode full state hash 6,115 of 6,115 frames identical to the
+default build; `tools/t4_buildid.py` leaves PS2X_SIMD_BASELINE out of the build id so both meet online (pairs below).
+
+An old-GPU path (OpenGL 3.3 / Direct3D 10, Intel HD 2000-4000): the shaders already use only texelFetch / unsigned
+samplers; it would need the GL 3.3 context with `#version 330` + the texture-barrier extension (blending feedback),
+plain glBufferData instead of the persistent vertex ring, no glClearBufferData, and the hash diagnostic off --
+roughly 2-3 agent-days, but it cannot be tested on this PC (no such GPU; NVIDIA hands out its newest context for
+any request), so it is not done.
+
+**Low preset (launcher):** Internal resolution "Low: 480p native, no smoothing (old PCs)" = `TEKKEN4_INTERNAL_RES=native`,
+`TEKKEN4_AA=off`, `TEKKEN4_ANISO=1`; picked on the first start of a PC with at most 4 logical processors. (The new
+OpenRecomp launcher's T4 adapter should offer the same three variables.)
+
+### Native code vs emulated parts (for the "recomps are slower than emulators" question)
+
+| part | how it runs in T4 today | origin |
+|---|---|---|
+| EE game code (Namco's MIPS R5900 program) | **statically recompiled to C++** ahead of time (PS2Recomp, built on the player's PC from their ISO), VU0 macro instructions inline | PS2Recomp (ran-j), GPL-3.0 |
+| VU1 microprograms | **translated ahead of time to C++ blocks** (tools/vu1/vu1n_gen.py from the game's micro memory), but run inside an exact VU timing model (pipeline/flag rings, resetScheduler per MSCAL); since patch 89 on their own thread | God of War native port (Waffle565), runtime GPL-3.0, generator licence unresolved (docs/THIRD_PARTY.md) |
+| VU0 micro mode | interpreter (rare) | same |
+| VIF1 / DMA / MFIFO / GIF | emulated device model (HLE-level, no cycle-exact DMA) | PS2Recomp + our patches |
+| GS | emulated: frontend (registers, primitives) + OpenGL hardware renderer | GoW port / sotc-port lineage |
+| IOP (sound driver, CD, pads, memory card) | **R3000A interpreter** running Namco's IRX + HLE kernel/libraries | PS2Recomp ps2xIOP |
+| SPU2 | native mixer at the libsd API level (no register-level SPU2) | GoW port; DSP algorithms described "as in PCSX2 and psx-spx" (comments), no PCSX2 code copied that this tree records |
+| BIOS / kernel | HLE syscalls, no BIOS | PS2Recomp |
+
+PCSX2: no PCSX2 source is part of T4 according to docs/THIRD_PARTY.md and the code's comments (some algorithms are
+documented as matching PCSX2's behaviour). PCSX2's own Tekken 4 page lists no open issues; its fixed ones were
+vertical lines in hardware mode (fixed in PCSX2 1.5.0; the T4 port had the same kind of seam and fixed it itself:
+patch 70, docs/GRAPHICS.md) and a freeze when choosing Story/Arcade (not seen here); a 2015 forum report of
+invisible fighters in hardware mode belongs to the same vertical-line cause.
+
+Faster than an emulator? The recompiled game code is a small part of a frame (~3 ms). What still costs is emulated
+hardware (VU1 timing model, IOP interpreter, GS); patch 89 moves the VU1/GS half off the game's critical path, the
+VU1 recompile (t4vurecomp) and the IOP/SPU2 work (t4iop) are the next big items. No PCSX2 run was done here (no
+PCSX2/BIOS on this PC by rule), so no side-by-side fps number exists.
+
 ## 2026-10-30: Building to 60, smoothness (patches docs/perf/patches/80-82 against t4-us 702a93a)
 
 **Building 57 -> 60.0 fps (min second 60, two runs), every stage 60.0 fps; fight present p99 16.9-17.2 ms, no frame

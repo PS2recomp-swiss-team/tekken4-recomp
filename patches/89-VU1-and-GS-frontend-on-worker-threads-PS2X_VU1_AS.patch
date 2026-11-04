@@ -1,0 +1,1649 @@
+From e9a75ad5bb4cc13a76a3f6550847780e49ae3e4e Mon Sep 17 00:00:00 2001
+From: t5dr <t5dr@local>
+Date: Wed, 4 Nov 2026 09:18:34 +0100
+Subject: [PATCH 1/2] 89-VU1-and-GS-frontend-on-worker-threads-PS2X_VU1_ASYNC
+
+Tekken 4 port (t4-perf). The EE thread ran the VU1 microprograms and every GS packet inside its own VIF1/GIF DMA
+writes: about half of its work in a fight (with sound the game thread sat at the 16.7 ms limit on a fast PC).
+Now the EE thread records that work in order -- VIF1 UNPACKs with the VIF registers they read
+(ps2_vu1_async::applyVif1Unpack, the same code for both paths), MPG uploads, MSCAL/MSCNT with TOP/ITOP and MXCSR,
+every GIF packet's bytes from the arbiter -- and a VU1 worker runs it; with 3+ logical processors a second worker
+takes the GS frontend (PS2X_GS_SPLIT=0: one worker). The EE waits for empty queues before it can observe their
+results: VBlankStart, GS privileged register reads/writes, EE loads/stores to VU1 memory, the GS stubs (clears,
+local->host, presenter latch, display env, SetGsCrt), rollback capture/restore/hash and every change of the rollback
+cuts. Frames with cuts, VU runs with D/T stop bits enabled, and the UNPACK form whose ROW update reads old VU1
+lanes run synchronously as before. PS2X_VU1_ASYNC=0 = the old path.
+
+Also: ps2_perf_stats::threadCycles() (processor cycles of the calling thread) and a [perf] vu1_async line
+(records, KB, syncs, waits, fallbacks per second).
+
+Checked: TEKKEN4_RB_MODE=measure with the full per-frame state hash (RDRAM, scratchpad, VU0/VU1 memory and
+registers, scheduler, device and GS privileged registers): 6005 / 6071 / 6093 frames identical to the old path.
+EE thread per fight frame 56-65 -> 27 Mcycles.
+---
+ ps2xRuntime/CMakeLists.txt                    |   1 +
+ .../include/runtime/gs/ps2_gif_arbiter.h      |   3 +
+ ps2xRuntime/include/runtime/ps2_memory.h      |   1 +
+ ps2xRuntime/include/runtime/ps2_perf_stats.h  |  19 +
+ .../include/runtime/ps2_rollback_cuts.h       |   8 +
+ ps2xRuntime/include/runtime/ps2_vu1_async.h   |  76 +++
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp    |   4 +
+ .../src/lib/Kernel/Stubs/Helpers/Support.h    |   2 +
+ .../src/lib/Kernel/Syscalls/System.cpp        |   2 +
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        |   5 +
+ ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp    |  29 +-
+ ps2xRuntime/src/lib/ps2_memory.cpp            |  22 +-
+ ps2xRuntime/src/lib/ps2_perf_stats.cpp        |  16 +
+ ps2xRuntime/src/lib/ps2_rollback.cpp          |   4 +
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  62 ++-
+ ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp  | 512 ++++++++++--------
+ ps2xRuntime/src/lib/ps2_vu1_async.cpp         | 444 +++++++++++++++
+ 17 files changed, 962 insertions(+), 248 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/ps2_vu1_async.h
+ create mode 100644 ps2xRuntime/src/lib/ps2_vu1_async.cpp
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index a864bc6..8a8cca3 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -388,6 +388,7 @@ add_library(ps2_runtime STATIC
+     src/lib/ps2_runahead.cpp
+     src/lib/ps2_iop_host.cpp
+     src/lib/ps2_memory.cpp
++    src/lib/ps2_vu1_async.cpp
+     src/lib/ps2_pad.cpp
+     src/lib/ps2_rom_device.cpp
+     src/lib/ps2_vfs.cpp
+diff --git a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+index 4aa2f0b..46231d3 100644
+--- a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
++++ b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+@@ -37,8 +37,11 @@ public:
+ 
+     void drain();
+     bool empty() const { return m_queue.empty(); }
++    // The GS's packet function itself (the VU1 worker calls it for queued packets).
++    void processPacket(const uint8_t *data, uint32_t sizeBytes);
+ 
+ private:
++    void dispatch(const uint8_t *data, uint32_t sizeBytes);
+     ProcessPacketFn m_processFn;
+     std::vector<GifArbiterPacket> m_queue;
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index 8240869..f01a995 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -325,6 +325,7 @@ public:
+     uint64_t vifWriteCount() const { return m_vifWriteCount.load(std::memory_order_relaxed); }
+     uint64_t getVU0CodeGeneration() const { return m_vu0CodeGeneration.load(std::memory_order_relaxed); }
+     uint64_t getVU1CodeGeneration() const { return m_vu1CodeGeneration.load(std::memory_order_relaxed); }
++    void noteVU1CodeModified() { m_vu1CodeGeneration.fetch_add(1, std::memory_order_relaxed); } // VU1 worker (MPG)
+ 
+     // Read/write memory
+     uint8_t read8(uint32_t address);
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+index 401ff32..fccf3fe 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf_stats.h
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -9,8 +9,27 @@
+ 
+ class PS2Runtime;
+ 
++#ifdef _WIN32
++// Declared like <windows.h> does (BOOL, HANDLE, PULONG64), so a translation unit may include both.
++extern "C" __declspec(dllimport) int __stdcall QueryThreadCycleTime(void *ThreadHandle, unsigned long long *CycleTime);
++extern "C" __declspec(dllimport) void *__stdcall GetCurrentThread(void);
++#endif
++
+ namespace ps2_perf_stats
+ {
++    // Processor cycles the calling thread has run so far (not the time it waited or was preempted): a cost measure
++    // that other programs on the PC do not inflate. 0 where the OS has no such counter.
++    inline uint64_t threadCycles() noexcept
++    {
++#ifdef _WIN32
++        unsigned long long cycles = 0;
++        QueryThreadCycleTime(GetCurrentThread(), &cycles);
++        return cycles;
++#else
++        return 0;
++#endif
++    }
++
+     bool enabled() noexcept;
+ 
+     struct Counters
+diff --git a/ps2xRuntime/include/runtime/ps2_rollback_cuts.h b/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+index da26c42..cf318d0 100644
+--- a/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
++++ b/ps2xRuntime/include/runtime/ps2_rollback_cuts.h
+@@ -18,6 +18,11 @@ namespace ps2x::iop
+     struct RpcResult;
+ }
+ 
++namespace ps2_vu1_async
++{
++    void sync() noexcept;
++}
++
+ namespace ps2_rollback
+ {
+     // Host-only work dropped while a frame is re-simulated. Everything that writes guest-visible state (RDRAM,
+@@ -77,6 +82,9 @@ namespace ps2_rollback
+ 
+     inline void setActiveCuts(uint32_t cuts) noexcept
+     {
++        // work queued for the VU1 worker ran under the cuts it was queued with
++        if (cuts != g_activeCuts.load(std::memory_order_relaxed))
++            ps2_vu1_async::sync();
+         g_activeCuts.store(cuts, std::memory_order_relaxed);
+     }
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1_async.h b/ps2xRuntime/include/runtime/ps2_vu1_async.h
+new file mode 100644
+index 0000000..ef9b736
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_vu1_async.h
+@@ -0,0 +1,76 @@
++#pragma once
++// Tekken 4 port (perf, t4-perf): the VU1 + GS side of a frame on a worker thread.
++//
++// On the PS2 the VU1 and the GS run beside the EE. Here the EE thread ran them inside its own DMA writes: every
++// VIF1 transfer unpacked into VU1 memory, ran the VU1 microprograms (MSCAL/MSCNT) and pushed every GIF packet (PATH1
++// XGKICKs, PATH2 DIRECTs, PATH3 DMA) through the GS frontend before the game code could go on -- about half of the
++// game thread's work in a fight. With PS2X_VU1_ASYNC on (default), the EE thread only records that work (VU1 memory
++// writes, microprogram starts with their TOP/ITOP, the packets' bytes) into a queue, and one worker runs it in the
++// same order with the same inputs.
++//
++// What the EE can see stays exactly as before: the VIF1/DMA/GIF registers, MSKPATH3, PATH2 cut state and VPU_STAT are
++// still computed on the EE thread at the same point; nothing the worker does reaches RDRAM, the scratchpad, the IOP or
++// the EE scheduler. Its only EE-visible results are VU1 memory/registers, GS privileged registers (CSR FINISH/SIGNAL,
++// SIGLBLID) and GS memory read back to the host -- and every EE access to those first waits for the queue to be empty
++// (sync): GS privileged register reads/writes, EE loads/stores to VU1 memory, the GS stubs (clears, local->host
++// transfers), every VBlankStart (the presenter's latch), rollback capture/restore/hash and any change of the rollback
++// cuts. VU1 data the netplay hash leaves out anyway (CutVu1 frames run without VU1 at all: 0 mismatches).
++// Cases this does not model run synchronously after a sync: VU1 D/T stop bits enabled, UNPACK forms that read VU1
++// memory to update the ROW register (mode 2 with partial vectors), frames with rollback cuts, other threads.
++#include <cstdint>
++#include <functional>
++
++namespace ps2_vu1_async
++{
++    // One VIF1 UNPACK with the VIF registers it reads (ps2_vif1_interpreter.cpp).
++    struct Vif1Unpack
++    {
++        uint8_t vn = 0, vl = 0;
++        bool maskEnable = false, zeroExtend = false;
++        int components = 0;
++        uint32_t cl = 1, wl = 1, writes = 0, sources = 0, bytesPerVector = 0, vuAddr = 0, mode = 0, mask = 0;
++        uint32_t row[4]{}, col[4]{};
++    };
++    // Writes the UNPACK into vu1 (16 KB VU1 data memory); row = the ROW register (mode 2 updates it).
++    void applyVif1Unpack(uint8_t *vu1, const Vif1Unpack &u, const uint8_t *source, uint32_t *row);
++
++    struct Hooks
++    {
++        uint8_t *vu1Data = nullptr;
++        uint8_t *vu1Code = nullptr;
++        std::function<void()> codeModified;                                      // VU1 code generation bump
++        std::function<void(uint32_t pc, uint32_t top, uint32_t itop)> mscal;     // runs the microprogram
++        std::function<void(uint32_t top, uint32_t itop)> mscnt;
++        std::function<void(const uint8_t *data, uint32_t size)> gif;             // the GS's packet function
++    };
++
++    // Starts the worker when PS2X_VU1_ASYNC is not 0. Called once with the bound subsystems.
++    void start(const Hooks &hooks);
++    // The EE executor thread calls this once (EeScheduler::run): only it queues work.
++    void bindProducer() noexcept;
++    bool enabled() noexcept;
++    bool onWorker() noexcept;
++    // On the VU1 worker with the GS worker split off: queues an XGKICK packet for the GS worker (true) -- else false
++    // and the caller hands the packet to the GS itself.
++    bool forwardWorkerGif(const uint8_t *data, uint32_t size);
++    // True when work may be queued now: enabled, called on the producer (EE) thread, no rollback cut active.
++    bool active() noexcept;
++    // Waits until everything queued so far has run (no-op when disabled, idle or on the worker itself).
++    void sync() noexcept;
++    // sync() before an UNPACK form that reads VU1 memory on the EE thread (counted in stats().fallbacks).
++    void syncForFallback() noexcept;
++
++    // Producers (EE thread, only while active()).
++    void writeVu1Data(uint32_t offset, const void *source, uint32_t bytes); // wraps at the 16 KB end
++    void writeVu1Code(uint32_t offset, const void *source, uint32_t bytes);
++    void mscal(uint32_t pc, uint32_t top, uint32_t itop);
++    void mscnt(uint32_t top, uint32_t itop);
++    void gif(const uint8_t *data, uint32_t size);
++    void unpack(const Vif1Unpack &u, const uint8_t *source, uint32_t sourceBytes); // u.row = ROW before it
++
++    struct Stats
++    {
++        uint64_t records = 0, bytes = 0, syncs = 0, syncWaits = 0, syncWaitNs = 0, fullWaits = 0, fallbacks = 0;
++    };
++    Stats stats() noexcept;
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 93b0497..db905c2 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -6,6 +6,7 @@
+ #include "ps2_runtime_macros.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "runtime/ps2_perf_stats.h"
++#include "runtime/ps2_vu1_async.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -188,6 +189,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+ void EeScheduler::run()
+ {
+     assertExecutor();
++    ps2_vu1_async::bindProducer();
+     m_running.store(true, std::memory_order_release);
+ 
+     while (!m_stopRequested.load(std::memory_order_acquire))
+@@ -2057,6 +2059,8 @@ void EeScheduler::processEvent(const EeEvent &event)
+         requestStop();
+         break;
+     case EeEventType::VBlankStart:
++        // The frame's VU1/GS work is done before the vblank shows it (presenter latch, CSR FIELD, vsync tick).
++        ps2_vu1_async::sync();
+         if (ps2_input_latency::vblankHash())
+         {
+             // The picture scanned out during the frame that ends here (docs/INPUT.md: game frames of lag).
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+index b1bb6d8..08681c2 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+@@ -1,3 +1,4 @@
++#include "runtime/ps2_vu1_async.h"
+ #include <algorithm>
+ #include <cctype>
+ 
+@@ -1878,6 +1879,7 @@ namespace
+     {
+         if (!runtime || !runtime->syncCoreSubsystems())
+             return;
++        ps2_vu1_async::sync();
+         auto &regs = runtime->memory().gs();
+         regs.pmode = env.pmode;
+         regs.smode2 = env.smode2;
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+index 9614016..7808b5f 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -1,3 +1,4 @@
++#include "runtime/ps2_vu1_async.h"
+ #include "Common.h"
+ #include "System.h"
+ 
+@@ -11,6 +12,7 @@ namespace ps2_syscalls
+ 
+         if (runtime)
+         {
++            ps2_vu1_async::sync();
+             auto &gs = runtime->memory().gs();
+             const uint64_t smode2 =
+                 (static_cast<uint64_t>(interlaced) & 0x1ull) |
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 23efdce..74b4ab9 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -1,3 +1,4 @@
++#include "runtime/ps2_vu1_async.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/gs/gs_cpu_backend.h"
+ #if defined(PS2X_GS_GL)
+@@ -550,6 +551,7 @@ GSPresentationRequest GS::buildPresentationRequestUnlocked() const
+ 
+ void GS::latchHostPresentationFrame()
+ {
++    ps2_vu1_async::sync();
+     GSPresentationRequest request{};
+     {
+         std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+@@ -1130,6 +1132,7 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
+ 
+ void GS::writeRegister(uint8_t regAddr, uint64_t value)
+ {
++    ps2_vu1_async::sync();
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+     writeRegisterUnlocked(regAddr, value);
+ }
+@@ -1685,6 +1688,7 @@ void GS::processImageData(const uint8_t *data, uint32_t sizeBytes)
+ 
+ bool GS::clearFramebufferContext(uint32_t contextIndex, uint32_t rgba)
+ {
++    ps2_vu1_async::sync();
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+     return m_backend && m_backend->ClearFramebuffer(m_ctx[(contextIndex != 0u) ? 1 : 0], rgba);
+ }
+@@ -1697,6 +1701,7 @@ bool GS::clearActiveFramebuffer(uint32_t rgba)
+ 
+ uint32_t GS::consumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
+ {
++    ps2_vu1_async::sync();
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+     return m_backend ? m_backend->ConsumeLocalToHostBytes(dst, maxBytes) : 0u;
+ }
+diff --git a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+index a7b57ca..00ff598 100644
+--- a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
++++ b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/gs/ps2_gif_arbiter.h"
++#include "runtime/ps2_vu1_async.h"
+ #include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+@@ -50,6 +51,23 @@ struct GifCopyStats
+ GifCopyStats g_gifCopyStats;
+ } // namespace
+ 
++void GifArbiter::processPacket(const uint8_t *data, uint32_t sizeBytes)
++{
++    if (ps2_vu1_async::forwardWorkerGif(data, sizeBytes))
++        return; // an XGKICK on the VU1 worker: the GS worker runs it, in order
++    if (m_processFn)
++        m_processFn(data, sizeBytes);
++}
++
++// The GS gets a packet: on the VU1 worker's queue when it runs (in this same order), else at once.
++void GifArbiter::dispatch(const uint8_t *data, uint32_t sizeBytes)
++{
++    if (!ps2_vu1_async::onWorker() && ps2_vu1_async::active())
++        ps2_vu1_async::gif(data, sizeBytes);
++    else
++        processPacket(data, sizeBytes);
++}
++
+ GifArbiter::GifArbiter(ProcessPacketFn processFn)
+     : m_processFn(std::move(processFn))
+ {
+@@ -72,9 +90,16 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
+     if (!data || sizeBytes < 16 || !m_processFn)
+         return;
+ 
++    if (ps2_vu1_async::onWorker())
++    {
++        // XGKICK of a queued VU1 run: the EE thread owns the queue below; on the EE thread this packet would have
++        // found it empty (VU1 runs inside VIF1 transfers, never between a PATH3 submit and its drain).
++        processPacket(data, sizeBytes);
++        return;
++    }
+     if (drainImmediately && m_queue.empty())
+     {
+-        m_processFn(data, sizeBytes);
++        dispatch(data, sizeBytes);
+         g_gifCopyStats.note(true, sizeBytes);
+         return;
+     }
+@@ -113,7 +138,7 @@ void GifArbiter::drain()
+         auto &pkt = m_queue[i];
+         if (!pkt.data.empty())
+         {
+-            m_processFn(pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
++            dispatch(pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
+         }
+     }
+     m_queue.clear();
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index a119897..095c5c7 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1,6 +1,7 @@
+ #include "runtime/ps2_memory.h"
+ #include "runtime/ps2_address.h"
+ #include "runtime/gs/gs_frontend.h"
++#include "runtime/ps2_vu1_async.h"
+ #include "ps2_log.h"
+ #include <atomic>
+ #include <cstdio>
+@@ -732,9 +733,13 @@ const uint8_t *PS2Memory::mapVuMemory(uint32_t physAddr, uint32_t size, uint32_t
+     }
+     if (const uint8_t *ptr = mapRange(PS2_VU1_CODE_BASE, PS2_VU1_CODE_SIZE, m_vu1Code))
+     {
++        ps2_vu1_async::sync(); // the EE touches VU1 memory: everything queued for the VU1 has run first
+         return ptr;
+     }
+-    return mapRange(PS2_VU1_DATA_BASE, PS2_VU1_DATA_SIZE, m_vu1Data);
++    const uint8_t *vu1Data = mapRange(PS2_VU1_DATA_BASE, PS2_VU1_DATA_SIZE, m_vu1Data);
++    if (vu1Data)
++        ps2_vu1_async::sync();
++    return vu1Data;
+ }
+ 
+ uint32_t PS2Memory::translateAddress(uint32_t virtualAddress)
+@@ -916,6 +921,7 @@ uint32_t PS2Memory::read32(uint32_t address)
+ 
+     if (isGsPrivReg(address))
+     {
++        ps2_vu1_async::sync();
+         uint32_t off = address & 7;
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+@@ -964,6 +970,7 @@ uint64_t PS2Memory::read64(uint32_t address)
+ 
+     if (isGsPrivReg(address))
+     {
++        ps2_vu1_async::sync();
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
+@@ -1125,6 +1132,7 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
+ 
+     if (isGsPrivReg(address))
+     {
++        ps2_vu1_async::sync();
+         uint32_t off = address & 7;
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+@@ -1185,6 +1193,7 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
+ 
+     if (isGsPrivReg(address))
+     {
++        ps2_vu1_async::sync();
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
+@@ -1333,6 +1342,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+ 
+     if (isGsPrivReg(address))
+     {
++        ps2_vu1_async::sync();
+         // NB: unreachable from write8/16/32/64 today since those all funnel IO
+         // register writes through addresses in PS2_IO_BASE's range, which is
+         // disjoint from PS2_GS_PRIV_REG_BASE; kept correct for direct callers.
+@@ -2511,6 +2521,15 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+ {
+     if (!data || sizeBytes < 16)
+         return;
++    if (ps2_vu1_async::onWorker())
++    {
++        // PATH1 from a queued VU1 run: straight to the GS (the arbiter's queue belongs to the EE thread).
++        if (m_gifArbiter)
++            m_gifArbiter->processPacket(data, sizeBytes);
++        else if (m_gifPacketCallback)
++            m_gifPacketCallback(data, sizeBytes);
++        return;
++    }
+ 
+     if (pathId == GifPathId::Path3)
+     {
+@@ -2867,6 +2886,7 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+ 
+     if (isGsPrivReg(address))
+     {
++        ps2_vu1_async::sync();
+         // NB: unreachable from read8/16/32/64 today, same reasoning as the write
+         // path above; kept correct for direct callers.
+         const uint32_t off = address & 7u;
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+index deb7cca..9c507fa 100644
+--- a/ps2xRuntime/src/lib/ps2_perf_stats.cpp
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -2,6 +2,7 @@
+ #include "ps2_runtime.h"
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/ps2_rollback_cuts.h"
++#include "runtime/ps2_vu1_async.h"
+ 
+ #include <cstdio>
+ #include <cstdlib>
+@@ -207,6 +208,21 @@ namespace ps2_perf_stats
+                 }
+                 if (!by.empty())
+                     std::printf("[perf] t=%.1f drains_by=%s\n", static_cast<double>(now.t - t0) / 1e9, by.c_str());
++                {
++                    static ps2_vu1_async::Stats lastAsync{};
++                    const ps2_vu1_async::Stats a = ps2_vu1_async::stats();
++                    if (a.records != lastAsync.records || a.syncs != lastAsync.syncs)
++                        std::printf("[perf] t=%.1f vu1_async records=%llu kb=%llu syncs=%llu waits=%llu wait_ms=%.1f full=%llu fallbacks=%llu\n",
++                                    static_cast<double>(now.t - t0) / 1e9,
++                                    static_cast<unsigned long long>(a.records - lastAsync.records),
++                                    static_cast<unsigned long long>((a.bytes - lastAsync.bytes) >> 10),
++                                    static_cast<unsigned long long>(a.syncs - lastAsync.syncs),
++                                    static_cast<unsigned long long>(a.syncWaits - lastAsync.syncWaits),
++                                    static_cast<double>(a.syncWaitNs - lastAsync.syncWaitNs) / 1e6,
++                                    static_cast<unsigned long long>(a.fullWaits - lastAsync.fullWaits),
++                                    static_cast<unsigned long long>(a.fallbacks - lastAsync.fallbacks));
++                    lastAsync = a;
++                }
+                 {
+                     std::vector<uint32_t> pres, vbl;
+                     uint32_t rep = 0, skip = 0;
+diff --git a/ps2xRuntime/src/lib/ps2_rollback.cpp b/ps2xRuntime/src/lib/ps2_rollback.cpp
+index 2e804ba..96391ea 100644
+--- a/ps2xRuntime/src/lib/ps2_rollback.cpp
++++ b/ps2xRuntime/src/lib/ps2_rollback.cpp
+@@ -1,5 +1,6 @@
+ #include "runtime/ps2_rollback.h"
+ #include "runtime/ps2_rollback_cuts.h"
++#include "runtime/ps2_vu1_async.h"
+ 
+ #include "ps2_runtime.h"
+ #include "Kernel/Stubs/Pad.h"
+@@ -291,6 +292,7 @@ namespace ps2_rollback
+ 
+     void capture(PS2Runtime &runtime, Snapshot &out)
+     {
++        ps2_vu1_async::sync();
+         PS2Memory &memory = runtime.memory();
+         captureRdram(memory, out);
+         copyIn(out.scratchpad, memory.getScratchpad(), PS2_SCRATCHPAD_SIZE);
+@@ -322,6 +324,7 @@ namespace ps2_rollback
+ 
+     void restore(PS2Runtime &runtime, const Snapshot &in)
+     {
++        ps2_vu1_async::sync();
+         if (!in.valid)
+         {
+             return;
+@@ -365,6 +368,7 @@ namespace ps2_rollback
+ 
+     StateHash hashState(PS2Runtime &runtime, const std::vector<MaskRange> &masks, std::vector<uint64_t> *pageHashes)
+     {
++        ps2_vu1_async::sync();
+         constexpr uint32_t kPage = 4096u;
+         constexpr uint32_t kPages = PS2_RAM_SIZE / kPage;
+         PS2Memory &memory = runtime.memory();
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 7d87f9b..d5d2cb1 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1,4 +1,5 @@
+ #include "ps2_runtime.h"
++#include "runtime/ps2_vu1_async.h"
+ #include "ps2_log.h"
+ #include "ps2_stubs.h"
+ #include "ps2_syscalls.h"
+@@ -836,21 +837,30 @@ bool PS2Runtime::syncCoreSubsystems()
+     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
+                                     { m_gs.processGIFPacket(data, size); });
+     m_memory.setGifArbiter(&m_gifArbiter);
++    // VU1 microprograms. With the VU1 worker (ps2_vu1_async.h) a run is queued with its TOP/ITOP; VPU_STAT's D/T stop
++    // bits are what a run leaves with both stop enables off (always clear), so the EE sees the same value at once.
+     m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
+                                  {
+                                      if (ps2_rollback::cutActive(ps2_rollback::CutVu1))
+                                          return;
+-                                     ps2_rollback::ProfileScope profile(ps2_rollback::g_hostProfile.vu1Ns);
+-                                     ++ps2_rollback::g_hostProfile.vu1Runs;
+                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+                                      if (!cpuContext)
+                                      {
+                                          cpuContext = &m_cpuContext;
+                                      }
+-                                     m_vu1.state().dBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+-                                     m_vu1.state().tBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
++                                     const bool dBit = (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
++                                     const bool tBit = (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
++                                     if (!dBit && !tBit && ps2_vu1_async::active())
++                                     {
++                                         cpuContext->vu0_vpu_stat &= ~0x0600u;
++                                         ps2_vu1_async::mscal(startPC, top, itop);
++                                         return;
++                                     }
++                                     ps2_vu1_async::sync();
++                                     ps2_rollback::ProfileScope profile(ps2_rollback::g_hostProfile.vu1Ns);
++                                     ++ps2_rollback::g_hostProfile.vu1Runs;
++                                     m_vu1.state().dBitEnabled = dBit;
++                                     m_vu1.state().tBitEnabled = tBit;
+                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
+                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
+                                                    m_gs, &m_memory, startPC, top, itop, 65536);
+@@ -865,10 +875,17 @@ bool PS2Runtime::syncCoreSubsystems()
+                                      {
+                                          cpuContext = &m_cpuContext;
+                                      }
+-                                     m_vu1.state().dBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+-                                     m_vu1.state().tBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
++                                     const bool dBit = (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
++                                     const bool tBit = (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
++                                     if (!dBit && !tBit && ps2_vu1_async::active())
++                                     {
++                                         cpuContext->vu0_vpu_stat &= ~0x0600u;
++                                         ps2_vu1_async::mscnt(top, itop);
++                                         return;
++                                     }
++                                     ps2_vu1_async::sync();
++                                     m_vu1.state().dBitEnabled = dBit;
++                                     m_vu1.state().tBitEnabled = tBit;
+                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
+                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
+                                                   m_gs, &m_memory, top, itop, 65536);
+@@ -876,7 +893,30 @@ bool PS2Runtime::syncCoreSubsystems()
+                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
+                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
+                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
+-    resetIop();
++    {
++        ps2_vu1_async::Hooks hooks;
++        hooks.vu1Data = m_memory.getVU1Data();
++        hooks.vu1Code = m_memory.getVU1Code();
++        hooks.codeModified = [this]() { m_memory.noteVU1CodeModified(); };
++        hooks.mscal = [this](uint32_t pc, uint32_t top, uint32_t itop)
++        {
++            ps2_rollback::ProfileScope profile(ps2_rollback::g_hostProfile.vu1Ns);
++            ++ps2_rollback::g_hostProfile.vu1Runs;
++            m_vu1.state().dBitEnabled = false;
++            m_vu1.state().tBitEnabled = false;
++            m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE, m_memory.getVU1Data(), PS2_VU1_DATA_SIZE, m_gs,
++                          &m_memory, pc, top, itop, 65536);
++        };
++        hooks.mscnt = [this](uint32_t top, uint32_t itop)
++        {
++            m_vu1.state().dBitEnabled = false;
++            m_vu1.state().tBitEnabled = false;
++            m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE, m_memory.getVU1Data(), PS2_VU1_DATA_SIZE, m_gs,
++                         &m_memory, top, itop, 65536);
++        };
++        hooks.gif = [this](const uint8_t *data, uint32_t size) { m_gifArbiter.processPacket(data, size); };
++        ps2_vu1_async::start(hooks);
++    }    resetIop();
+     m_vu0.reset();
+     m_vu1.reset();
+ 
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index 7ff22c1..8158d5e 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -1,6 +1,7 @@
+ // Based on Blackline Interactive implementation
+ #include "runtime/ps2_memory.h"
+ #include "runtime/ps2_rollback_cuts.h"
++#include "runtime/ps2_vu1_async.h"
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -427,6 +428,249 @@ void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
+     }
+ }
+ 
++// One VIF1 UNPACK into VU1 data memory (the EE thread's own memory, or the VU1 worker's, ps2_vu1_async.h): u holds
++// the VIF registers it reads, row is the ROW register (updated in mode 2).
++void ps2_vu1_async::applyVif1Unpack(uint8_t *vu1, const Vif1Unpack &u, const uint8_t *srcBase, uint32_t *row)
++{
++    // 32-bit, mask off, mode 0/3, u.cl>=u.wl: every write consumes one source vector and adds no ROW.
++    // V4 with u.cl==u.wl is one contiguous VU span (wrap once at vector 1024). Narrower formats keep
++    // the unread lanes. destVec&0x3FF stays inside the 16KB VU mem, same as the slow loop.
++    if (u.vl == 0u && !u.maskEnable &&
++        (u.mode == 0u || u.mode == 3u) && u.cl >= u.wl)
++    {
++        const uint32_t srcStride = static_cast<uint32_t>(u.components) * 4u;
++        if (u.components == 4 && u.cl == u.wl)
++        {
++            uint32_t remaining = u.writes;
++            uint32_t srcOff = 0u;
++            uint32_t dest = u.vuAddr;
++            while (remaining > 0u)
++            {
++                const uint32_t room = 0x400u - dest;
++                const uint32_t n = (remaining < room) ? remaining : room;
++                std::memcpy(vu1 + dest * 16u, srcBase + srcOff, static_cast<size_t>(n) * 16u);
++                srcOff += n * 16u;
++                remaining -= n;
++                dest = 0u;
++            }
++        }
++        else
++        {
++            for (uint32_t writeIndex = 0; writeIndex < u.writes; ++writeIndex)
++            {
++                const uint32_t cyclePos = writeIndex % u.wl;
++                const uint32_t destVec = (u.vuAddr + (writeIndex / u.wl) * u.cl + cyclePos) & 0x3FFu;
++                const uint8_t *srcVec = srcBase + static_cast<size_t>(writeIndex) * srcStride;
++                if (u.components == 1)
++                {
++                    uint32_t scalar = 0u;
++                    std::memcpy(&scalar, srcVec, 4u);
++                    const uint32_t lanes[4] = {scalar, scalar, scalar, scalar};
++                    std::memcpy(vu1 + destVec * 16u, lanes, 16u);
++                }
++                else
++                {
++                    std::memcpy(vu1 + destVec * 16u, srcVec, srcStride);
++                }
++            }
++        }
++        return;
++    }
++    uint32_t srcIndex = 0u;
++    for (uint32_t writeIndex = 0; writeIndex < u.writes; ++writeIndex)
++    {
++        const uint32_t cyclePos = writeIndex % u.wl;
++        const bool sourceAvailable = (u.cl >= u.wl) || (cyclePos < u.cl);
++
++        uint32_t destVec = 0;
++        if (u.cl >= u.wl)
++        {
++            destVec = (u.vuAddr + (writeIndex / u.wl) * u.cl + cyclePos) & 0x3FFu;
++        }
++        else
++        {
++            destVec = (u.vuAddr + writeIndex) & 0x3FFu;
++        }
++
++        uint32_t destOff = destVec * 16u;
++        if (destOff + 16u > PS2_VU1_DATA_SIZE)
++        {
++            if (sourceAvailable && srcIndex < u.sources)
++                ++srcIndex;
++            continue;
++        }
++
++        uint32_t lanes[4] = {0u, 0u, 0u, 0u};
++        std::memcpy(lanes, vu1 + destOff, sizeof(lanes));
++        uint32_t decompressed[4] = {lanes[0], lanes[1], lanes[2], lanes[3]};
++        bool decoded = false;
++
++        const uint8_t *srcVec = nullptr;
++        if (sourceAvailable && srcIndex < u.sources)
++        {
++            srcVec = srcBase + srcIndex * u.bytesPerVector;
++            ++srcIndex;
++            decoded = true;
++        }
++
++        auto extend16 = [&](uint16_t raw) -> uint32_t
++        {
++            if (u.zeroExtend)
++                return static_cast<uint32_t>(raw);
++            return static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(raw)));
++        };
++
++        auto extend8 = [&](uint8_t raw) -> uint32_t
++        {
++            if (u.zeroExtend)
++                return static_cast<uint32_t>(raw);
++            return static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(raw)));
++        };
++
++        bool handledFormat = true;
++        if (!decoded)
++        {
++            handledFormat = false;
++        }
++        else if (u.vl == 0u)
++        {
++            if (u.components == 1)
++            {
++                uint32_t scalar = 0;
++                std::memcpy(&scalar, srcVec, sizeof(scalar));
++                decompressed[0] = scalar;
++                decompressed[1] = scalar;
++                decompressed[2] = scalar;
++                decompressed[3] = scalar;
++            }
++            else
++            {
++                const uint32_t limit = (u.components > 4) ? 4u : static_cast<uint32_t>(u.components);
++                for (uint32_t c = 0; c < limit; ++c)
++                {
++                    uint32_t scalar = 0;
++                    std::memcpy(&scalar, srcVec + c * 4u, sizeof(scalar));
++                    decompressed[c] = scalar;
++                }
++            }
++        }
++        else if (u.vl == 1u)
++        {
++            if (u.components == 1)
++            {
++                uint16_t raw = 0;
++                std::memcpy(&raw, srcVec, sizeof(raw));
++                const uint32_t scalar = extend16(raw);
++                decompressed[0] = scalar;
++                decompressed[1] = scalar;
++                decompressed[2] = scalar;
++                decompressed[3] = scalar;
++            }
++            else
++            {
++                const uint32_t limit = (u.components > 4) ? 4u : static_cast<uint32_t>(u.components);
++                for (uint32_t c = 0; c < limit; ++c)
++                {
++                    uint16_t raw = 0;
++                    std::memcpy(&raw, srcVec + c * 2u, sizeof(raw));
++                    decompressed[c] = extend16(raw);
++                }
++            }
++        }
++        else if (u.vl == 2u)
++        {
++            if (u.components == 1)
++            {
++                const uint32_t scalar = extend8(srcVec[0]);
++                decompressed[0] = scalar;
++                decompressed[1] = scalar;
++                decompressed[2] = scalar;
++                decompressed[3] = scalar;
++            }
++            else
++            {
++                const uint32_t limit = (u.components > 4) ? 4u : static_cast<uint32_t>(u.components);
++                for (uint32_t c = 0; c < limit; ++c)
++                {
++                    decompressed[c] = extend8(srcVec[c]);
++                }
++            }
++        }
++        else if (u.vl == 3u && u.vn == 3u)
++        {
++            // V4-5: packed color-like format in a single 16-bit value.
++            uint16_t packed = 0;
++            std::memcpy(&packed, srcVec, sizeof(packed));
++            decompressed[0] = packed & 0x1Fu;
++            decompressed[1] = (packed >> 5) & 0x1Fu;
++            decompressed[2] = (packed >> 10) & 0x1Fu;
++            decompressed[3] = (packed >> 15) & 0x01u;
++        }
++        else
++        {
++            handledFormat = false;
++        }
++
++        // Unknown compressed format fallback: preserve legacy raw-copy behavior.
++        if (!handledFormat && decoded && !u.maskEnable && (u.mode == 0u || u.mode == 3u))
++        {
++            uint32_t copyBytes = (u.bytesPerVector < 16u) ? u.bytesPerVector : 16u;
++            std::memcpy(vu1 + destOff, srcVec, copyBytes);
++            continue;
++        }
++
++        const bool canAdd = (u.vl != 3u || u.vn != 3u);
++        const uint32_t mode = u.mode & 3u;
++        const uint32_t colIdx = (cyclePos > 3u) ? 3u : cyclePos;
++        const uint32_t maskCycle = (cyclePos > 3u) ? 3u : cyclePos;
++
++        for (uint32_t field = 0u; field < 4u; ++field)
++        {
++            uint32_t maskSpec = 0u;
++            if (u.maskEnable)
++            {
++                const uint32_t shift = ((maskCycle * 4u) + field) * 2u;
++                maskSpec = (u.mask >> shift) & 0x3u;
++            }
++
++            // In fill-write cycles with suspended source reads, treat raw-data selections as row-fill.
++            if (!decoded && maskSpec == 0u)
++                maskSpec = 1u;
++
++            uint32_t writeVal = lanes[field];
++            if (maskSpec == 0u)
++            {
++                if (handledFormat)
++                {
++                    writeVal = decompressed[field];
++                    if (canAdd && (mode == 1u || mode == 2u))
++                    {
++                        writeVal = writeVal + row[field];
++                        if (mode == 2u)
++                            row[field] = writeVal;
++                    }
++                }
++            }
++            else if (maskSpec == 1u)
++            {
++                writeVal = row[field];
++            }
++            else if (maskSpec == 2u)
++            {
++                writeVal = u.col[colIdx];
++            }
++            else
++            {
++                continue; // write-protect
++            }
++
++            lanes[field] = writeVal;
++        }
++
++        std::memcpy(vu1 + destOff, lanes, sizeof(lanes));
++    }
++}
++
+ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
+ {
+     if (sizeBytes == 0u || srcPhys >= PS2_RAM_SIZE)
+@@ -637,8 +881,13 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+                     copyBytes = PS2_VU1_CODE_SIZE - destAddr;
+                 if (pos + copyBytes <= sizeBytes)
+                 {
+-                    std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
+-                    markVU1CodeModified();
++                    if (ps2_vu1_async::active())
++                        ps2_vu1_async::writeVu1Code(destAddr, data + pos, copyBytes);
++                    else
++                    {
++                        std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
++                        markVU1CodeModified();
++                    }
+                 }
+             }
+             pos += mpgBytes;
+@@ -744,243 +993,38 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+                     else
+                         g_unpackStats.note(g_unpackStats.slow, writeVectorCount);
+                 }
+-                // 32-bit, mask off, mode 0/3, cl>=wl: every write consumes one source vector and adds no ROW.
+-                // V4 with cl==wl is one contiguous VU span (wrap once at vector 1024). Narrower formats keep
+-                // the unread lanes. destVec&0x3FF stays inside the 16KB VU mem, same as the slow loop.
+-                if (vl == 0u && !maskEnable &&
+-                    (vif1_regs.mode == 0u || vif1_regs.mode == 3u) && cl >= wl)
++                ps2_vu1_async::Vif1Unpack u{};
++                u.vn = vn;
++                u.vl = vl;
++                u.maskEnable = maskEnable;
++                u.zeroExtend = zeroExtend;
++                u.components = components;
++                u.cl = cl;
++                u.wl = wl;
++                u.writes = writeVectorCount;
++                u.sources = sourceVectorCount;
++                u.bytesPerVector = bytesPerVector;
++                u.vuAddr = vuAddr;
++                u.mode = vif1_regs.mode & 3u;
++                u.mask = vif1_regs.mask;
++                std::memcpy(u.row, vif1_regs.row, sizeof u.row);
++                std::memcpy(u.col, vif1_regs.col, sizeof u.col);
++                // VU1 worker: the UNPACK is queued with its registers; the EE keeps the ROW register right at once
++                // (mode 2 adds to ROW; only a full vector makes that independent of the VU1 memory's old lanes).
++                const bool queued = ps2_vu1_async::active() && (u.mode != 2u || u.vn == 3u);
++                if (queued)
+                 {
+-                    const uint32_t srcStride = static_cast<uint32_t>(components) * 4u;
+-                    if (components == 4 && cl == wl)
++                    ps2_vu1_async::unpack(u, srcBase, totalBytes);
++                    if (u.mode == 2u)
+                     {
+-                        uint32_t remaining = writeVectorCount;
+-                        uint32_t srcOff = 0u;
+-                        uint32_t dest = vuAddr;
+-                        while (remaining > 0u)
+-                        {
+-                            const uint32_t room = 0x400u - dest;
+-                            const uint32_t n = (remaining < room) ? remaining : room;
+-                            std::memcpy(m_vu1Data + dest * 16u, srcBase + srcOff, static_cast<size_t>(n) * 16u);
+-                            srcOff += n * 16u;
+-                            remaining -= n;
+-                            dest = 0u;
+-                        }
++                        static uint8_t scratch[PS2_VU1_DATA_SIZE];
++                        ps2_vu1_async::applyVif1Unpack(scratch, u, srcBase, vif1_regs.row);
+                     }
+-                    else
+-                    {
+-                        for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
+-                        {
+-                            const uint32_t cyclePos = writeIndex % wl;
+-                            const uint32_t destVec = (vuAddr + (writeIndex / wl) * cl + cyclePos) & 0x3FFu;
+-                            const uint8_t *srcVec = srcBase + static_cast<size_t>(writeIndex) * srcStride;
+-                            if (components == 1)
+-                            {
+-                                uint32_t scalar = 0u;
+-                                std::memcpy(&scalar, srcVec, 4u);
+-                                const uint32_t lanes[4] = {scalar, scalar, scalar, scalar};
+-                                std::memcpy(m_vu1Data + destVec * 16u, lanes, 16u);
+-                            }
+-                            else
+-                            {
+-                                std::memcpy(m_vu1Data + destVec * 16u, srcVec, srcStride);
+-                            }
+-                        }
+-                    }
+-                    pos += totalBytes;
+-                    continue;
+                 }
+-                uint32_t srcIndex = 0u;
+-                for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
++                else
+                 {
+-                    const uint32_t cyclePos = writeIndex % wl;
+-                    const bool sourceAvailable = (cl >= wl) || (cyclePos < cl);
+-
+-                    uint32_t destVec = 0;
+-                    if (cl >= wl)
+-                    {
+-                        destVec = (vuAddr + (writeIndex / wl) * cl + cyclePos) & 0x3FFu;
+-                    }
+-                    else
+-                    {
+-                        destVec = (vuAddr + writeIndex) & 0x3FFu;
+-                    }
+-
+-                    uint32_t destOff = destVec * 16u;
+-                    if (destOff + 16u > PS2_VU1_DATA_SIZE)
+-                    {
+-                        if (sourceAvailable && srcIndex < sourceVectorCount)
+-                            ++srcIndex;
+-                        continue;
+-                    }
+-
+-                    uint32_t lanes[4] = {0u, 0u, 0u, 0u};
+-                    std::memcpy(lanes, m_vu1Data + destOff, sizeof(lanes));
+-                    uint32_t decompressed[4] = {lanes[0], lanes[1], lanes[2], lanes[3]};
+-                    bool decoded = false;
+-
+-                    const uint8_t *srcVec = nullptr;
+-                    if (sourceAvailable && srcIndex < sourceVectorCount)
+-                    {
+-                        srcVec = srcBase + srcIndex * bytesPerVector;
+-                        ++srcIndex;
+-                        decoded = true;
+-                    }
+-
+-                    auto extend16 = [&](uint16_t raw) -> uint32_t
+-                    {
+-                        if (zeroExtend)
+-                            return static_cast<uint32_t>(raw);
+-                        return static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(raw)));
+-                    };
+-
+-                    auto extend8 = [&](uint8_t raw) -> uint32_t
+-                    {
+-                        if (zeroExtend)
+-                            return static_cast<uint32_t>(raw);
+-                        return static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(raw)));
+-                    };
+-
+-                    bool handledFormat = true;
+-                    if (!decoded)
+-                    {
+-                        handledFormat = false;
+-                    }
+-                    else if (vl == 0u)
+-                    {
+-                        if (components == 1)
+-                        {
+-                            uint32_t scalar = 0;
+-                            std::memcpy(&scalar, srcVec, sizeof(scalar));
+-                            decompressed[0] = scalar;
+-                            decompressed[1] = scalar;
+-                            decompressed[2] = scalar;
+-                            decompressed[3] = scalar;
+-                        }
+-                        else
+-                        {
+-                            const uint32_t limit = (components > 4) ? 4u : static_cast<uint32_t>(components);
+-                            for (uint32_t c = 0; c < limit; ++c)
+-                            {
+-                                uint32_t scalar = 0;
+-                                std::memcpy(&scalar, srcVec + c * 4u, sizeof(scalar));
+-                                decompressed[c] = scalar;
+-                            }
+-                        }
+-                    }
+-                    else if (vl == 1u)
+-                    {
+-                        if (components == 1)
+-                        {
+-                            uint16_t raw = 0;
+-                            std::memcpy(&raw, srcVec, sizeof(raw));
+-                            const uint32_t scalar = extend16(raw);
+-                            decompressed[0] = scalar;
+-                            decompressed[1] = scalar;
+-                            decompressed[2] = scalar;
+-                            decompressed[3] = scalar;
+-                        }
+-                        else
+-                        {
+-                            const uint32_t limit = (components > 4) ? 4u : static_cast<uint32_t>(components);
+-                            for (uint32_t c = 0; c < limit; ++c)
+-                            {
+-                                uint16_t raw = 0;
+-                                std::memcpy(&raw, srcVec + c * 2u, sizeof(raw));
+-                                decompressed[c] = extend16(raw);
+-                            }
+-                        }
+-                    }
+-                    else if (vl == 2u)
+-                    {
+-                        if (components == 1)
+-                        {
+-                            const uint32_t scalar = extend8(srcVec[0]);
+-                            decompressed[0] = scalar;
+-                            decompressed[1] = scalar;
+-                            decompressed[2] = scalar;
+-                            decompressed[3] = scalar;
+-                        }
+-                        else
+-                        {
+-                            const uint32_t limit = (components > 4) ? 4u : static_cast<uint32_t>(components);
+-                            for (uint32_t c = 0; c < limit; ++c)
+-                            {
+-                                decompressed[c] = extend8(srcVec[c]);
+-                            }
+-                        }
+-                    }
+-                    else if (vl == 3u && vn == 3u)
+-                    {
+-                        // V4-5: packed color-like format in a single 16-bit value.
+-                        uint16_t packed = 0;
+-                        std::memcpy(&packed, srcVec, sizeof(packed));
+-                        decompressed[0] = packed & 0x1Fu;
+-                        decompressed[1] = (packed >> 5) & 0x1Fu;
+-                        decompressed[2] = (packed >> 10) & 0x1Fu;
+-                        decompressed[3] = (packed >> 15) & 0x01u;
+-                    }
+-                    else
+-                    {
+-                        handledFormat = false;
+-                    }
+-
+-                    // Unknown compressed format fallback: preserve legacy raw-copy behavior.
+-                    if (!handledFormat && decoded && !maskEnable && (vif1_regs.mode == 0u || vif1_regs.mode == 3u))
+-                    {
+-                        uint32_t copyBytes = (bytesPerVector < 16u) ? bytesPerVector : 16u;
+-                        std::memcpy(m_vu1Data + destOff, srcVec, copyBytes);
+-                        continue;
+-                    }
+-
+-                    const bool canAdd = (vl != 3u || vn != 3u);
+-                    const uint32_t mode = vif1_regs.mode & 3u;
+-                    const uint32_t colIdx = (cyclePos > 3u) ? 3u : cyclePos;
+-                    const uint32_t maskCycle = (cyclePos > 3u) ? 3u : cyclePos;
+-
+-                    for (uint32_t field = 0u; field < 4u; ++field)
+-                    {
+-                        uint32_t maskSpec = 0u;
+-                        if (maskEnable)
+-                        {
+-                            const uint32_t shift = ((maskCycle * 4u) + field) * 2u;
+-                            maskSpec = (vif1_regs.mask >> shift) & 0x3u;
+-                        }
+-
+-                        // In fill-write cycles with suspended source reads, treat raw-data selections as row-fill.
+-                        if (!decoded && maskSpec == 0u)
+-                            maskSpec = 1u;
+-
+-                        uint32_t writeVal = lanes[field];
+-                        if (maskSpec == 0u)
+-                        {
+-                            if (handledFormat)
+-                            {
+-                                writeVal = decompressed[field];
+-                                if (canAdd && (mode == 1u || mode == 2u))
+-                                {
+-                                    writeVal = writeVal + vif1_regs.row[field];
+-                                    if (mode == 2u)
+-                                        vif1_regs.row[field] = writeVal;
+-                                }
+-                            }
+-                        }
+-                        else if (maskSpec == 1u)
+-                        {
+-                            writeVal = vif1_regs.row[field];
+-                        }
+-                        else if (maskSpec == 2u)
+-                        {
+-                            writeVal = vif1_regs.col[colIdx];
+-                        }
+-                        else
+-                        {
+-                            continue; // write-protect
+-                        }
+-
+-                        lanes[field] = writeVal;
+-                    }
+-
+-                    std::memcpy(m_vu1Data + destOff, lanes, sizeof(lanes));
++                    ps2_vu1_async::syncForFallback();
++                    ps2_vu1_async::applyVif1Unpack(m_vu1Data, u, srcBase, vif1_regs.row);
+                 }
+             }
+             pos += totalBytes;
+diff --git a/ps2xRuntime/src/lib/ps2_vu1_async.cpp b/ps2xRuntime/src/lib/ps2_vu1_async.cpp
+new file mode 100644
+index 0000000..782b082
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_vu1_async.cpp
+@@ -0,0 +1,444 @@
++// Tekken 4 port (perf, t4-perf): VU1 + GS work of the EE thread on worker threads, in order (ps2_vu1_async.h).
++//
++// EE thread --(VU1 queue)--> VU1 worker: VU1 memory writes, microprograms; GIF packets are forwarded
++//                             --(GS queue)--> GS worker: every GIF packet (PATH1 XGKICKs and the EE's PATH2/3) in the
++//                                             order the EE thread would have processed them.
++// With one worker (PS2X_GS_SPLIT=0, or fewer than 3 logical processors) the VU1 worker runs the GS packets itself.
++#include "runtime/ps2_vu1_async.h"
++#include "runtime/ps2_rollback_cuts.h"
++#include "runtime/ps2_perf_stats.h"
++#include "ThreadNaming.h"
++
++#include <atomic>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <thread>
++#include <immintrin.h>
++#ifdef _WIN32
++#include <intrin.h>
++extern "C" __declspec(dllimport) int __stdcall GetProcessAffinityMask(void *process, unsigned long long *processMask,
++                                                                      unsigned long long *systemMask);
++extern "C" __declspec(dllimport) void *__stdcall GetCurrentProcess(void);
++#endif
++
++namespace ps2_vu1_async
++{
++    namespace
++    {
++        enum Type : uint32_t
++        {
++            kWrap = 0x57524150u, // rest of the ring up to its end is padding
++            kVu1Data = 1,
++            kVu1Code = 2,
++            kMscal = 3,
++            kMscnt = 4,
++            kGif = 5,
++            kUnpack = 6, // payload: Vif1Unpack, then the source bytes
++        };
++
++        struct Header
++        {
++            uint32_t type;
++            uint32_t bytes; // payload
++            uint32_t a, b, c;
++            uint32_t mxcsr;
++        };
++        static_assert(sizeof(Header) == 24, "record header");
++
++        constexpr uint64_t kCapacity = 32ull << 20; // bytes; a power of two
++        constexpr uint32_t kMaxPayload = 8u << 20;   // larger packets run synchronously
++
++        inline uint64_t align8(uint64_t v) { return (v + 7u) & ~7ull; }
++
++        // Spin budgets (pause iterations) before a thread sleeps: short on PCs with few logical processors, where a
++        // spinning thread takes the processor the presenter, the GL thread or the other side needs.
++        int g_workerSpin = 2000;
++        int g_syncSpin = 4000;
++
++        // One single-producer / single-consumer ring of records.
++        struct Queue
++        {
++            std::unique_ptr<uint8_t[]> ring;
++            alignas(64) std::atomic<uint64_t> head{0}; // written by the producer
++            alignas(64) std::atomic<uint64_t> tail{0}; // written by the consumer
++            alignas(64) std::atomic<bool> consumerSleeping{false};
++            std::atomic<bool> producerWaiting{false}; // the producer waits for room
++            std::atomic<bool> drainerWaiting{false};  // the EE thread waits for the queue to empty (sync)
++            uint64_t fullWaits = 0, records = 0, bytes = 0; // producer side
++
++            uint8_t *reserve(uint32_t type, uint32_t payload, uint32_t a, uint32_t b, uint32_t c)
++            {
++                const uint64_t need = align8(sizeof(Header) + payload);
++                uint64_t h = head.load(std::memory_order_relaxed);
++                uint64_t phys = h & (kCapacity - 1u);
++                const uint64_t pad = kCapacity - phys < need ? kCapacity - phys : 0u;
++                for (;;)
++                {
++                    if (h - tail.load(std::memory_order_acquire) + pad + need <= kCapacity)
++                        break;
++                    ++fullWaits;
++                    producerWaiting.store(true, std::memory_order_seq_cst);
++                    const uint64_t t = tail.load(std::memory_order_seq_cst);
++                    if (h - t + pad + need > kCapacity)
++                        tail.wait(t, std::memory_order_seq_cst);
++                    producerWaiting.store(false, std::memory_order_relaxed);
++                }
++                if (pad)
++                {
++                    if (pad >= sizeof(uint32_t))
++                    {
++                        const uint32_t wrap = kWrap;
++                        std::memcpy(ring.get() + phys, &wrap, sizeof wrap);
++                    }
++                    phys = 0u;
++                }
++                const Header hd{type, payload, a, b, c, _mm_getcsr()};
++                std::memcpy(ring.get() + phys, &hd, sizeof hd);
++                ++records;
++                bytes += need;
++                return ring.get() + phys + sizeof(Header);
++            }
++
++            void publish(uint32_t payload)
++            {
++                uint64_t h = head.load(std::memory_order_relaxed);
++                const uint64_t phys = h & (kCapacity - 1u);
++                const uint64_t need = align8(sizeof(Header) + payload);
++                if (kCapacity - phys < need)
++                    h += kCapacity - phys;
++                head.store(h + need, std::memory_order_seq_cst);
++                if (consumerSleeping.load(std::memory_order_seq_cst))
++                    head.notify_one();
++            }
++
++            void put(uint32_t type, const void *payload, uint32_t bytesIn, uint32_t a, uint32_t b, uint32_t c)
++            {
++                uint8_t *dst = reserve(type, bytesIn, a, b, c);
++                if (bytesIn)
++                    std::memcpy(dst, payload, bytesIn);
++                publish(bytesIn);
++            }
++
++            // Waits (producer side) until the consumer has run everything published so far; returns the wait in ns.
++            uint64_t drain()
++            {
++                const uint64_t h = head.load(std::memory_order_acquire);
++                uint64_t t = tail.load(std::memory_order_acquire);
++                if (t == h)
++                    return 0u;
++                const uint64_t t0 = ps2_perf_stats::nowNs();
++                for (int i = 0; i < g_syncSpin && t != h; ++i)
++                {
++                    _mm_pause();
++                    t = tail.load(std::memory_order_acquire);
++                }
++                while (t != h)
++                {
++                    drainerWaiting.store(true, std::memory_order_seq_cst);
++                    t = tail.load(std::memory_order_seq_cst);
++                    if (t != h)
++                        tail.wait(t, std::memory_order_seq_cst);
++                    t = tail.load(std::memory_order_acquire);
++                }
++                drainerWaiting.store(false, std::memory_order_relaxed);
++                return ps2_perf_stats::nowNs() - t0;
++            }
++
++            // Consumer loop: calls run(header, payload) for every record, in order.
++            template <typename Run>
++            [[noreturn]] void consume(Run &&run)
++            {
++                uint64_t t = tail.load(std::memory_order_relaxed);
++                for (;;)
++                {
++                    uint64_t h = head.load(std::memory_order_acquire);
++                    if (h == t)
++                    {
++                        for (int i = 0; i < g_workerSpin && h == t; ++i)
++                        {
++                            _mm_pause();
++                            h = head.load(std::memory_order_acquire);
++                        }
++                        if (h == t)
++                        {
++                            consumerSleeping.store(true, std::memory_order_seq_cst);
++                            h = head.load(std::memory_order_seq_cst);
++                            if (h == t)
++                                head.wait(t, std::memory_order_seq_cst);
++                            consumerSleeping.store(false, std::memory_order_relaxed);
++                            continue;
++                        }
++                    }
++                    while (t != h)
++                    {
++                        const uint64_t phys = t & (kCapacity - 1u);
++                        if (kCapacity - phys < sizeof(Header))
++                        {
++                            t += kCapacity - phys;
++                            continue;
++                        }
++                        Header hd;
++                        std::memcpy(&hd, ring.get() + phys, sizeof hd);
++                        if (hd.type == kWrap)
++                        {
++                            t += kCapacity - phys;
++                            continue;
++                        }
++                        run(hd, ring.get() + phys + sizeof(Header));
++                        t += align8(sizeof(Header) + hd.bytes);
++                        tail.store(t, std::memory_order_seq_cst);
++                        if (producerWaiting.load(std::memory_order_seq_cst) || drainerWaiting.load(std::memory_order_seq_cst))
++                            tail.notify_all();
++                    }
++                }
++            }
++        };
++
++        struct State
++        {
++            Queue vu1; // EE -> VU1 worker
++            Queue gs;  // VU1 worker -> GS worker (split mode)
++            bool split = false;
++            Hooks hooks;
++            Stats stats; // EE side
++        };
++
++        State *g_s = nullptr;
++        bool g_enabled = false;
++        thread_local bool t_vu1Worker = false;
++        thread_local bool t_gsWorker = false;
++        thread_local bool t_producer = false;
++        bool g_foreignWarned = false;
++
++        inline void applyMxcsr(uint32_t want, uint32_t &have)
++        {
++            if (want != have)
++            {
++                _mm_setcsr(want);
++                have = want;
++            }
++        }
++
++        void vu1WorkerMain()
++        {
++            t_vu1Worker = true;
++            ThreadNaming::SetCurrentThreadName("VU1Worker");
++            uint32_t mxcsr = _mm_getcsr();
++            State &s = *g_s;
++            s.vu1.consume([&](const Header &h, const uint8_t *payload)
++                          {
++                              applyMxcsr(h.mxcsr, mxcsr);
++                              Hooks &k = s.hooks;
++                              switch (h.type)
++                              {
++                              case kVu1Data:
++                                  std::memcpy(k.vu1Data + h.a, payload, h.bytes);
++                                  break;
++                              case kVu1Code:
++                                  std::memcpy(k.vu1Code + h.a, payload, h.bytes);
++                                  if (k.codeModified)
++                                      k.codeModified();
++                                  break;
++                              case kMscal:
++                                  k.mscal(h.a, h.b, h.c);
++                                  break;
++                              case kMscnt:
++                                  k.mscnt(h.b, h.c);
++                                  break;
++                              case kGif:
++                                  if (s.split)
++                                      s.gs.put(kGif, payload, h.bytes, 0u, 0u, 0u); // keeps its place behind earlier XGKICKs
++                                  else
++                                      k.gif(payload, h.bytes);
++                                  break;
++                              case kUnpack:
++                              {
++                                  Vif1Unpack u;
++                                  std::memcpy(&u, payload, sizeof u);
++                                  applyVif1Unpack(k.vu1Data, u, payload + sizeof u, u.row);
++                                  break;
++                              }
++                              default:
++                                  break;
++                              } });
++        }
++
++        void gsWorkerMain()
++        {
++            t_gsWorker = true;
++            ThreadNaming::SetCurrentThreadName("GSFrontWorker");
++            uint32_t mxcsr = _mm_getcsr();
++            State &s = *g_s;
++            s.gs.consume([&](const Header &h, const uint8_t *payload)
++                         {
++                             applyMxcsr(h.mxcsr, mxcsr);
++                             if (h.type == kGif)
++                                 s.hooks.gif(payload, h.bytes); });
++        }
++
++        // Logical processors this process may run on (its affinity mask; the whole PC when that cannot be read).
++        unsigned usableProcessors()
++        {
++#ifdef _WIN32
++            unsigned long long processMask = 0, systemMask = 0;
++            if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) && processMask)
++                return static_cast<unsigned>(__popcnt64(processMask));
++#endif
++            const unsigned n = std::thread::hardware_concurrency();
++            return n ? n : 1u;
++        }
++    }
++
++    void start(const Hooks &hooks)
++    {
++        if (g_s)
++        {
++            sync();
++            g_s->hooks = hooks;
++            return;
++        }
++        const char *env = std::getenv("PS2X_VU1_ASYNC");
++        g_enabled = !(env && std::strcmp(env, "0") == 0);
++        if (!g_enabled)
++        {
++            std::fprintf(stderr, "[vu1-async] off (PS2X_VU1_ASYNC=0): VU1 and the GS frontend run on the EE thread\n");
++            return;
++        }
++        const unsigned processors = usableProcessors();
++        if (processors < 8u)
++        {
++            g_workerSpin = 64;
++            g_syncSpin = 256;
++        }
++        g_s = new State();
++        g_s->vu1.ring.reset(new uint8_t[kCapacity]);
++        const char *splitEnv = std::getenv("PS2X_GS_SPLIT");
++        g_s->split = splitEnv ? std::strcmp(splitEnv, "0") != 0 : processors >= 3u;
++        if (g_s->split)
++            g_s->gs.ring.reset(new uint8_t[kCapacity]);
++        g_s->hooks = hooks;
++        std::thread(vu1WorkerMain).detach();
++        if (g_s->split)
++            std::thread(gsWorkerMain).detach();
++        std::fprintf(stderr,
++                     "[vu1-async] on: VU1 microprograms %s run on their own thread%s (%u logical processors, spin %d/%d)\n",
++                     g_s->split ? "and GS packets" : "and GS packets", g_s->split ? "s" : "", processors, g_workerSpin,
++                     g_syncSpin);
++    }
++
++    void bindProducer() noexcept { t_producer = true; }
++    bool enabled() noexcept { return g_enabled; }
++    bool onWorker() noexcept { return t_vu1Worker || t_gsWorker; }
++
++    bool forwardWorkerGif(const uint8_t *data, uint32_t size)
++    {
++        if (!t_vu1Worker || !g_s || !g_s->split)
++            return false;
++        g_s->gs.put(kGif, data, size, 0u, 0u, 0u);
++        return true;
++    }
++
++    bool active() noexcept
++    {
++        if (!g_enabled)
++            return false;
++        if (!t_producer)
++        {
++            if (!onWorker() && !g_foreignWarned)
++            {
++                g_foreignWarned = true;
++                std::fprintf(stderr, "[vu1-async] VU1/GS work from a thread other than the EE thread: run synchronously\n");
++            }
++            return false;
++        }
++        if (ps2_rollback::activeCuts() != 0u)
++        {
++            sync();
++            return false;
++        }
++        return true;
++    }
++
++    void syncForFallback() noexcept
++    {
++        if (g_s && t_producer)
++            ++g_s->stats.fallbacks;
++        sync();
++    }
++
++    void sync() noexcept
++    {
++        // Only the producer waits: other threads (presenter, debug panel) already ran beside the GS work before.
++        if (!g_enabled || !t_producer || !g_s)
++            return;
++        State &s = *g_s;
++        ++s.stats.syncs;
++        uint64_t waited = s.vu1.drain(); // the VU1 worker forwards GS packets before it moves past them
++        if (s.split)
++            waited += s.gs.drain();
++        if (waited)
++        {
++            ++s.stats.syncWaits;
++            s.stats.syncWaitNs += waited;
++        }
++    }
++
++    void writeVu1Data(uint32_t offset, const void *source, uint32_t bytes)
++    {
++        constexpr uint32_t kSize = 0x4000u;
++        const uint8_t *src = static_cast<const uint8_t *>(source);
++        offset &= kSize - 1u;
++        while (bytes)
++        {
++            const uint32_t n = bytes < kSize - offset ? bytes : kSize - offset;
++            g_s->vu1.put(kVu1Data, src, n, offset, 0u, 0u);
++            src += n;
++            bytes -= n;
++            offset = 0u;
++        }
++    }
++
++    void writeVu1Code(uint32_t offset, const void *source, uint32_t bytes) { g_s->vu1.put(kVu1Code, source, bytes, offset, 0u, 0u); }
++    void mscal(uint32_t pc, uint32_t top, uint32_t itop) { g_s->vu1.put(kMscal, nullptr, 0u, pc, top, itop); }
++    void mscnt(uint32_t top, uint32_t itop) { g_s->vu1.put(kMscnt, nullptr, 0u, 0u, top, itop); }
++
++    void gif(const uint8_t *data, uint32_t size)
++    {
++        if (size > kMaxPayload)
++        {
++            syncForFallback();
++            g_s->hooks.gif(data, size);
++            return;
++        }
++        g_s->vu1.put(kGif, data, size, 0u, 0u, 0u);
++    }
++
++    void unpack(const Vif1Unpack &u, const uint8_t *source, uint32_t sourceBytes)
++    {
++        if (sourceBytes > kMaxPayload)
++        {
++            syncForFallback();
++            uint32_t row[4];
++            std::memcpy(row, u.row, sizeof row);
++            applyVif1Unpack(g_s->hooks.vu1Data, u, source, row);
++            return;
++        }
++        uint8_t *dst = g_s->vu1.reserve(kUnpack, static_cast<uint32_t>(sizeof u) + sourceBytes, 0u, 0u, 0u);
++        std::memcpy(dst, &u, sizeof u);
++        std::memcpy(dst + sizeof u, source, sourceBytes);
++        g_s->vu1.publish(static_cast<uint32_t>(sizeof u) + sourceBytes);
++    }
++
++    Stats stats() noexcept
++    {
++        if (!g_s)
++            return {};
++        Stats out = g_s->stats;
++        out.records = g_s->vu1.records;
++        out.bytes = g_s->vu1.bytes;
++        out.fullWaits = g_s->vu1.fullWaits;
++        return out;
++    }
++}

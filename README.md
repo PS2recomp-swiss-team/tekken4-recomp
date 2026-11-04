@@ -35,6 +35,21 @@ Both sides averaged 50.4 fps over the run and had long frame-time spikes. That
 report does not prove a playable 15-minute internet session, a clean-PC build
 or the current edited tree. It was not reproduced here.
 
+## PC requirements
+
+What today's build needs (checked in the code and the built program, 2026-11-04; measured on one fast PC with
+stand-ins for slower ones, not yet on real old hardware -- [docs/PERF.md](docs/PERF.md) "Old PCs"):
+
+| | minimum | for a steady 60 fps in fights |
+|---|---|---|
+| Processor | any 64-bit x86 CPU. BUILD GAME makes an SSE2-only program on a CPU without SSSE3/SSE4.1 (AMD Phenom II / Athlon II, first Core 2), same results online | 4 cores / 4 threads of about 2012 or newer; 2 cores run the game but drop below 60 in fights |
+| Graphics | OpenGL 4.3 with glBufferStorage and texture barrier: GeForce GTX 400 (2010) or newer, Radeon HD 5000/6000 (last drivers) or HD 7000 (2012) or newer, Intel HD 4600 (2013) probably; Intel HD 2000-4000 (2nd/3rd gen Core) cannot run it | at 480p (Settings: "Low") any of these |
+| Memory | 4 GB | 4 GB |
+| System | Windows 10/11 64-bit | |
+
+No AVX, AVX2 or FMA is needed. On a weak PC choose Internal resolution "Low: 480p native, no smoothing" (the
+launcher picks it on PCs with at most 4 logical processors).
+
 Recorded developer-build results for SLUS-20328, 2026-10-29/30. These are
 historical reports; their logs and game data are absent from this review copy:
 
