@@ -466,6 +466,10 @@ class App(tk.Tk):
             return
         self.settings["iso"] = iso
         self.save()
+        ps = core.powershell_problem()     # Wine/Proton: build_game.ps1 cannot run there ('' on Windows)
+        if ps:
+            messagebox.showerror(TITLE, ps)
+            return
         accept_microsoft = False
         if not dry and core.bundled_toolchain() and not core.sysroot_ready():
             if not self.ask_microsoft_terms():
