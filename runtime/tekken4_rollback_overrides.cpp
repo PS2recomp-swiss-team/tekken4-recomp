@@ -111,6 +111,7 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_rollback.h"
 #include "runtime/ps2_rollback_cuts.h"
+#include "ps2x/iop/iop_profile.h"
 #include "Stubs/Pad.h"
 #include "Stubs/SIF.h"
 #include "tekken4_state_probe.h"
@@ -143,6 +144,20 @@ namespace tekken4
 {
     extern uint64_t g_frames; // tekken4_overrides.cpp: passes of the main loop (per-frame sound RPC 0x100)
 }
+
+// t4iop: processor cycles of the calling thread (immune to other programs), for the frame log's mcyc= column.
+#ifdef _WIN32
+extern "C" __declspec(dllimport) int __stdcall QueryThreadCycleTime(void *thread, unsigned long long *cycles);
+extern "C" __declspec(dllimport) void *__stdcall GetCurrentThread();
+static uint64_t t4iopThreadCycles()
+{
+    unsigned long long cycles = 0;
+    QueryThreadCycleTime(GetCurrentThread(), &cycles);
+    return cycles;
+}
+#else
+static uint64_t t4iopThreadCycles() { return 0; }
+#endif
 
 namespace tekken4_rollback
 {
@@ -363,6 +378,7 @@ namespace tekken4_rollback
     uint64_t g_lastLoops = 0;
     uint64_t g_lastIdle = 0;
     double g_hookMs = 0;
+    uint64_t g_lastHookEndCyc = 0; // t4iop: EE thread processor cycles at the end of the previous boundary hook (mcyc=)
     std::map<std::string, uint64_t> g_wakeCounts;
     std::vector<uint64_t> g_prevPages; // previous boundary's page hashes: dirty-page count per frame
     uint64_t g_gsNs = 0, g_lastGsNs = 0; // host time in GS packet processing on the EE thread
@@ -3172,6 +3188,8 @@ namespace tekken4_rollback
             return;
 
         const auto hookStart = std::chrono::steady_clock::now();
+        const uint64_t hookStartCyc = t4iopThreadCycles();
+        const double eeMcyc = g_lastHookEndCyc ? static_cast<double>(hookStartCyc - g_lastHookEndCyc) / 1e6 : 0.0;
         const uint32_t executedCuts = g_frameCuts; // cuts the frame that just ended ran with
         ++g_frame;
         ++g_wallFrames;
@@ -3196,6 +3214,7 @@ namespace tekken4_rollback
         const double eeMs = wallMs - static_cast<double>(waitNs - g_lastWaitNs) / 1e6 - g_hookMs;
         const double gsMs = static_cast<double>(g_gsNs - g_lastGsNs) / 1e6;
         g_lastGsNs = g_gsNs;
+        ps2_rollback::g_hostProfile.iopNs = ps2x::iop::iopProfileNs(); // PS2X_IOP_PROF=1 (t4iop), else 0
         const ps2_rollback::HostProfile &prof = ps2_rollback::g_hostProfile;
         const double vuMs = static_cast<double>(prof.vu1Ns - g_lastProfile.vu1Ns) / 1e6;
         const double vifMs = static_cast<double>(prof.vif1Ns - g_lastProfile.vif1Ns) / 1e6;
@@ -3224,11 +3243,11 @@ namespace tekken4_rollback
 #endif
         std::fprintf(g_log, "f=%" PRIu64 " tick=%" PRIu64 " dt=%" PRIu64 " cyc=%" PRIu64 " dcyc=%" PRIu64
                             " h=%016" PRIx64 " ram=%016" PRIx64 " oth=%016" PRIx64 " sch=%016" PRIx64
-                            " idle=%" PRIu64 " in=%04x in2=%04x ee=%.2f gs=%.2f vif=%.2f vu=%.2f/%" PRIu64 " iop=%.2f wall=%.2f hk=%.2f dirty=%zu t=%.2f p=%s cut=%x run=%d loop=%" PRIu64
+                            " idle=%" PRIu64 " in=%04x in2=%04x ee=%.2f gs=%.2f vif=%.2f vu=%.2f/%" PRIu64 " iop=%.2f wall=%.2f mcyc=%.3f hk=%.2f dirty=%zu t=%.2f p=%s cut=%x run=%d loop=%" PRIu64
                             " wake=%s:%d reg=%s\n",
                      g_frame, info.vsyncTick, info.vsyncTick - g_lastTick, info.eeCycle, info.eeCycle - g_lastCycle,
                      hash.total, hash.rdram, hash.other, hash.scheduler,
-                     g_runtime->eeScheduler().idleSkippedCycles() - g_lastIdle, in1, in2, eeMs, gsMs, vifMs, vuMs, vuRuns, iopMs, wallMs, g_hookMs, dirty,
+                     g_runtime->eeScheduler().idleSkippedCycles() - g_lastIdle, in1, in2, eeMs, gsMs, vifMs, vuMs, vuRuns, iopMs, wallMs, eeMcyc, g_hookMs, dirty,
                      std::chrono::duration<double>(hookStart - g_start).count(), pass, executedCuts, info.runningThreadId,
                      tekken4::g_frames - g_lastLoops, reasonName(info.reason), info.waitId, regionsText(hash).c_str());
         g_lastLoops = tekken4::g_frames;
@@ -3321,6 +3340,7 @@ namespace tekken4_rollback
         const auto hookEnd = std::chrono::steady_clock::now();
         g_hookMs = std::chrono::duration<double, std::milli>(hookEnd - hookStart).count();
         g_lastBoundary = hookStart;
+        g_lastHookEndCyc = t4iopThreadCycles();
     }
 
     // The game's srand (0x2a2528: *(_impure_ptr) + 88 = seed), logged with its caller so the seed source is known
