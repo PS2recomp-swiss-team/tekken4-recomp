@@ -1,5 +1,47 @@
 # Tekken 4 ranked: game-rendered player names
 
+## Badge v5 (2026-11-04)
+
+The host badge now uses the **37 Tekken 5 DR tiers**, indices 0..36. The historical v3 evidence below
+used the former 47-tier header and does not describe the current badge artwork. Player-name queue hooks,
+their fingerprint and the three-round setting are preserved.
+
+Our fallback is original vector artwork: a bevelled silver/cyan frame, T5DR tier colour, one large emblem,
+and a rising tier-progress rail. There is no lettering inside it. The host draws triangles directly in window
+pixels after game presentation and filtering; it never enlarges a native-resolution badge framebuffer.
+Height is 14 game pixels (the native font's capital height), width 1.6 times height. Its bottom aligns with
+the name's baseline, four game pixels left of the name on both sides. The presentation rectangle supplies
+letterbox offsets and scale; the badge retains its aspect at wide window sizes. Guests (`-1`) draw nothing.
+All facets, emblems, cached plates and labels follow the name anchor's HUD alpha.
+
+VS select alone adds a smaller rank name below the player name when it fits the available width. This uses
+the installed T4 game's font 6: read-only glyph, palette, bearing and advance data become a process-local
+texture. No font artwork is bundled/exported and no rank-dependent bytes enter the guest font queue/RAM.
+Fights have no separate rank label.
+
+Optional authentic T5DR plates are read at runtime from the player's existing launcher cache. The runtime
+never extracts, downloads, ships or writes these plates. It accepts only the original 192x96 `rank_NN.png`
+files; missing, invalid or small `_hN` cache variants fall back to our artwork. Originals retain their 2:1
+aspect, common baseline and name gap. Configuration precedence:
+
+1. `TEKKEN4_T5DR_RANK_CACHE=<exact ranks folder>`; `off` forces original artwork.
+2. `T5_RANK_ART=<exact ranks folder>` (T5DR launcher's existing convention).
+3. `OPENRECOMP_T5DR_ROOT`, or `roots.t5dr` in the isolated/normal OpenRecomp `config.json`; then the
+   installation's `launcher.json` `out_dir` / `out`, default `native`, followed by `cache/ranks`.
+
+OpenRecomp configuration comes from `OPENRECOMP_HOME`, else `%LOCALAPPDATA%/OpenRecomp`. Private coexist
+settings may select a different output; that launcher should pass the exact cache folder. Configuration
+is read-only, supports Unicode paths, and invalid/missing data safely leaves the original-art fallback.
+
+`tools/make_rank_badges.py --header runtime/tekken4_rank_badges.h` reproduces the metadata. The game test
+hook `TEKKEN4_HUD_BADGE_SHEET=<PNG path>` exports all 37 original badges at 14/28/42-pixel heights using
+the exact HUD drawing function. PNGs and all game captures remain outside tracked source.
+
+Regression checks: `tools/test_rank_badges.py` (geometry, tiers, fade, guest suppression, cache discovery and
+fallback), `tools/test_rank_label.py` (native font decoding/layout, actual local ELF, entire-RAM equality),
+plus existing native-name, round-setting and build-ID tests. Fresh local game-run evidence is recorded in
+the external `BADGE_V5_REPORT.md` delivered with the pictures.
+
 2026-11-04, SLUS-20328 v1.00, branch `t4-ranked`. Supersedes the Plates v2 covering panel.
 Local build, loopback pair and screenshot validation is recorded below. Initial captures exposed three bugs:
 the active VS select used another draw path, queued fight names had the wrong depth, and badges intermittently
@@ -9,14 +51,14 @@ The local subset passes; the full account-based coordinator acceptance list is n
 ## Visible behavior
 
 The game draws the launcher-provided P1/P2 names using its proportional font 6. The former covering panel and
-raylib player-name text are removed. The host overlay draws only the rank badge, four game pixels left of the
-queued name. Active VS select positioning follows the name widget's transform on the verified identity-oriented
+raylib player-name text are removed. The host overlay draws the rank badge four game pixels left of the
+queued name, and a native-font rank label below it on VS select. Active VS select positioning follows the name widget's transform on the verified identity-oriented
 UI plane; the retained older select path follows its projected name quad. Fight positioning follows the original
 HUD draw's centre. A guest (`tier=-1`) has a name and no badge. Ranked and casual use the same path.
 
 Printable ASCII `0x20..0x7e` is retained, including lowercase, spaces, digits and punctuation. Unsupported Unicode
 scalars become `?`. Names are capped at 16 ASCII characters, then shortened at draw time to 104 font pixels using
-the game's own signed advance metrics. This width leaves room for a 28x16 badge beside the P1 HUD name at x=86.
+the game's own signed advance metrics. This width leaves room for the cap-height badge (22.4x14 original artwork, 28x14 cached plate) beside P1 at x=86.
 The game has no native 16-character limit on these former name textures: **16/104 are our layout policy**.
 Font 6 has separate upper/lowercase metrics and glyph indices; uppercase conversion is unnecessary.
 Windows names are read from the wide environment, avoiding machine-dependent ANSI codepages. UTF-8 helper input
@@ -87,7 +129,7 @@ visibility/opacity. It never feeds simulation state. The former frame-age compar
 removed: RAM can advance or roll back while an older framebuffer is presented, causing valid badges to disappear
 intermittently. Hidden active-select widgets and fallback draws invalidate their badge anchor. Badge shapes,
 outline, text and highlight now receive the name's alpha (128 means opaque; the highlight keeps its 0.22 factor).
-Badge text alone still uses the existing host font; the player's name uses the game font. Final screenshot and
+Badges contain no host-font lettering; select rank labels and player names use the game font. Final screenshot and
 pair evidence must establish the completed candidate's visual and netplay acceptance.
 
 ## Environment and staging
@@ -95,7 +137,7 @@ pair evidence must establish the completed candidate's visual and netplay accept
 | Variable | Meaning |
 |---|---|
 | `TEKKEN4_HUD_NAMES` | `P1 name|P2 name`, identical order on host and joiner |
-| `TEKKEN4_HUD_RANKS` | `P1 tier,P2 tier`, 0..46, -1 for guest/no badge |
+| `TEKKEN4_HUD_RANKS` | `P1 tier,P2 tier`, 0..36, -1 for guest/no badge |
 | `TEKKEN4_HUD_PLATES` | `0` restores fighter names; effective setting must match on both peers |
 | `TEKKEN4_HUD_SHOTS` | `s,s,...` -> window screenshots `hud_<s>s.png` |
 | `TEKKEN4_HUD_WINDOW` | `WxH` for screenshot window size |

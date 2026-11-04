@@ -11,6 +11,9 @@
 #include "rlgl.h"
 #include "tekken4_rank_badges.h"
 #include "tekken4_native_names.h"
+#include "tekken4_badge_draw.h"
+#include "tekken4_rank_cache.h"
+#include "tekken4_rank_label.h"
 
 #include <algorithm>
 #include <mutex>
@@ -52,9 +55,7 @@ namespace tekken4_hud
     struct State
     {
         Side side[2];
-        bool fontTried = false;
-        Font font{};
-        bool fontOwn = false;
+        tekken4_rank_cache::Plates plates;
         std::vector<double> shots;
         size_t nextShot = 0;
         std::chrono::steady_clock::time_point start;
@@ -157,168 +158,33 @@ namespace tekken4_hud
         g_selectWidgetOriginal(ram, ctx, runtime);
     }
 
-    Color rgb(uint32_t v, float a = 1.0f)
+    // Proof sheet uses precisely the renderer used in the HUD, at three actual pixel sizes.
+    void maybeSheet()
     {
-        return Color{static_cast<unsigned char>(v >> 16), static_cast<unsigned char>(v >> 8), static_cast<unsigned char>(v),
-                     static_cast<unsigned char>(std::lround(255.0f * std::clamp(a, 0.0f, 1.0f)))};
-    }
-
-    // raylib draws a triangle given counter-clockwise on screen (back faces are culled): fix the order.
-    void tri(Vector2 a, Vector2 b, Vector2 c, Color col)
-    {
-        const float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-        if (cross > 0.0f)
-            std::swap(b, c);
-        DrawTriangle(a, b, c, col);
-    }
-
-    // A polygon that is star-shaped around `center` (every convex polygon and our stars): a fan of triangles.
-    void fan(Vector2 center, const std::vector<Vector2> &pts, Color col)
-    {
-        for (size_t i = 0; i < pts.size(); ++i)
-            tri(center, pts[i], pts[(i + 1) % pts.size()], col);
-    }
-
-    void outline(const std::vector<Vector2> &pts, float width, Color col)
-    {
-        for (size_t i = 0; i < pts.size(); ++i)
-        {
-            DrawLineEx(pts[i], pts[(i + 1) % pts.size()], width, col);
-            DrawCircleV(pts[i], width * 0.5f, col);
+        static bool done=false;
+        if(done) return;
+        done=true;
+        const char *path=std::getenv("TEKKEN4_HUD_BADGE_SHEET");
+        if(!path||!*path) return;
+        const auto target=LoadRenderTexture(1140,1260);
+        BeginTextureMode(target);
+        ClearBackground(Color{10,21,31,255});
+        DrawText("T4 / T5DR 37 ranks - original host vector artwork",24,18,24,Color{209,241,255,255});
+        DrawText("Actual pixel sizes: 22 x 14   /   45 x 28   /   67 x 42",24,52,18,Color{155,190,208,255});
+        for(int rank=0;rank<tekken4_rank_badges::kCount;++rank) {
+            const int col=rank/13, row=rank%13, x=24+col*376, y=92+row*88;
+            DrawText(TextFormat("%02d  %s",rank,tekken4_rank_badges::kBadges[rank].name),x,y,16,Color{209,225,235,255});
+            for(int size=1;size<=3;++size)
+                tekken4_badge_draw::draw(rank,Rectangle{static_cast<float>(x+16+(size-1)*100),
+                    static_cast<float>(y+24+42-14*size),22.4f*size,14.0f*size},1.0f);
         }
-    }
-
-    // The badge in the 200x100 design space of tools/make_rank_badges.py, mapped onto `r`.
-    struct Map
-    {
-        Rectangle r;
-        Vector2 operator()(float x, float y) const
-        {
-            return Vector2{r.x + x * r.width / tekken4_rank_badges::kWidth, r.y + y * r.height / tekken4_rank_badges::kHeight};
-        }
-        float s(float v) const { return v * r.width / tekken4_rank_badges::kWidth; }
-    };
-
-    std::vector<Vector2> emblem(const Map &m, int star, int n, float cx, float cy, float r)
-    {
-        std::vector<Vector2> pts;
-        const float pi = 3.14159265358979f;
-        if (!star)
-        {
-            float start = (n % 2) ? -pi / 2 : -pi / 2 + pi / n;
-            if (n == 4)
-                start = -pi / 2;
-            for (int i = 0; i < n; ++i)
-                pts.push_back(m(cx + r * std::cos(start + 2 * pi * i / n), cy + r * std::sin(start + 2 * pi * i / n)));
-            return pts;
-        }
-        const float inner = r * (n <= 6 ? 0.42f : n <= 8 ? 0.55f : 0.68f);
-        for (int i = 0; i < 2 * n; ++i)
-        {
-            const float a = -pi / 2 + pi * i / n;
-            const float rr = (i % 2 == 0) ? r : inner;
-            pts.push_back(m(cx + rr * std::cos(a), cy + rr * std::sin(a)));
-        }
-        return pts;
-    }
-
-    Font font()
-    {
-        if (!g.fontTried)
-        {
-            g.fontTried = true;
-            const char *windir = std::getenv("WINDIR"); // the Windows folder (its Fonts); none -> raylib's own font
-            const std::string fonts = std::string(windir ? windir : "") + "/Fonts/";
-            for (const std::string path : {fonts + "arialbd.ttf", fonts + "segoeuib.ttf"})
-            {
-                if (!windir || !*windir || !FileExists(path.c_str()))
-                    continue;
-                Font f = LoadFontEx(path.c_str(), 64, nullptr, 0);
-                if (f.texture.id != 0)
-                {
-                    SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);
-                    g.font = f;
-                    g.fontOwn = true;
-                    break;
-                }
-            }
-            if (!g.fontOwn)
-                g.font = GetFontDefault();
-        }
-        return g.font;
-    }
-
-    // Text with a dark rim (the badge's stroke / readable on any stage), centred on (cx, cy) or left-aligned at x.
-    void text(const std::string &s, float x, float cy, float size, Color fill, Color rim, bool centred)
-    {
-        const Font f = font();
-        const float spacing = size * 0.04f;
-        const Vector2 dim = MeasureTextEx(f, s.c_str(), size, spacing);
-        const float left = centred ? x - dim.x * 0.5f : x;
-        const float top = cy - dim.y * 0.5f;
-        const float o = std::max(1.0f, size * 0.07f);
-        for (int dx = -1; dx <= 1; ++dx)
-            for (int dy = -1; dy <= 1; ++dy)
-                if (dx || dy)
-                    DrawTextEx(f, s.c_str(), Vector2{left + dx * o, top + dy * o}, size, spacing, rim);
-        DrawTextEx(f, s.c_str(), Vector2{left, top}, size, spacing, fill);
-    }
-
-    std::vector<std::string> nameLines(const std::string &name)
-    {
-        std::string up = name;
-        for (char &c : up)
-            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        if (up.size() <= 9 || up.find(' ') == std::string::npos)
-            return {up};
-        size_t best = std::string::npos;
-        for (size_t i = 0; i < up.size(); ++i)
-            if (up[i] == ' ' && (best == std::string::npos ||
-                                 std::fabs(static_cast<double>(i) - up.size() / 2.0) <
-                                     std::fabs(static_cast<double>(best) - up.size() / 2.0)))
-                best = i;
-        return {up.substr(0, best), up.substr(best + 1)};
-    }
-
-    // One rank badge (tools/make_rank_badges.py's svg(), element for element) into `r` (2:1).
-    void badge(int tier, Rectangle r, uint8_t alpha)
-    {
-        if (tier < 0 || tier >= tekken4_rank_badges::kCount)
-            return;
-        const auto &b = tekken4_rank_badges::kBadges[tier];
-        const Map m{r};
-        const float opacity = std::min(1.0f, alpha / 128.0f);
-        const Color plate = rgb(b.plate, opacity), light = rgb(b.light, opacity), dark = rgb(b.dark, opacity);
-        const std::vector<Vector2> hex = {m(14, 6), m(186, 6), m(198, 50), m(186, 94), m(14, 94), m(2, 50)};
-        fan(m(100, 50), hex, plate);
-        fan(m(100, 27), {m(14, 10), m(186, 10), m(195, 44), m(5, 44)}, rgb(b.light, 0.22f * opacity));
-        outline(hex, m.s(5), light);
-        DrawCircleV(m(50, 50), m.s(36), dark);
-        DrawRing(m(50, 50), m.s(34.5f), m.s(37.5f), 0.0f, 360.0f, 48, light);
-        if (!b.star && b.n == 0)
-            DrawCircleV(m(50, 50), m.s(22), light);
-        else
-            fan(m(50, 50), emblem(m, b.star, b.n, 50, 50, 30), light);
-        const float step = b.of > 4 ? 11.0f : 14.0f;
-        for (int i = 0; i < b.pips; ++i)
-        {
-            DrawCircleV(m(96 + i * step, 80), m.s(4.75f), dark);
-            DrawCircleV(m(96 + i * step, 80), m.s(4.0f), light);
-        }
-        const std::vector<std::string> lines = nameLines(b.name);
-        size_t longest = 0;
-        for (const auto &l : lines)
-            longest = std::max(longest, l.size());
-        const float size = std::min(22.0f, std::round(92.0f / (0.7f * static_cast<float>(longest)) * 10.0f) / 10.0f);
-        float ys[2] = {50, 0};
-        if (lines.size() == 2)
-            ys[0] = 38, ys[1] = 60;
-        for (size_t i = 0; i < lines.size(); ++i)
-        {
-            const float y = ys[i] - (b.pips ? 6.0f : 0.0f);
-            const Vector2 p = m(141, y);
-            text(lines[i], p.x, p.y, m.s(size) * 1.05f, rgb(0xffffffu, opacity), dark, true);
-        }
+        EndTextureMode();
+        Image img=LoadImageFromTexture(target.texture);
+        ImageFlipVertical(&img);
+        const bool ok=ExportImage(img,path);
+        UnloadImage(img);
+        UnloadRenderTexture(target);
+        RUNTIME_LOG("[hud] badge sheet " << (ok ? "written" : "failed") << "\n");
     }
 
     void maybeShot()
@@ -351,9 +217,34 @@ namespace tekken4_hud
             SetWindowSize(w, h);
     }
 
+    void originalBadge(int side,int tier,Rectangle rect,uint8_t alpha)
+    {
+        if(tier<0||tier>=tekken4_rank_badges::kCount||!alpha) return;
+        if(alpha>=128) { tekken4_badge_draw::draw(tier,rect,1); return; }
+        // Composite the bevel as ONE fading object. Applying alpha to overlapping facets separately
+        // would make the centre remain opaque. This temporary target is exactly window resolution,
+        // with a 1:1 blit: no small bitmap is ever enlarged (including during HUD transitions).
+        static RenderTexture2D target[2]{};
+        auto &texture=target[side];
+        const int w=static_cast<int>(std::ceil(rect.width)),h=static_cast<int>(std::ceil(rect.height));
+        if(texture.id&&(texture.texture.width!=w||texture.texture.height!=h)) {
+            UnloadRenderTexture(texture); texture={};
+        }
+        if(!texture.id) texture=LoadRenderTexture(w,h);
+        if(!texture.id) return;
+        BeginTextureMode(texture);
+        ClearBackground(BLANK);
+        tekken4_badge_draw::draw(tier,Rectangle{0,0,rect.width,rect.height},1);
+        EndTextureMode();
+        DrawTexturePro(texture.texture,Rectangle{0,0,static_cast<float>(w),-static_cast<float>(h)},
+                       Rectangle{rect.x,rect.y,static_cast<float>(w),static_cast<float>(h)},Vector2{0,0},0,
+                       Color{255,255,255,static_cast<uint8_t>(alpha*255/128)});
+    }
+
     void draw(PS2Runtime &runtime, const ps2_host_overlay::Frame &f, void *)
     {
         windowSize();
+        maybeSheet();
         const uint8_t *rdram = runtime.memory().getRDRAM();
         if (rdram)
         {
@@ -373,10 +264,17 @@ namespace tekken4_hud
                     // Scene/visibility are stable guards; a current-RAM frame-age test flickers.
                     if (!a.valid || a.scene != scene || !a.alpha)
                         continue;
-                    // Badge only: its right edge is four game pixels left of the actual queued text.
-                    const float sx = f.w / 640.0f, sy = f.h / 448.0f;
-                    badge(g.side[side].tier, Rectangle{f.x + (a.x - 32) * sx, f.y + (a.y + 1) * sy,
-                                                      28 * sx, 16 * sy}, a.alpha);
+                    // Direct window-resolution geometry, baseline anchored to the native font.
+                    const int tier = g.side[side].tier;
+                    const Rectangle rect = tekken4_badge_draw::bounds(f.x,f.y,f.w,f.h,a.x,a.y);
+                    if (!g.plates.draw(tier, rect, a.alpha))
+                        originalBadge(side,tier,rect,a.alpha);
+                    if (scene == kSceneSelect && tier >= 0 && tier < tekken4_rank_badges::kCount)
+                    {
+                        const float sx=f.w/640, sy=f.h/448;
+                        tekken4_rank_label::draw(runtime,tekken4_rank_badges::kBadges[tier].name,
+                            f.x+a.x*sx,f.y+(a.y+21)*sy,sx*0.70f,sy*0.70f,a.alpha,112*sx);
+                    }
                 }
             }
         }
