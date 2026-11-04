@@ -1,0 +1,565 @@
+From: t5dr <t5dr@local>
+Subject: [PATCH] 94 Widescreen host presentation, async GIF paths and HUD rectangle
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 6ead93c..013bcc2 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
+     src/lib/ps2_input_latency.cpp
+     src/lib/ps2_host_pad.cpp
+     src/lib/ps2_runahead.cpp
++    src/lib/ps2_switches.cpp
+     src/lib/ps2_iop_host.cpp
+     src/lib/ps2_memory.cpp
+     src/lib/ps2_vu1_async.cpp
+diff --git a/ps2xRuntime/include/ps2_host_overlay.h b/ps2xRuntime/include/ps2_host_overlay.h
+index 44d9e8c..f118092 100644
+--- a/ps2xRuntime/include/ps2_host_overlay.h
++++ b/ps2xRuntime/include/ps2_host_overlay.h
+@@ -10,6 +10,7 @@ namespace ps2_host_overlay
+     {
+         float x, y, w, h;      // where the game's picture sits in the window (letterboxed, scaled)
+         int screenW, screenH;  // the window's size
++        bool wide = false;    // the HUD occupies the middle 3/4 of a widescreen picture
+     };
+     using DrawFn = void (*)(PS2Runtime &runtime, const Frame &frame, void *user);
+     struct Slot
+diff --git a/ps2xRuntime/include/runtime/gs/gs_frontend.h b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+index 7d8b2e4..def50a8 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_frontend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+@@ -2,6 +2,7 @@
+ #define PS2_GS_FRONTEND_H
+ 
+ #include <array>
++#include <atomic>
+ #include <cstddef>
+ #include <cstdint>
+ #include <memory>
+@@ -130,6 +131,10 @@ public:
+     void setDebugHistoryPaused(bool paused);
+     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
+     void latchHostPresentationFrame();
++    // Widescreen (switch "widescreen", TEKKEN4_WIDESCREEN): true when the picture latched for the window holds the
++    // 3D scene (VU1 draws reached it this frame or the one before), so the window shows it at 16:9; menus, movies and
++    // loading screens (no 3D) keep 4:3. Host-only: nothing of this reaches guest memory.
++    bool latchedFrameWide() const { return m_hostPresentationWide.load(std::memory_order_relaxed); }
+     // GL backend with a context shared with the host window: the presented picture is a GPU texture
+     // (GSSharedPresent::Acquire), no pixels are read back per frame.
+     bool usesSharedPresentation() const { return m_backend && m_backend->UsesSharedPresentation(); }
+@@ -232,6 +237,23 @@ private:
+     uint32_t m_hostPresentationDisplayFbp = 0;
+     uint32_t m_hostPresentationSourceFbp = 0;
+     bool m_hostPresentationUsedPreferred = false;
++    // Widescreen bookkeeping per render target (frame buffer page): generation of its last 3D (PATH1) draw and of its
++    // last draw at all. A generation is one latched picture.
++    struct WsTarget
++    {
++        uint32_t fbp = 0;
++        uint64_t gen3d = 0;
++        uint64_t genDrawn = 0;
++        uint32_t fbw = 0;   // PS2X_WS_DEBUG: last frame width and 3D draws since the last report
++        uint32_t draws3d = 0;
++    };
++    std::array<WsTarget, 8> m_wsTargets{};
++    uint64_t m_wsGen = 2;
++    std::array<uint32_t, 6> m_wsStat{}; // PS2X_WS_DEBUG counters: 3D draws, 2D squeezed, not 640, not wide, full width, copies
++    std::atomic<bool> m_hostPresentationWide{false};
++    WsTarget &wsTarget(uint32_t fbp);
++    bool wsWide(const WsTarget &t) const { return t.gen3d != 0u && t.gen3d + 1u >= m_wsGen; }
++    void widescreenAdjust(GSPrimitiveBatch &batch);
+     bool m_hasHostPresentationFrame = false;
+     uint64_t m_nativeImageUploadCount = 0;
+     uint64_t m_nativePackedGIFPacketCount = 0;
+diff --git a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+index 46231d3..e25f356 100644
+--- a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
++++ b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+@@ -12,6 +12,22 @@ enum class GifPathId : uint8_t
+     Path3 = 3,
+ };
+ 
++// The GIF path of the packet the GS frontend is processing on this thread (0 = not inside an arbiter call).
++// Host-only: the widescreen presentation tells VU1 (PATH1, the 3D) from EE (PATH2/3: HUD, menus, copies) draws.
++uint8_t gifCurrentPath() noexcept;
++
++// Restore the path on the thread actually processing a packet, including queued worker dispatch.
++class GifPathScope
++{
++public:
++    explicit GifPathScope(GifPathId id) noexcept;
++    ~GifPathScope();
++    GifPathScope(const GifPathScope &) = delete;
++    GifPathScope &operator=(const GifPathScope &) = delete;
++private:
++    uint8_t saved;
++};
++
+ struct GifArbiterPacket
+ {
+     GifPathId pathId;
+diff --git a/ps2xRuntime/include/runtime/ps2_switches.h b/ps2xRuntime/include/runtime/ps2_switches.h
+new file mode 100644
+index 0000000..7a2e2fe
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_switches.h
+@@ -0,0 +1,30 @@
++#pragma once
++
++#include <atomic>
++
++// Host-side switches: named on/off options of the runtime that a setting (environment) starts and a key can flip while
++// the game runs. They only steer host work (the picture); nothing guest-visible may depend on one, so two netplay peers
++// may differ in them. Tekken 4: "widescreen" (TEKKEN4_WIDESCREEN, F9), see GS::widescreenAdjust.
++namespace ps2_switches
++{
++    // The flag of a switch, created on first use from the environment and kept for the process.
++    std::atomic<bool> &flag(const char *name);
++
++    inline void set(const char *name, bool on)
++    {
++        flag(name).store(on, std::memory_order_relaxed);
++    }
++
++    inline bool get(const char *name)
++    {
++        return flag(name).load(std::memory_order_relaxed);
++    }
++}
++
++// One lookup per use site, then a relaxed load.
++#define PS2_SWITCH(name)                                                  \
++    ([]() -> std::atomic<bool> & {                                        \
++        static std::atomic<bool> &switchFlag = ::ps2_switches::flag(name); \
++        return switchFlag;                                                \
++    }()                                                                   \
++         .load(std::memory_order_relaxed))
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 74b4ab9..1cdfe62 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -9,6 +9,8 @@
+ #include "runtime/ps2_rollback_cuts.h"
+ #include "runtime/ps2_perf_stats.h"
+ #include "runtime/ps2_input_latency.h"
++#include "runtime/ps2_switches.h"
++#include "runtime/gs/ps2_gif_arbiter.h"
+ #include <atomic>
+ #include <algorithm>
+ #include <cmath>
+@@ -578,6 +580,42 @@ void GS::latchHostPresentationFrame()
+     }
+ 
+     const bool hasFrame = static_cast<bool>(frame);
++    if (PS2_SWITCH("widescreen"))
++    {
++        // Which targets this picture shows: the readback says it; shared presentation returns no pixels, then the
++        // display circuits and the preferred display source of the request.
++        std::array<uint32_t, 4> shown{frame.displayFbp, frame.sourceFbp, ~0u, ~0u};
++        if (!hasFrame)
++        {
++            shown[0] = (request.pmode & 1ull) ? static_cast<uint32_t>(request.dispfb1 & 0x1FFu) : ~0u;
++            shown[1] = (request.pmode & 2ull) ? static_cast<uint32_t>(request.dispfb2 & 0x1FFu) : ~0u;
++            shown[2] = request.hasPreferredSource ? request.preferredSource.fbp : ~0u;
++        }
++        std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
++        bool wide = false;
++        for (const WsTarget &t : m_wsTargets)
++            if (t.genDrawn != 0u && std::find(shown.begin(), shown.end(), t.fbp) != shown.end() && wsWide(t))
++                wide = true;
++        m_hostPresentationWide.store(wide && PS2_SWITCH("widescreen"), std::memory_order_relaxed);
++        static const bool wsDebug = [] { const char *v = std::getenv("PS2X_WS_DEBUG"); return v && v[0] == '1'; }();
++        if (wsDebug && m_wsGen % 120u == 0u)
++        {
++            std::fprintf(stderr, "[ws] gen %llu shown %x %x %x wide %d | p1 %u sq2d %u fbw %u notwide %u full %u copy %u |",
++                         static_cast<unsigned long long>(m_wsGen), shown[0], shown[1], shown[2], wide ? 1 : 0,
++                         m_wsStat[0], m_wsStat[1], m_wsStat[2], m_wsStat[3], m_wsStat[4], m_wsStat[5]);
++            for (WsTarget &t : m_wsTargets)
++                if (t.genDrawn)
++                {
++                    std::fprintf(stderr, " %x:%lld/%lld w%u 3d%u", t.fbp,
++                                 static_cast<long long>(t.gen3d) - static_cast<long long>(m_wsGen),
++                                 static_cast<long long>(t.genDrawn) - static_cast<long long>(m_wsGen), t.fbw, t.draws3d);
++                    t.draws3d = 0;
++                }
++            std::fputc('\n', stderr);
++            m_wsStat = {};
++        }
++        ++m_wsGen;
++    }
+     const uint32_t displayFbp = frame.displayFbp;
+     const uint32_t sourceFbp = frame.sourceFbp;
+     const uint32_t width = frame.width;
+@@ -1648,6 +1686,8 @@ void GS::vertexKick(bool drawing)
+     {
+         GSPrimitiveBatch batch = buildDrawBatch(needed);
+         updatePreferredDisplaySourceForDraw(batch);
++        if (PS2_SWITCH("widescreen"))
++            widescreenAdjust(batch);
+         m_backend->Submit(batch);
+         recordDrawDebugEventUnlocked(needed);
+     }
+@@ -1748,6 +1788,101 @@ void GS::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_
+         m_backend->WriteVram(psm, base, bw, x, y, value);
+ }
+ 
++GS::WsTarget &GS::wsTarget(uint32_t fbp)
++{
++    WsTarget *oldest = &m_wsTargets[0];
++    for (WsTarget &t : m_wsTargets)
++    {
++        if (t.genDrawn != 0u && t.fbp == fbp)
++            return t;
++        if (t.genDrawn < oldest->genDrawn)
++            oldest = &t;
++    }
++    *oldest = WsTarget{fbp, 0u, 0u};
++    return *oldest;
++}
++
++// Widescreen 16:9 (TEKKEN4_WIDESCREEN; docs/WIDESCREEN.md in the Tekken 4 project). Host-only: the guest runs its own
++// 4:3 code, nothing here reaches guest memory, the IOP or the EE's timing (the GS is output), so a 16:9 player and a
++// 4:3 player simulate the same game. The VU1 (PATH1) 3D is drawn 3/4 as wide around the screen centre: the 4:3 view
++// fills the middle of the 640-wide target and what the game's VU1 programs send beyond the 4:3 edges (they cull
++// against the GS's guard band, not the screen) fills the sides. The window then shows such a picture at 16:9. The EE's
++// own draws into a 640-wide target holding 3D of this or the last picture (HUD, names, timer, and the hit sparks the EE
++// projects as sprites: PATH2/PATH3) are squeezed the same way, so the HUD keeps its 4:3 shape in the middle and the
++// sparks stay on the fighters. Not squeezed: draws that read a render target (the back->display copy, post effects;
++// they carry the "3D" mark on to their target) and draws spanning the whole width or height (fills, fades, flashes;
++// the game draws its screen fill as 64-pixel columns: squeezed, it left the sides uncleared).
++void GS::widescreenAdjust(GSPrimitiveBatch &batch)
++{
++    const GSContext &c = batch.state.context;
++    WsTarget &target = wsTarget(c.frame.fbp);
++    target.genDrawn = m_wsGen;
++    const float ofx = static_cast<float>(c.xyoffset.ofx) / 16.0f;
++    const float ofy = static_cast<float>(c.xyoffset.ofy) / 16.0f;
++    const float centre = ofx + 320.0f;
++    const auto squeeze = [&]
++    {
++        for (int i = 0; i < batch.vertexCount; ++i)
++        {
++            float &x = batch.vertices[static_cast<size_t>(i)].x;
++            x = centre + (x - centre) * 0.75f;
++        }
++    };
++    if (gifCurrentPath() == static_cast<uint8_t>(GifPathId::Path1))
++    {
++        target.gen3d = m_wsGen;
++        target.fbw = c.frame.fbw;
++        ++target.draws3d;
++        ++m_wsStat[0];
++        if (c.frame.fbw == 10u)
++            squeeze();
++        return;
++    }
++    // A render target read as a texture: a frame-buffer format at least 512 texels wide whose base lies in a recent
++    // target (palette textures, PSMT4/PSMT8, and small textures are game art even when VRAM places them there).
++    const uint8_t psm = c.tex0.psm;
++    const bool fbFormat = psm == 0x00u || psm == 0x01u || psm == 0x02u || psm == 0x0Au;
++    if (batch.state.prim.tme && fbFormat && c.tex0.tw >= 9u)
++    {
++        constexpr uint32_t kFrameBlocks = 640u * 512u * 4u / 256u; // a 640x512 32-bit frame in 256-byte blocks
++        const uint32_t tbp = c.tex0.tbp0;
++        for (const WsTarget &u : m_wsTargets)
++        {
++            if (u.genDrawn == 0u || u.genDrawn + 2u < m_wsGen)
++                continue;
++            const uint32_t base = u.fbp * 32u;
++            if (tbp >= base && tbp < base + kFrameBlocks)
++            {
++                if (&u != &target && wsWide(u))
++                    target.gen3d = std::max(target.gen3d, u.gen3d);
++                ++m_wsStat[5];
++                return;
++            }
++        }
++    }
++    if (c.frame.fbw != 10u || !wsWide(target))
++    {
++        ++m_wsStat[c.frame.fbw != 10u ? 2 : 3];
++        return;
++    }
++    float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
++    for (int i = 0; i < batch.vertexCount; ++i)
++    {
++        const GSVertex &v = batch.vertices[static_cast<size_t>(i)];
++        minX = std::min(minX, v.x - ofx);
++        maxX = std::max(maxX, v.x - ofx);
++        minY = std::min(minY, v.y - ofy);
++        maxY = std::max(maxY, v.y - ofy);
++    }
++    if ((minX <= 0.5f && maxX >= 639.5f) || maxY - minY >= 400.0f)
++    {
++        ++m_wsStat[4];
++        return;
++    }
++    ++m_wsStat[1];
++    squeeze();
++}
++
+ GSPrimitiveBatch GS::buildDrawBatch(int vertexCount) const
+ {
+     GSPrimitiveBatch batch{};
+diff --git a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+index 00ff598..6452586 100644
+--- a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
++++ b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+@@ -84,6 +84,23 @@ bool GifArbiter::isImagePacket(const uint8_t *data, uint32_t sizeBytes)
+     return flg == 2u;
+ }
+ 
++namespace
++{
++    thread_local uint8_t t_gifPath = 0u;
++}
++
++GifPathScope::GifPathScope(GifPathId id) noexcept : saved(t_gifPath)
++{
++    t_gifPath = static_cast<uint8_t>(id);
++}
++
++GifPathScope::~GifPathScope() { t_gifPath = saved; }
++
++uint8_t gifCurrentPath() noexcept
++{
++    return t_gifPath;
++}
++
+ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl,
+                        bool drainImmediately)
+ {
+@@ -92,6 +109,7 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
+ 
+     if (ps2_vu1_async::onWorker())
+     {
++        GifPathScope scope(pathId);
+         // XGKICK of a queued VU1 run: the EE thread owns the queue below; on the EE thread this packet would have
+         // found it empty (VU1 runs inside VIF1 transfers, never between a PATH3 submit and its drain).
+         processPacket(data, sizeBytes);
+@@ -99,6 +117,7 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
+     }
+     if (drainImmediately && m_queue.empty())
+     {
++        GifPathScope scope(pathId);
+         dispatch(data, sizeBytes);
+         g_gifCopyStats.note(true, sizeBytes);
+         return;
+@@ -138,6 +157,7 @@ void GifArbiter::drain()
+         auto &pkt = m_queue[i];
+         if (!pkt.data.empty())
+         {
++            GifPathScope scope(pkt.pathId);
+             dispatch(pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
+         }
+     }
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 095c5c7..fe7c04b 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -2524,6 +2524,7 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+     if (ps2_vu1_async::onWorker())
+     {
+         // PATH1 from a queued VU1 run: straight to the GS (the arbiter's queue belongs to the EE thread).
++        GifPathScope scope(pathId);
+         if (m_gifArbiter)
+             m_gifArbiter->processPacket(data, sizeBytes);
+         else if (m_gifPacketCallback)
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 94ef7a8..30d74c0 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1,4 +1,5 @@
+ #include "ps2_runtime.h"
++#include "runtime/ps2_switches.h"
+ #include "runtime/ps2_vu1_async.h"
+ #include "ps2_log.h"
+ #include "ps2_stubs.h"
+@@ -940,8 +941,13 @@ bool PS2Runtime::initialize(const char *title)
+         // Tekken 4 port (perf): the window first, so the GL GS renderer (created by syncCoreSubsystems on its worker)
+         // can share objects with the window's context: the presented picture then goes to the window as a GPU texture
+         // instead of a glReadPixels + texture upload every vsync (GSSharedPresent; PS2X_GS_DIRECT_PRESENT=0: readback).
+-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+-        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
++        // Test/benchmark launches must leave keyboard focus with the owner.
++        const char *background = std::getenv("PS3_WINDOW_BACKGROUND");
++        SetConfigFlags(FLAG_WINDOW_RESIZABLE |
++                       (background && background[0] == '1' ? FLAG_WINDOW_UNFOCUSED : 0));
++        // Widescreen: a 16:9 window from the start (the picture is letterboxed into any window size anyway).
++        InitWindow(PS2_SWITCH("widescreen") ? (HOST_WINDOW_HEIGHT * 16 + 8) / 9 : HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT,
++                   title);
+ #if defined(PS2X_GS_GL)
+         GSSharedPresent::CaptureHostContext(); // releases the window's context until RestoreHostContext
+ #endif
+@@ -2647,7 +2653,8 @@ void PS2Runtime::run()
+                     }
+                     ToggleFullscreen();
+                     if (!IsWindowFullscreen())
+-                        SetWindowSize(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT);
++                        SetWindowSize(PS2_SWITCH("widescreen") ? (HOST_WINDOW_HEIGHT * 16 + 8) / 9 : HOST_WINDOW_WIDTH,
++                                      HOST_WINDOW_HEIGHT);
+                 }
+                 else if (!s_borderless)
+                 {
+@@ -2664,7 +2671,8 @@ void PS2Runtime::run()
+                 else
+                 {
+                     ClearWindowState(FLAG_WINDOW_UNDECORATED);
+-                    SetWindowSize(s_savedW > 0 ? s_savedW : HOST_WINDOW_WIDTH, s_savedH > 0 ? s_savedH : HOST_WINDOW_HEIGHT);
++                    SetWindowSize(s_savedW > 0 ? s_savedW : (PS2_SWITCH("widescreen") ? (HOST_WINDOW_HEIGHT * 16 + 8) / 9 : HOST_WINDOW_WIDTH),
++                                  s_savedH > 0 ? s_savedH : HOST_WINDOW_HEIGHT);
+                     SetWindowPosition(static_cast<int>(s_savedPos.x), static_cast<int>(s_savedPos.y));
+                     s_borderless = false;
+                 }
+@@ -2684,6 +2692,13 @@ void PS2Runtime::run()
+                 (IsKeyPressed(KEY_ENTER) && (IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT))))
+                 toggle();
+         }
++        // F9: widescreen on/off while playing (TEKKEN4_WIDESCREEN). Only the picture changes, so online too.
++        if (IsKeyPressed(KEY_F9))
++        {
++            const bool on = !PS2_SWITCH("widescreen");
++            ps2_switches::set("widescreen", on);
++            std::cerr << "[widescreen] " << (on ? "16:9" : "4:3") << " (F9)" << std::endl;
++        }
+         uint32_t presentWidth = FB_WIDTH;
+         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+         Texture2D drawTex = frameTex;
+@@ -2702,8 +2717,15 @@ void PS2Runtime::run()
+         const float srcHeight = static_cast<float>(std::max<uint32_t>(1u, presentHeight));
+         const float screenWidth = static_cast<float>(GetScreenWidth());
+         const float screenHeight = static_cast<float>(GetScreenHeight());
+-        const float scale = std::min(screenWidth / srcWidth, screenHeight / srcHeight);
+-        const float dstWidth = srcWidth * scale;
++        // Widescreen (TEKKEN4_WIDESCREEN, switch "widescreen"): a picture with the 3D scene is shown at 16:9 (the GS
++        // drew it 3/4 as wide, the sides filled from beyond the 4:3 view), menus, movies and loading screens at 4:3.
++        // Off: the picture's own pixel shape, as before.
++        const bool wideFrame = PS2_SWITCH("widescreen") && m_gs.latchedFrameWide();
++        float shownAspect = srcWidth / srcHeight;
++        if (PS2_SWITCH("widescreen"))
++            shownAspect = wideFrame ? 16.0f / 9.0f : 4.0f / 3.0f;
++        const float scale = std::min(screenWidth / (srcHeight * shownAspect), screenHeight / srcHeight);
++        const float dstWidth = srcHeight * shownAspect * scale;
+         const float dstHeight = srcHeight * scale;
+         const Rectangle srcRect{0.0f, 0.0f, srcWidth, srcHeight};
+         const Rectangle dstRect{
+@@ -2741,7 +2763,8 @@ void PS2Runtime::run()
+         }
+         // A game override's host-only 2D layer over the picture (ps2_host_overlay.h): Tekken 4's online name plates.
+         ps2_host_overlay::draw(*this, ps2_host_overlay::Frame{dstRect.x, dstRect.y, dstRect.width, dstRect.height,
+-                                                             static_cast<int>(screenWidth), static_cast<int>(screenHeight)});
++                                                             static_cast<int>(screenWidth), static_cast<int>(screenHeight),
++                                                             wideFrame});
+         if (m_debugUiInitialized && m_debugUiDrawCallback)
+         {
+             m_debugUiDrawCallback(*this, m_debugUiUserData);
+diff --git a/ps2xRuntime/src/lib/ps2_switches.cpp b/ps2xRuntime/src/lib/ps2_switches.cpp
+new file mode 100644
+index 0000000..4ece9c7
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_switches.cpp
+@@ -0,0 +1,47 @@
++#include "runtime/ps2_switches.h"
++
++#include <cctype>
++#include <cstdlib>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <unordered_map>
++
++namespace ps2_switches
++{
++    namespace
++    {
++        bool truthy(const char *v)
++        {
++            if (!v || !v[0])
++                return false;
++            const std::string s(v);
++            return s == "1" || s == "on" || s == "16:9" || s == "true" || s == "yes";
++        }
++
++        // A switch starts from the environment: PS2X_SWITCH_<NAME> (name upper-cased) = 1/on/true/yes, and for
++        // "widescreen" also the Tekken 4 setting TEKKEN4_WIDESCREEN (1/on/16:9). Anything else, or unset, is off.
++        bool initialValue(const std::string &name)
++        {
++            std::string key = "PS2X_SWITCH_";
++            for (char c : name)
++                key += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
++            if (const char *v = std::getenv(key.c_str()))
++                return truthy(v);
++            if (name == "widescreen")
++                return truthy(std::getenv("TEKKEN4_WIDESCREEN"));
++            return false;
++        }
++    }
++
++    std::atomic<bool> &flag(const char *name)
++    {
++        static std::mutex mutex;
++        static std::unordered_map<std::string, std::unique_ptr<std::atomic<bool>>> flags;
++        std::lock_guard<std::mutex> lock(mutex);
++        std::unique_ptr<std::atomic<bool>> &slot = flags[name];
++        if (!slot)
++            slot = std::make_unique<std::atomic<bool>>(initialValue(name));
++        return *slot;
++    }
++}
+diff --git a/ps2xRuntime/src/lib/ps2_vu1_async.cpp b/ps2xRuntime/src/lib/ps2_vu1_async.cpp
+index 782b082..b54d520 100644
+--- a/ps2xRuntime/src/lib/ps2_vu1_async.cpp
++++ b/ps2xRuntime/src/lib/ps2_vu1_async.cpp
+@@ -5,6 +5,7 @@
+ //                                             order the EE thread would have processed them.
+ // With one worker (PS2X_GS_SPLIT=0, or fewer than 3 logical processors) the VU1 worker runs the GS packets itself.
+ #include "runtime/ps2_vu1_async.h"
++#include "runtime/gs/ps2_gif_arbiter.h"
+ #include "runtime/ps2_rollback_cuts.h"
+ #include "runtime/ps2_perf_stats.h"
+ #include "ThreadNaming.h"
+@@ -249,9 +250,12 @@ namespace ps2_vu1_async
+                                   break;
+                               case kGif:
+                                   if (s.split)
+-                                      s.gs.put(kGif, payload, h.bytes, 0u, 0u, 0u); // keeps its place behind earlier XGKICKs
++                                      s.gs.put(kGif, payload, h.bytes, h.a, 0u, 0u); // keeps its place behind earlier XGKICKs
+                                   else
++                                  {
++                                      GifPathScope scope(static_cast<GifPathId>(h.a));
+                                       k.gif(payload, h.bytes);
++                                  }
+                                   break;
+                               case kUnpack:
+                               {
+@@ -275,7 +279,10 @@ namespace ps2_vu1_async
+                          {
+                              applyMxcsr(h.mxcsr, mxcsr);
+                              if (h.type == kGif)
+-                                 s.hooks.gif(payload, h.bytes); });
++                             {
++                                 GifPathScope scope(static_cast<GifPathId>(h.a));
++                                 s.hooks.gif(payload, h.bytes);
++                             } });
+         }
+ 
+         // Logical processors this process may run on (its affinity mask; the whole PC when that cannot be read).
+@@ -336,7 +343,7 @@ namespace ps2_vu1_async
+     {
+         if (!t_vu1Worker || !g_s || !g_s->split)
+             return false;
+-        g_s->gs.put(kGif, data, size, 0u, 0u, 0u);
++        g_s->gs.put(kGif, data, size, gifCurrentPath(), 0u, 0u);
+         return true;
+     }
+ 
+@@ -412,7 +419,7 @@ namespace ps2_vu1_async
+             g_s->hooks.gif(data, size);
+             return;
+         }
+-        g_s->vu1.put(kGif, data, size, 0u, 0u, 0u);
++        g_s->vu1.put(kGif, data, size, gifCurrentPath(), 0u, 0u);
+     }
+ 
+     void unpack(const Vif1Unpack &u, const uint8_t *source, uint32_t sourceBytes)

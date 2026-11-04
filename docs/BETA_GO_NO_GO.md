@@ -71,10 +71,9 @@ is pending, not a pass. Record an evidence file or test note beside each box.
   STRICT_HELLO/AUDIO_TIMELINE/DELAY_MATCH/COST_PROFILE/HASH_PROFILE/
   SIM_SAFE_WAIT/REFRESH_RC=0, simulator empty, delay auto, time sync on,
   max prediction 8, early/lazy/local pad on and sound on. No unrecorded tuning.
-- [ ] `TEKKEN4_NET_AUTO_VS=0`. Enable it only with retained evidence for its
-  exact matching sound-on pair and all required boot/save/handoff cases in
-  [DIRECTFIGHT_T4.md](DIRECTFIGHT_T4.md), including both physical PCs.
-  No such evidence was supplied, so the candidate default remains off.
+- [ ] `TEKKEN4_NET_AUTO_VS` as the build defines it: on since 2026-11-04 (state-driven boot to VS
+  select, fresh and existing cards, 13 pairs in [DIRECTFIGHT_T4.md](DIRECTFIGHT_T4.md) "Online boot").
+  Still to see: both physical PCs with sound on reach VS select by themselves.
 - [ ] Offline boot, menus, character/stage selection, a complete fight, input
   and sound worked through the new launcher with the player's selected ISO.
 - [ ] Online host/join connected through the advertised direct-IP/VPN route;

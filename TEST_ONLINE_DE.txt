@@ -120,7 +120,8 @@ Z/X/C/V = Viereck/Kreuz/Kreis/Dreieck, Enter = Start. Alternativ Pfeiltasten
 links/unten/rechts/oben fuer diese vier Tasten.
 
 4. ETWA 15 MINUTEN SPIELEN
-0-3 Min.: Logos/Menues vergleichen. A waehlt VS BATTLE. Beide Figuren waehlen;
+0-3 Min.: Beide Spiele gehen von selbst zur VS-Figurenwahl (ca. 5-20 s nach dem
+Verbinden; nichts druecken, bis die Figurenwahl da ist). Beide Figuren waehlen;
 bewegen, bestaetigen/zurueck testen. Gleiche Anzeige?
 3-8 Min.: Versus, mehrere Runden. Bewegen, blocken, schnelle Tastenfolgen,
 Wuerfe. Beide sollen Runden gewinnen. KO, Replay, Ergebnis vergleichen;

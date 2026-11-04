@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PS2_HEAD = "eb8688b2fd191129f103a39543002c005b33409c"
 FETCH = ("raylib", "imgui", "rlimgui", "sse2neon", "elfio", "toml11", "fmt", "libdwarf", "rabbitizer")
 TOOLS = (
+    "build_game.py", "net_play.py", "net_preflight.py", "player_common.py", "player_python.ps1",
+    "us_tree.py", "us_tree.ps1", "us_tree.cmd",
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
     "build_ps2recomp_tools.cmd", "build_ps2recomp_tools_portable.cmd", "stage_generated.cmd", "cpu_needs_baseline.ps1",
     "run_game.cmd", "run_lock.ps1", "set_window_title.ps1", "iso_extract.py", "vu1_micro_from_elf.py", "t4_buildid.py",
@@ -251,6 +253,7 @@ def package(a):
         shutil.copy2(ROOT / "tools" / name, target)
     shutil.copy2(sysroot_lock, stage / "tools" / "msvc_sysroot.lock.json")
     copy_tree(ROOT / "tools" / "vu1", stage / "tools" / "vu1", {"__pycache__"})
+    copy_tree(ROOT / "tools" / "vu", stage / "tools" / "vu", {"__pycache__"})
     private_python(dirs["python"], stage / "python")
     for name in ("llvm", "cmake", "ninja"):
         copy_tree(dirs[name], stage / "toolchain" / name)

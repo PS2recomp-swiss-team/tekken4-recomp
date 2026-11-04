@@ -33,9 +33,10 @@ class OnlineCommandTests(unittest.TestCase):
         for role in ("host", "join"):
             with self.subTest(role=role):
                 command = core.online_command({}, role, "127.0.0.1", 7401)
-                self.assertEqual("powershell.exe", command[0])
-                self.assertIn("-NoProfile", command)
-                self.assertIn("-NonInteractive", command)
+                self.assertEqual(core.player_python(), command[0])
+                self.assertEqual(["-I", "-u"], command[1:3])
+                self.assertTrue(command[3].endswith("net_play.py"))
+                self.assertFalse(any("powershell" in arg.lower() for arg in command))
                 self.assertEqual("own game.iso", command[command.index("-Iso") + 1])
                 self.assertEqual("7401", command[command.index("-Port") + 1])
                 self.assertEqual("runtime", command[command.index("-BuildDir") + 1])
@@ -43,6 +44,15 @@ class OnlineCommandTests(unittest.TestCase):
                 self.assertEqual("1", command[command.index("-Sound") + 1])
                 self.assertNotIn("-SkipPreflight", command)
                 self.assertEqual(["-Host"] if role == "host" else ["-Join", "127.0.0.1"], command[-1:] if role == "host" else command[-2:])
+
+    def test_auto_vs_is_default_and_can_be_turned_off(self):
+        self.ready()
+        self.assertTrue(core.DEFAULTS["auto_vs"])
+        self.assertNotIn("-NoAutoVs", core.online_command({}, "host"))
+        self.assertNotIn("-NoAutoVs", core.online_command({"auto_vs": True}, "host"))
+        command = core.online_command({"auto_vs": False}, "join", "127.0.0.1")
+        self.assertIn("-NoAutoVs", command)
+        self.assertEqual(["-Join", "127.0.0.1"], command[-2:])
 
     def test_invalid_role_port_and_peer_fail_before_play_checks(self):
         cases = (("lobby", "", 7400), ("host", "", 0), ("host", "", 65536),
@@ -68,6 +78,16 @@ class OnlineCommandTests(unittest.TestCase):
             with patch.object(core.os.path, "isfile", return_value=False):
                 with self.assertRaisesRegex(ValueError, "identity"):
                     core.online_command({}, "host")
+
+
+class BuildCommandTests(unittest.TestCase):
+    def test_build_uses_console_python_with_legacy_flags_and_dry_run_never_accepts_license(self):
+        command = core.build_command("own game.iso", dry_run=True, accept_microsoft_license=True)
+        self.assertEqual(command[:3], [core.player_python(), "-I", "-u"])
+        self.assertTrue(command[3].endswith("build_game.py"))
+        self.assertEqual(command[-3:], ["-Iso", "own game.iso", "-WhatIf"])
+        self.assertNotIn("-AcceptMicrosoftLicense", command)
+        self.assertIn("-AcceptMicrosoftLicense", core.build_command("own.iso", accept_microsoft_license=True))
 
 
 class EnvironmentTests(unittest.TestCase):

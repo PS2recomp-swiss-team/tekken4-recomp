@@ -26,7 +26,7 @@ for ordinary GUI Host/Join:
 | `TEKKEN4_RB_AUDIO_TIMELINE` | `0` | Covered only as part of the reported OFF configuration; audible correctness is unproved. |
 | `TEKKEN4_NET_COST_PROFILE`, `TEKKEN4_NET_HASH_PROFILE` | `0` | Covered only as part of the reported OFF configuration; no enabled instrumentation proof. |
 | `TEKKEN4_NET_SIM_SAFE_WAIT`, `TEKKEN4_NET_REFRESH_RC` | `0` | Covered only as part of the reported OFF configuration; no enabled-fix proof. |
-| `TEKKEN4_NET_AUTO_VS` | `0` | No supplied passing enabled AUTO_VS pair. |
+| `TEKKEN4_NET_AUTO_VS` | `1` (since 2026-11-04) | 13 passing state-driven pairs, docs/DIRECTFIGHT_T4.md "Online boot". |
 | `TEKKEN4_NET_TIMESYNC`, `TEKKEN4_NET_EARLY`, `TEKKEN4_NET_LAZY`, `TEKKEN4_NET_LOCALPAD` | `1` | Baseline settings, separate from experimental switches OFF. The supplied summary records time sync, early rollbacks and lazy captures, but is not the complete effective environment. |
 | `TEKKEN4_NET_MAXPRED` | `8` | Source profile; require both actual parameter/activation records to establish the measured value. |
 | `TEKKEN4_NET_DELAY`, `TEKKEN4_SOUND` | `auto`, `1` | Pair summary reports actual delay `3`; sound quality was not reported. |

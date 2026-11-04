@@ -1,0 +1,80 @@
+From 7e6530f5bfa827c7b37c49f9615ab02562aaf58e Mon Sep 17 00:00:00 2001
+From: t5dr <t5dr@local>
+Date: Wed, 4 Nov 2026 07:33:44 +0100
+Subject: [PATCH] Host overlay: a game override's own 2D layer over the
+ presented picture (ps2_host_overlay.h), host-only
+
+---
+ ps2xRuntime/include/ps2_host_overlay.h | 37 ++++++++++++++++++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp    |  4 +++
+ 2 files changed, 41 insertions(+)
+ create mode 100644 ps2xRuntime/include/ps2_host_overlay.h
+
+diff --git a/ps2xRuntime/include/ps2_host_overlay.h b/ps2xRuntime/include/ps2_host_overlay.h
+new file mode 100644
+index 0000000..44d9e8c
+--- /dev/null
++++ b/ps2xRuntime/include/ps2_host_overlay.h
+@@ -0,0 +1,37 @@
++#pragma once
++// Host overlay (Tekken 4 port, patch 88): a game override's own 2D layer, drawn by the presenter right after the
++// game's picture -- inside raylib's BeginDrawing/EndDrawing, in window pixels, before the debug panel. Host-only:
++// the callback must never write guest state (online state hashes stay the same with and without it).
++class PS2Runtime;
++
++namespace ps2_host_overlay
++{
++    struct Frame
++    {
++        float x, y, w, h;      // where the game's picture sits in the window (letterboxed, scaled)
++        int screenW, screenH;  // the window's size
++    };
++    using DrawFn = void (*)(PS2Runtime &runtime, const Frame &frame, void *user);
++    struct Slot
++    {
++        DrawFn fn = nullptr;
++        void *user = nullptr;
++    };
++    inline Slot &slot()
++    {
++        static Slot s;
++        return s;
++    }
++    // One overlay; a later set() replaces it. Call before the window opens (an override's apply()).
++    inline void set(DrawFn fn, void *user)
++    {
++        slot().fn = fn;
++        slot().user = user;
++    }
++    inline void draw(PS2Runtime &runtime, const Frame &frame)
++    {
++        const Slot &s = slot();
++        if (s.fn)
++            s.fn(runtime, frame, s.user);
++    }
++}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 7d87f9b..d1a1ce2 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -17,6 +17,7 @@
+ #include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_rollback_cuts.h"
+ #include "runtime/ps2_perf_stats.h"
++#include "ps2_host_overlay.h"
+ #if defined(PS2X_GS_GL)
+ #include "runtime/gs/gs_shared_present.h"
+ #endif
+@@ -2698,6 +2699,9 @@ void PS2Runtime::run()
+             if (useFilter)
+                 EndShaderMode();
+         }
++        // A game override's host-only 2D layer over the picture (ps2_host_overlay.h): Tekken 4's online name plates.
++        ps2_host_overlay::draw(*this, ps2_host_overlay::Frame{dstRect.x, dstRect.y, dstRect.width, dstRect.height,
++                                                             static_cast<int>(screenWidth), static_cast<int>(screenHeight)});
+         if (m_debugUiInitialized && m_debugUiDrawCallback)
+         {
+             m_debugUiDrawCallback(*this, m_debugUiUserData);
+-- 
+2.55.0.windows.3
+

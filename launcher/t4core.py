@@ -65,6 +65,8 @@ DEFAULTS = {
     "unlock_all": True,        # TEKKEN4_UNLOCK_ALL: all characters unlocked from the start (save file untouched)
     "aa": True,                # TEKKEN4_AA: on = fxaa (the runtime's default), off = off
     "progressive": True,       # TEKKEN4_PROGRESSIVE: the game's own 480p mode (no interlace lines)
+    "auto_vs": True,           # online: boot straight to VS character select (net_play.ps1 -NoAutoVs when off)
+    "widescreen": False,       # TEKKEN4_WIDESCREEN: 16:9 fights (wider view, HUD kept 4:3); works online with any mix
     "runtime_exe": "",         # optional: use this ps2EntryRunner.exe instead of the one the build made
     "last_run": None,          # {"time":..., "seconds":..., "exit":..., "ok":bool, "log":path, "note":...}
     "last_build": None,        # {"time":..., "ok":bool, "dry_run":bool, "log":path}
@@ -290,12 +292,71 @@ def bundled_toolchain():
     return os.path.isfile(os.path.join(ROOT, "toolchain", "toolchain.json"))
 
 
+# ------------------------------------------------------------------ Wine / Proton (Linux, Steam Deck)
+# docs/LINUX_STEAM_DECK.md. The build (tools\build_game.ps1) and the online helper (tools\net_play.ps1) are PowerShell
+# scripts. Windows always has PowerShell; Wine and Proton ship only a stand-in powershell.exe that does not run
+# scripts (a build would stop at once or "finish" with nothing built; not seen live: no Linux PC here). Under Wine
+# the launcher asks PowerShell once whether it answers, and says so instead. On Windows nothing is asked.
+_WINE = []
+_POWERSHELL = []
+POWERSHELL_PROBE = "Write-Output ('t4' + 'ps' + 'ok')"      # the answer is not in the command line itself
+NO_POWERSHELL = ("This PC runs the launcher under Wine or Proton (Linux, Steam Deck). Tekken 4's build and online "
+                 "helper are PowerShell scripts, and Wine/Proton have no working PowerShell. Build the game on "
+                 "Windows, or install PowerShell 7 into this Wine prefix (untested). Offline play of a game built "
+                 "here is not affected. See docs\\LINUX_STEAM_DECK.md.")
+
+
+def wine_version(nt=None):
+    """'Wine 10.0' when this process runs under Wine / Proton (ntdll exports wine_get_version only there), else
+    None. `nt`: a stand-in ntdll (tests)."""
+    if nt is None:
+        if _WINE:
+            return _WINE[0]
+        if os.name != "nt":
+            _WINE.append(None)
+            return None
+    try:
+        get = (nt or ctypes.WinDLL("ntdll")).wine_get_version
+        get.restype = ctypes.c_char_p
+        found = "Wine " + (get() or b"?").decode("ascii", "replace")
+    except (AttributeError, OSError, ValueError):
+        found = None
+    if nt is None:
+        _WINE.append(found)
+    return found
+
+
+def powershell_problem(run=None, wine=None):
+    """'' when PowerShell can run the launcher's scripts, else NO_POWERSHELL. Only under Wine is PowerShell asked
+    (once per launcher start, 20 s at most); on Windows this returns '' at once. `run`/`wine`: tests."""
+    if not (wine if wine is not None else wine_version()):
+        return ""
+    if run is None and _POWERSHELL:
+        return _POWERSHELL[0]
+    try:
+        r = (run or subprocess.run)(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_PROBE],
+                                    stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
+                                    timeout=20, creationflags=NO_WINDOW)
+        answer = "t4psok" in (r.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        answer = False
+    problem = "" if answer else NO_POWERSHELL
+    if run is None:
+        _POWERSHELL.append(problem)
+    return problem
+
+
 def check_prereqs():
     """List of dicts {id, name, ok, detail, fix}. Mirrors the prereq step of tools\\build_game.ps1."""
     items = []
 
     def add(id_, name, ok, detail, fix=""):
         items.append({"id": id_, "name": name, "ok": bool(ok), "detail": detail, "fix": "" if ok else fix})
+
+    if wine_version():          # never on Windows: there PowerShell is part of the system
+        ps = powershell_problem()
+        add("powershell", "PowerShell (Wine/Proton)", not ps, "answers" if not ps else "Wine's stand-in only",
+            ps)
 
     if bundled_toolchain():
         tc = os.path.join(ROOT, "toolchain")
@@ -357,7 +418,13 @@ def check_prereqs():
 # ------------------------------------------------------------------ build script
 def build_script():
     """The common entry point selects the bundled toolchain using its marker."""
-    return os.path.join(ROOT, "tools", "build_game.ps1")
+    return os.path.join(ROOT, "tools", "build_game.py")
+
+
+def player_python():
+    """Console interpreter beside the launcher's pythonw, including the private release Python."""
+    console = os.path.join(os.path.dirname(sys.executable), "python.exe")
+    return console if os.path.isfile(console) else sys.executable
 
 
 def sysroot_ready():
@@ -387,7 +454,7 @@ def microsoft_license_terms():
 
 
 def build_command(iso, dry_run=False, accept_microsoft_license=False):
-    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", build_script()]
+    cmd = [player_python(), "-I", "-u", build_script()]
     if iso:
         cmd += ["-Iso", iso]
     if dry_run:
@@ -543,9 +610,11 @@ def graphics_env_names():
 
 
 def graphics_support(exe):
-    """{'aa': bool, 'progressive': bool, 'fullscreen': bool}: which switches this runtime build knows."""
+    """{'aa': bool, 'progressive': bool, 'fullscreen': bool, 'widescreen': bool}: which switches this build knows."""
     names = graphics_env_names()
-    return {k: bool(exe) and exe_knows(exe, v) for k, v in names.items()}
+    out = {k: bool(exe) and exe_knows(exe, v) for k, v in names.items()}
+    out["widescreen"] = bool(exe) and exe_knows(exe, "TEKKEN4_WIDESCREEN")
+    return out
 
 
 def game_env(s, exe=None):
@@ -577,6 +646,11 @@ def game_env(s, exe=None):
         env["TEKKEN4_ANISO"] = "1"
     if sup["progressive"]:
         env[names["progressive"]] = "1" if s.get("progressive") else "0"
+    env.pop("TEKKEN4_WIDESCREEN", None)  # the launcher's setting, never a value left in the shell
+    if sup.get("widescreen"):
+        # Only the picture: the simulation is the same with and without it, so it is the player's own choice online
+        # too (docs/WIDESCREEN.md).
+        env["TEKKEN4_WIDESCREEN"] = "1" if s.get("widescreen") else "0"
     return env
 
 
@@ -662,6 +736,9 @@ def online_command(s, role, peer="", port=7400):
     """Use the selected local build with the existing identity/UDP preflight."""
     if role not in ("host", "join"):
         raise ValueError("Choose Host or Join.")
+    ps = powershell_problem()          # tools\net_play.ps1 (Wine/Proton only; '' on Windows)
+    if ps:
+        raise ValueError(ps)
     port = int(port)
     if not 1 <= port <= 65535:
         raise ValueError("UDP port must be 1..65535.")
@@ -681,9 +758,10 @@ def online_command(s, role, peer="", port=7400):
         raise ValueError("Online needs a local build under <source>/out/<build>/ps2xRuntime. Select that runtime first.")
     if not os.path.isfile(os.path.join(exe_dir, "t4net_build.json")):
         raise ValueError("Online build identity is missing. Finish the local build and see TEST_ONLINE_DE.txt.")
-    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-           os.path.join(ROOT, "tools", "net_play.ps1"), "-Port", str(port), "-Iso", effective_iso(s),
+    cmd = [player_python(), "-I", "-u", os.path.join(ROOT, "tools", "net_play.py"), "-Port", str(port), "-Iso", effective_iso(s),
            "-Src", os.path.dirname(out_dir), "-BuildDir", os.path.basename(build_dir), "-Delay", "auto", "-Sound", "1"]
+    if not s.get("auto_vs", True):
+        cmd.append("-NoAutoVs")    # both PCs must agree: the game refuses a peer with the other setting
     return cmd + (["-Host"] if role == "host" else ["-Join", peer])
 
 

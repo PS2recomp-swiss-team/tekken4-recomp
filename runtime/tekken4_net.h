@@ -74,7 +74,7 @@ namespace t4net
         int delaySetting = -1;         // -1 = auto (by round trip), else frames
         uint64_t buildId = 0;          // a peer with another build id is refused at HELLO
         uint32_t seed = 0;             // host: the session seed (0 = the session id)
-        uint64_t autoVsFingerprint = 0; // 0 = off; nonzero normalized boot script/window contract, checked at HELLO
+        uint64_t autoVsFingerprint = 0; // 0 = legacy; normalized boot/native-name contract, checked at HELLO
         std::string key;               // optional match secret: SipHash-2-4 tag on every packet
         int timeoutS = 20;             // peer silent this long = lost
         int connectTimeoutS = 120;     // no handshake within this = failed
@@ -133,6 +133,9 @@ namespace t4net
     void pushHash(uint32_t frame, uint64_t hash);
     bool takeMismatch(uint32_t *frame, uint64_t *local, uint64_t *remote);
     uint32_t hashesCompared();
+    // One hashed frame's comparison: 1 = equal on both sides, -1 = different, 0 = not decided yet,
+    // 2 = passed without a comparison (no hash of that frame from the peer within the window).
+    int hashAgreement(uint32_t frame);
     uint32_t hashMismatches();
 
     struct Stats

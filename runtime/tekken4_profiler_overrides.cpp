@@ -438,6 +438,37 @@ namespace tekken4_profiler
             return syms.emplace(ip, std::move(r)).first->second;
         };
 
+        // TEKKEN4_STACKPROF_RAW=1: every sample as one line of module!rva frames (leaf first) in stackprof_raw.txt,
+        // for offline inclusive-time analysis with llvm-symbolizer and the build's PDB (t4iop).
+        if (const char *raw = std::getenv("TEKKEN4_STACKPROF_RAW"); raw && raw[0] == '1')
+        {
+            std::ofstream out("stackprof_raw.txt", std::ios::out | std::ios::trunc);
+            std::unordered_map<DWORD64, std::string> tok;
+            for (const Sample &s : samples)
+            {
+                for (int f = 0; f < s.n; ++f)
+                {
+                    auto it = tok.find(s.ip[f]);
+                    if (it == tok.end())
+                    {
+                        HMODULE mod = nullptr;
+                        std::ostringstream o;
+                        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                               reinterpret_cast<LPCSTR>(s.ip[f]), &mod) &&
+                            mod)
+                            o << moduleBase(s.ip[f]) << "!0x" << std::hex
+                              << (s.ip[f] - reinterpret_cast<DWORD64>(mod));
+                        else
+                            o << "?!0x" << std::hex << s.ip[f];
+                        it = tok.emplace(s.ip[f], o.str()).first;
+                    }
+                    out << (f ? " " : "") << it->second;
+                }
+                out << "\n";
+            }
+        }
+
         std::unordered_map<std::string, uint32_t> leaves;
         std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> rawChains, userChains;
         std::unordered_map<std::string, std::pair<DWORD64, uint32_t>> hotIp;

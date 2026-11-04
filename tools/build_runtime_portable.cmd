@@ -57,6 +57,16 @@ rem online peers may mix both). TEKKEN4_SIMD_BASELINE=1/0 forces it; default: as
 if not defined TEKKEN4_SIMD_BASELINE for /f "usebackq delims=" %%r in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cpu_needs_baseline.ps1"`) do set "TEKKEN4_SIMD_BASELINE=%%r"
 set "SIMDARG=-DPS2X_SIMD_BASELINE=OFF"
 if "%TEKKEN4_SIMD_BASELINE%"=="1" set "SIMDARG=-DPS2X_SIMD_BASELINE=ON" & echo SSE2-only runtime build ^(no SSSE3/SSE4.1 needed^)
+rem Statically recompiled VU microprograms (tools\vu\vu_lift.py, t4vurecomp): generated from the same micro memory at
+rem build time; TEKKEN4_VULIFT=0 builds without them (then the native blocks / exact engine run every program).
+set "VULIFT="
+for %%G in ("%~dp0vu\vu_lift.py") do set "VULIFT=%%~fG"
+if "%TEKKEN4_VULIFT%"=="0" set "VULIFT="
+if defined VULIFT set "VULIFT=%VULIFT:\=/%"
+set "VU0DIR="
+for %%D in ("%~dp0..\game\vu0\micro") do set "VU0DIR=%%~fD"
+if not exist "%VU0DIR%\*.bin" set "VU0DIR="
+if defined VU0DIR set "VU0DIR=%VU0DIR:\=/%"
 rem /Z7: debug info in each object, no shared mspdbsrv. With several builds at once (Grok tasks + Claude) /Zi
 rem failed with C1090 "PDB API call failed" (0x6BA / 23) whenever one build's PDB server went away mid-compile.
 rem RelWithDebInfo with full inlining (/Ob2 like Release; CMake's default /Ob1 kept the GS's per-pixel helpers as calls).
@@ -66,7 +76,7 @@ cmake -S "%SRC%" -B "%BUILD%" -G Ninja %TCARG% -DCMAKE_BUILD_TYPE=RelWithDebInfo
   "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG" "-DCMAKE_C_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG" ^
   -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF ^
   -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF -DPS2X_ENABLE_RUNTIME_LOGS=ON -DPS2X_ENABLE_IOP_RPC_TRACE=ON ^
-  "-DPS2X_VU1_MICROCODE_DIR=%VU1DIR%" "-DPS2X_VU1N_GEN=%VU1GEN%" %SIMDARG%
+  "-DPS2X_VU1_MICROCODE_DIR=%VU1DIR%" "-DPS2X_VU1N_GEN=%VU1GEN%" "-DPS2X_VULIFT_GEN=%VULIFT%" "-DPS2X_VU0_MICROCODE_DIR=%VU0DIR%" %SIMDARG%
 if errorlevel 1 exit /b 1
 cmake --build "%BUILD%" --target ps2EntryRunner
 if errorlevel 1 exit /b 1

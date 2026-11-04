@@ -1,5 +1,11 @@
 # Status
 
+2026-11-04 (`t4-ranked`, native names, uncommitted): replaced Plates v2 panels with literal game-font queue names
+at the traced select/HUD name-texture calls. Added deterministic P1/P2 sanitization, bounded font layout and HELLO
+name/off contract; rank badges only, anchored to actual queued text. MSVC helper tests and runtime syntax checks
+passed; no full game build, real game, pair or screenshot run here. Static addresses, eight positive pair runs
+(rollback/lockstep x ranked/casual guest x on/off), two refusal runs and screenshot checklist: [T4_RANKED.md](T4_RANKED.md).
+
 _Last updated: 2026-11-02 (App still unrun; supplied draft b13f80b4da; NO-GO)_
 
 ## Resume here

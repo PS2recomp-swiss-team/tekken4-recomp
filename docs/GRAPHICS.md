@@ -16,6 +16,7 @@ resolutions, anti-aliased, settings like T5DR Online. All switches are environme
 | 2D / HUD | `TEKKEN4_HUD` | **soft**, sharp | sharp = "sharp bilinear" for magnified 2D sprites of game textures (HUD, menus, fonts, portraits): each texel keeps its colour with a one-pixel smooth edge instead of the GS's bilinear blur stretched over several pixels. Only above native. |
 | Fullscreen | `TEKKEN4_FULLSCREEN` | **0**, 1/borderless, exclusive | 1 = borderless fullscreen on the window's monitor; exclusive requests exclusive fullscreen at the monitor's resolution. **F11 or Alt+Enter** toggles while playing (patch 83); Enter alone is the pad's Start. No latency saving is established for a player's setup. |
 | Window scaling | `TEKKEN4_WINDOW_FILTER` | **area**, sharp, bilinear, nearest | how the picture is scaled to the window: area = averages all picture pixels under a window pixel when the picture is larger (a 4K picture in a 1080p window = supersampling), bilinear when it is smaller; sharp = sharp bilinear when enlarging (native in a big window). |
+| Widescreen | `TEKKEN4_WIDESCREEN` | **0**, 1 (on/16:9) | 1 = fights and every other 3D scene at 16:9 with a wider view; the HUD keeps its 4:3 shape in the middle; menus, movies and loading screens stay 4:3 (pillarboxed). Host-side only (the GS draws the game's 4:3 3D 3/4 as wide and fills the sides with what the game draws beyond the 4:3 edges), so the simulation is the same: a 16:9 and a 4:3 player play online together. **F9** toggles it in the game. docs/WIDESCREEN.md. |
 
 Developer switches: `PS2X_GL_SPRITE_SNAP=0` (old sprite edges), `PS2X_GL_REGION_LINEAR=0` (CLAMP region modes point
 sampled as before), `PS2X_GS_NATIVE_LINES` (picture height the steps are computed from, 448).
@@ -28,8 +29,9 @@ picture `TEKKEN4_INTERNAL_RES=1440p` + `TEKKEN4_AA=ssaa2+fxaa` (draws at 2880 li
 
 | setting | switch | values | notes |
 |---|---|---|---|
-| Automatic Versus menu input | `TEKKEN4_NET_AUTO_VS` | **off** (unset or anything except 1), 1 | Opt-in netplay boot script through the normal pad path. Both players receive the same agreed presses; real pads are neutral during the bounded boot window. `TEKKEN4_RB_INPUT`, when set, supplies the shared finite script in this window. The deadline logs an unverified handoff: no select/mode address is assumed. Fresh and existing saves may need different menu timing. See `docs/DIRECTFIGHT_T4.md` for the script, limits and required pair checks. Unbuilt and untested in this source copy. |
-| Automatic Versus deadline | `TEKKEN4_NET_AUTO_VS_END` | **1200**, integer 1..3600 | Shared logical input frame: neutral release at this frame, normal input after it. Used only with automatic Versus input; peers must agree on the schedule and deadline. This timeout restores control even if a dialog or menu takes a different path. |
+| Automatic Versus boot | `TEKKEN4_NET_AUTO_VS` | **on** (unset or anything except 0), 0 | Netplay only: the host's pad walks title, first-boot difficulty prompt and MODE SELECT to VS character select, each press chosen from the game's scene/menu state; lockstep until select shows, then the players pick. P2 and real pads are neutral meanwhile. Both PCs must agree (checked at HELLO). See `docs/DIRECTFIGHT_T4.md` "Online boot". |
+| Automatic Versus bound | `TEKKEN4_NET_AUTO_VS_END` | **3000**, integer 1..3600 | Logical frame at which the players take over if VS select was not reached (unknown screen). Peers must agree. |
+| Online memory card | `TEKKEN4_NET_CARD` | **session**, shared | Netplay only: session = mc0/mc1 in the game's working folder (an empty card per match); shared = the game folder's card (offline save; both PCs need the same save). Peers must agree. |
 
 ## What was wrong and what changed
 

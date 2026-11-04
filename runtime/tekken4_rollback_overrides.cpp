@@ -64,10 +64,14 @@
 //                          (one-way; give each side half the round trip)
 // TEKKEN4_NET_LOCALPAD=0   the local player is the script only (TEKKEN4_RB_INPUT/FUZZ on the host, TEKKEN4_RB_INPUT2/
 //                          FUZZ2 on the joiner; frame = the frame the input takes effect in); otherwise script | device
-// TEKKEN4_NET_AUTO_VS=1   bounded shared boot script on both pads through normal net input; devices held neutral.
-//                          TEKKEN4_RB_INPUT supplies finite presses (else the pair-test VS menu prefix); no fuzz.
-// TEKKEN4_NET_AUTO_VS_END  logical timeout/release frame, default 1200, range 1..3600; normal input from END+1.
-//                          Select is not detected: timeout logs an unverified handoff. Settings must match peers.
+// TEKKEN4_NET_AUTO_VS      default on (0 = off): the session boots straight to VS character select. Lockstep until
+//                          then; the host's pad walks title -> (first-boot difficulty) -> MODE SELECT -> VS Battle,
+//                          each press decided from the game's scene/menu state (npAutoVsObserve, avNextPress); P2
+//                          and both PCs' real pads stay neutral. Test scripts only apply after the hand-over.
+// TEKKEN4_NET_AUTO_VS_END  bound in logical frames (default 3000, 1..3600): no VS select by then = the players take
+//                          over with their pads. Both PCs must use the same switch and bound (checked at HELLO).
+// TEKKEN4_NET_CARD         "session" (default): the memory card is mc0/mc1 in the working directory (a new run dir
+//                          per match = an empty card on both PCs); "shared": the game folder's card (offline saves)
 // TEKKEN4_NET_PAD          the local device: 0 keyboard + first gamepad (default), -1 keyboard, n n-th gamepad
 // TEKKEN4_NET_BUILD        build id (16 hex digits, tools/t4_buildid.py); else t4net_build.txt next to the exe;
 //                          a peer with another id is refused at HELLO
@@ -113,8 +117,11 @@
 #include "runtime/ps2_rollback_cuts.h"
 #include "runtime/ps2_perf_stats.h"
 #include "runtime/ps2_vu1_async.h"
+#include "ps2x/iop/iop_profile.h"
 #include "Stubs/Pad.h"
 #include "Stubs/SIF.h"
+#include "tekken4_match_state.h"
+#include "tekken4_native_names.h"
 #include "tekken4_state_probe.h"
 #if __has_include("tekken4_net.h") && defined(PS2X_ROLLBACK_IOP_STATE)
 #include "tekken4_net.h"
@@ -135,6 +142,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -255,6 +263,7 @@ namespace tekken4_rollback
         bool boundaryVblank = true;
         std::vector<ps2_rollback::MaskRange> masks;
         std::vector<uint64_t> dumpFrames;
+        std::vector<uint64_t> shotFrames; // TEKKEN4_RB_SHOTS
         uint64_t pagesFrom = ~0ull, pagesTo = 0;
         uint64_t testStart = 600, testEvery = 30, testDepth = 8;
         bool testWords = false;
@@ -345,6 +354,9 @@ namespace tekken4_rollback
     Config g_cfg;
     PS2Runtime *g_runtime = nullptr;
     uint64_t g_frame = 0;  // logical frame = boundary count since boot; restored with the snapshot
+    // Match state (round wins, health, fighters; read only). Fed at every boundary visit; decided on confirmed
+    // frames only (docs/MATCH_RESULT_T4.md). Host state, outside the snapshots: a rollback overwrites samples.
+    tekken4_match::Tracker g_match;
     uint64_t g_wallFrames = 0;
     FILE *g_log = nullptr;
     FILE *g_pagesLog = nullptr;
@@ -1297,9 +1309,18 @@ namespace tekken4_rollback
         uint64_t headroomOpportunities = 0, headroomWaits = 0, headroomCompleted = 0, headroomRequested = 0;
         uint64_t headroomFrame = 0, headroomBefore = 0, headroomAfter = 0, headroomNeed = 0, headroomTarget = 0;
         double headroomWaitMs = 0;
+        // Automatic VS (docs/DIRECTFIGHT_T4.md "Online boot: straight to VS select"): the host's pad walks the menus
+        // from the game's own scene/menu state until VS character select shows; lockstep until then.
+        bool sessionCard = true;             // memory card in the run dir (TEKKEN4_NET_CARD=shared: the ELF folder's)
         bool autoVs = false, autoVsReleased = false;
-        uint64_t autoVsEnd = 1200;
-        PadScript autoVsScript;
+        uint64_t autoVsEnd = 3000;           // bound: no select by then = players take over
+        uint64_t autoVsUserRbStart = 600;    // TEKKEN4_NET_RBSTART (rollback never starts before it)
+        uint64_t autoVsSelectFrame = 0;      // boundary where VS select was seen (0 = not yet)
+        uint64_t autoVsNormalFrom = ~0ull;   // first target frame with normal input on this side
+        uint64_t autoVsActFrom = 0;          // current press: target frames [actFrom, actFrom + hold)
+        uint16_t autoVsAct = 0;
+        uint32_t autoVsPresses = 0;
+        std::chrono::steady_clock::time_point autoVsT0{};
         // phase 3b: early rollback (T5 sec. 27): the boundary may come up to earlyMs before its vblank time; what is
         // already known to be mispredicted is rolled back in that wait, and inputs that arrive during it too
         bool early = true;
@@ -1536,12 +1557,47 @@ namespace tekken4_rollback
                                 { return g_hw.todo.empty() && g_hw.busySlot < 0; });
         }
         hashCollect();
+        if (tekken4_online_result::matchPending())
+        {
+            const int agreement = g_cfg.hashEvery && tekken4_online_result::matchHashKnown()
+                                      ? t4net::hashAgreement(static_cast<uint32_t>(tekken4_online_result::matchHashTarget()))
+                                      : 0;
+            tekken4_online_result::finalizeMatch(agreement, t4net::hashMismatches(), t4net::hashesCompared());
+        }
         if (g_np.started)
         {
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_np.runT0).count();
             tekken4_online_result::liveFrame(frame, seconds > 0.0 ? static_cast<double>(g_np.runFrames) / seconds : 0.0);
         }
         tekken4_online_result::finish(reason, frame, detail);
+    }
+
+    // A match ended on a confirmed frame (tekken4_match_state.h). The first one is the lobby match: it goes to the
+    // result file once the state hash of the first hashed frame at or after it has been compared with the peer's
+    // (npMatchResultTick), so both PCs report the same result with the same compared hash.
+    void npMatchEnded(const tekken4_match::MatchEnd &end)
+    {
+        t4net::note("match ended at frame %llu: %s %d-%d", static_cast<unsigned long long>(end.frame),
+                    end.winner == 0 ? "P1 won" : (end.winner == 1 ? "P2 won" : "draw"), end.score[0], end.score[1]);
+        tekken4_online_result::matchEnded(end, g_cfg.hashEvery);
+    }
+
+    void npMatchResultTick(uint64_t f)
+    {
+        if (!tekken4_online_result::matchPending())
+            return;
+        const uint64_t target = tekken4_online_result::matchHashTarget();
+        int agreement = 0;
+        if (g_cfg.hashEvery && tekken4_online_result::matchHashKnown())
+            agreement = t4net::hashAgreement(static_cast<uint32_t>(target));
+        // decided (equal / different / passed without the peer's hash), no hashes at all, or 10 s after the match
+        const bool timeUp = f > tekken4_online_result::matchFrame() + 600u;
+        if (agreement != 0 || !g_cfg.hashEvery || timeUp)
+        {
+            tekken4_online_result::finalizeMatch(agreement, t4net::hashMismatches(), t4net::hashesCompared());
+            std::fprintf(g_log, "MATCHRESULT written f=%" PRIu64 " hash_frame=%" PRIu64 " agreement=%d desync=%u\n", f,
+                         target, agreement, t4net::hashMismatches());
+        }
     }
 
     // Both ports during a netplay frame: the inputs decided at its boundary (npDecideInputs).
@@ -1581,26 +1637,87 @@ namespace tekken4_rollback
         return v < 0x40u ? 0x00u : v > 0xC0u ? 0xFFu : 0x80u;
     }
 
+    // ---- automatic VS: the game's own state (SLUS-20328 v1.00 only; docs/DIRECTFIGHT_T4.md "Online boot")
+    // Scene manager FUN_001978d0 (getter FUN_001978a0): scene record at 0x357d38 = {current, requested (14 = none),
+    // previous, phase within the scene}. Scenes seen on the way: 0 boot, 5 Namco logo, 8 title, 1 (one frame) and
+    // 2 = MODE SELECT, 7 = VS character select (6 = Story's select, 4 = its prologue). In scene 2 the active menu is
+    // 0x357724 (1 = SET GAME DIFFICULTY, shown only when no save was loaded; 2 = the mode list) and its cursor
+    // 0x357720 (mode list: 0 Story, 1 Arcade, 2 VS Battle, ...). The mode list's confirm writes the game type
+    // 0x2a8bf8 (2 = Story, 3 = VS Battle) as the next scene starts.
+    constexpr uint32_t kAvScene = 0x00357d38u, kAvMenu = 0x00357724u, kAvCursor = 0x00357720u,
+                       kAvGameType = 0x002a8bf8u;
+    constexpr uint32_t kAvSceneLogo = 5u, kAvSceneTitle = 8u, kAvSceneModeSelect = 2u, kAvSceneSelect = 7u;
+    constexpr uint32_t kAvMenuDifficulty = 1u, kAvMenuModes = 2u, kAvModeVs = 2u, kAvGameTypeVs = 3u;
+    constexpr uint64_t kAvHold = 4u;
+
+    uint32_t avRead(uint32_t address)
+    {
+        const uint8_t *ram = g_runtime->memory().getRDRAM();
+        uint32_t v;
+        std::memcpy(&v, ram + address, sizeof v);
+        return v;
+    }
+
+    bool avAtVsSelect()
+    {
+        return avRead(kAvScene) == kAvSceneSelect && avRead(kAvGameType) == kAvGameTypeVs;
+    }
+
+    // What the host's pad presses next, from the state of the current boundary only (lockstep: the same on both PCs).
+    uint16_t avNextPress()
+    {
+        const uint32_t scene = avRead(kAvScene);
+        if (scene == kAvSceneLogo || scene == kAvSceneTitle)
+            return kBtnStart;
+        if (scene == kAvSceneModeSelect)
+        {
+            const uint32_t menu = avRead(kAvMenu);
+            if (menu == kAvMenuDifficulty)
+                return kBtnStart; // keep the default difficulty (the game saves nothing here)
+            if (menu == kAvMenuModes)
+            {
+                const uint32_t cursor = avRead(kAvCursor);
+                return cursor < kAvModeVs ? kBtnDown : cursor > kAvModeVs ? kBtnUp : kBtnCross;
+            }
+            return 0;
+        }
+        return 0; // boot, transitions, anything unknown: wait (the bound hands over to the players)
+    }
+
+    uint64_t avPeriod()
+    {
+        // a press must be visible in the state before the next decision: hold + the input delay + a few frames
+        return std::max<uint64_t>(24u, static_cast<uint64_t>(std::max(g_np.lockDelay, g_np.delay)) + kAvHold + 12u);
+    }
+
     t4net::PadInput npSampleLocal(uint64_t frame)
     {
         t4net::PadInput in;
-        if (g_np.autoVs && frame <= g_np.autoVsEnd)
+        if (g_np.autoVs && frame < g_np.autoVsNormalFrom)
         {
-            // Use the EFFECTIVE target frame, including ahead-of-time priming. Repeated boundaries and
-            // rollback read the normal input history; host clocks and live expiry logging cannot alter it.
-            if (frame < g_np.autoVsEnd)
-                for (const ScriptPress &press : g_np.autoVsScript.presses)
-                    if (frame >= press.frame && frame - press.frame < press.hold)
-                        in.buttons |= press.buttons;
-            return in; // END is one neutral release frame, including all axes; no real device or fuzz here.
+            // Sampled once per target frame, in order, at the live boundary frame - delay (or at the handshake's
+            // priming). Only the host (P1) walks the menus; P2 and both PCs' real devices stay neutral.
+            if (g_np.slot == 0 && g_np.started && frame <= g_np.autoVsEnd)
+            {
+                if (frame % avPeriod() == 0u)
+                {
+                    g_np.autoVsAct = avNextPress();
+                    g_np.autoVsActFrom = frame;
+                    if (g_np.autoVsAct)
+                        ++g_np.autoVsPresses;
+                }
+                if (frame >= g_np.autoVsActFrom && frame - g_np.autoVsActFrom < kAvHold)
+                    in.buttons = g_np.autoVsAct;
+            }
+            return in;
         }
         if (g_np.autoVs)
         {
-            // A long boot press cannot leak past the bounded window. Later per-slot test presses and fuzz
-            // remain available (the pair harness can continue from select into a fight).
+            // Test scripts: only presses that start after the hand-over (boot presses never leak into select);
+            // fuzz as usual (the pair harness can continue from select into a fight).
             const PadScript &script = g_cfg.pads[g_np.slot];
             for (const ScriptPress &press : script.presses)
-                if (press.frame > g_np.autoVsEnd && frame >= press.frame && frame - press.frame < press.hold)
+                if (press.frame >= g_np.autoVsNormalFrom && frame >= press.frame && frame - press.frame < press.hold)
                     in.buttons |= press.buttons;
             if (frame >= script.fuzzFrom && frame < script.fuzzTo)
                 in.buttons |= fuzzButtons(frame, script.salt);
@@ -2620,6 +2737,37 @@ namespace tekken4_rollback
         }
     }
 
+    // Automatic VS hand-over, at the first live visit of every boundary (lockstep: the same boundary on both PCs).
+    // VS select seen (or the bound reached): every input not sampled yet is normal input on this side, rollback
+    // starts with the next frame on both PCs.
+    void npAutoVsObserve(uint64_t f)
+    {
+        if (!g_np.autoVs || g_np.autoVsReleased || !g_np.started)
+            return;
+        const bool atSelect = avAtVsSelect();
+        if (!atSelect && f < g_np.autoVsEnd)
+            return;
+        g_np.autoVsReleased = true;
+        g_np.autoVsSelectFrame = atSelect ? f : 0u;
+        g_np.autoVsNormalFrom = std::max<uint64_t>(t4net::localMax(), f + 1u);
+        g_np.rbStart = std::max(g_np.autoVsUserRbStart, f + 1u);
+        g_np.tsFrom = g_np.rbStart + static_cast<uint64_t>(kMaxLockDelay) + 4u;
+        const double sinceStart = msSince(g_np.autoVsT0) / 1000.0, sinceConnect = msSince(g_np.runT0) / 1000.0;
+        if (atSelect)
+            std::fprintf(g_log, "NETAUTO_VS select f=%" PRIu64 " scene=%u type=%u host_presses=%u normal_from=%" PRIu64
+                                " lockstep_until=%" PRIu64 " boot_to_select_s=%.1f connected_to_select_s=%.1f\n",
+                         f, avRead(kAvScene), avRead(kAvGameType), g_np.autoVsPresses, g_np.autoVsNormalFrom,
+                         g_np.rbStart, sinceStart, sinceConnect);
+        else
+            std::fprintf(g_log, "NETAUTO_VS timeout f=%" PRIu64 ": VS select not reached (scene=%u menu=%u cursor=%u "
+                                "type=%u); players take over from %" PRIu64 ", lockstep until %" PRIu64 "\n",
+                         f, avRead(kAvScene), avRead(kAvMenu), avRead(kAvCursor), avRead(kAvGameType),
+                         g_np.autoVsNormalFrom, g_np.rbStart);
+        std::fflush(g_log);
+        if (!atSelect)
+            RUNTIME_LOG("[rollback] automatic VS did not reach character select; use the pad\n");
+    }
+
     void npBoundary(uint64_t cycle)
     {
         if (g_np.failed)
@@ -2635,6 +2783,8 @@ namespace tekken4_rollback
         // Replay must reuse recorded input. Only a first live visit may publish before capture; leave liveT
         // assignment below, after npEndResim has restored the live scheduler on a replay's return.
         const bool firstLive = !g_np.resim && g_np.liveTFrame != f;
+        if (firstLive)
+            npAutoVsObserve(f);
         const bool sentFirst = firstLive && g_np.sendFirst;
         if (sentFirst)
         {
@@ -2748,14 +2898,6 @@ namespace tekken4_rollback
 
             // ---- live part (at the vblank time): time sync, the prediction window, the late rollback
             g_np.liveDone = f;
-            if (g_np.autoVs && !g_np.autoVsReleased && f >= g_np.autoVsEnd)
-            {
-                g_np.autoVsReleased = true; // logging only: never used to decide target-frame input.
-                std::fprintf(g_log, "NETAUTO_VS timeout f=%" PRIu64 ": select unverified; neutral release at %" PRIu64
-                                    "; normal input restored from %" PRIu64 " (check language/save dialogs)\n",
-                             f, g_np.autoVsEnd, g_np.autoVsEnd + 1u);
-                std::fflush(g_log);
-            }
             npFrameTiming();
             npShots(f);
             t4net::sendNow();
@@ -2844,7 +2986,7 @@ namespace tekken4_rollback
                              waitNeed - 1u, lockstep ? "lockstep" : "prediction window");
         }
 
-        if (g_np.autoVs && t4net::peerLost())
+        if (g_np.autoVs && !g_np.autoVsReleased && t4net::peerLost())
         {
             // A lost peer may have last sent a held boot press. End the session instead of predicting that
             // press forever; offline recovery uses the native pad path, never an unsynchronized script.
@@ -2872,6 +3014,13 @@ namespace tekken4_rollback
             hashSubmit(g, slot, g_np.ringCycle[slot]);
         }
         g_np.hashNext = std::max(g_np.hashNext, upto + 1u);
+        // Round / match decisions on the same confirmed frames (no rollback can reach them any more).
+        if (g_match.confirm(upto, g_log))
+        {
+            npMatchEnded(g_match.endEvent());
+            std::fflush(g_log);
+        }
+        npMatchResultTick(f);
         uint32_t badFrame = 0;
         uint64_t mine = 0, theirs = 0;
         while (t4net::takeMismatch(&badFrame, &mine, &theirs))
@@ -2939,48 +3088,12 @@ namespace tekken4_rollback
                 std::fprintf(g_log, "NETAUTO_VS aborted: AUTO_VS_END must be 1..3600; normal offline input restored\n");
                 return false;
             }
-        const char *input = std::getenv("TEKKEN4_RB_INPUT");
-        if (input)
-        {
-            // The old script parser is permissive. Do not silently negotiate malformed automation as neutral
-            // input: validate the finite presses here while leaving ordinary RB_INPUT behavior unchanged.
-            const std::string text = input;
-            bool valid = text.empty() || (text.front() != ',' && text.back() != ',' && text.find(",,") == std::string::npos);
-            for (const std::string &item : split(text, ','))
-            {
-                const auto parts = split(item, ':');
-                uint64_t frame = 0, hold = 6;
-                if (parts.size() < 2u || parts.size() > 3u || item.front() == ':' ||
-                    item.find("::") != std::string::npos || item.back() == ':' ||
-                    !autoVsNumber(parts[0], frame) || (parts.size() == 3u && !autoVsNumber(parts[2], hold)) ||
-                    !hold || hold > ~0ull - frame)
-                {
-                    valid = false;
-                    break;
-                }
-                const std::string &buttons = parts[1];
-                if (buttons.front() == '+' || buttons.back() == '+' || buttons.find("++") != std::string::npos)
-                    valid = false;
-                for (const std::string &name : split(buttons, '+'))
-                    if (!buttonByName(name))
-                        valid = false;
-            }
-            if (!valid)
-            {
-                std::fprintf(g_log, "NETAUTO_VS aborted: invalid TEKKEN4_RB_INPUT; normal offline input restored\n");
-                return false;
-            }
-            g_np.autoVsScript.presses = g_cfg.pads[0].presses;
-        }
-        else
-        {
-            // Only the VS-menu prefix of the documented pair script. Later Cross presses select fighters/stage.
-            g_np.autoVsScript.presses = {{500, 6, kBtnStart}, {800, 6, kBtnStart}, {960, 6, kBtnDown},
-                                         {1020, 6, kBtnDown}, {1080, 6, kBtnCross}};
-        }
+        // Lockstep until VS select is seen (npAutoVsObserve lowers it then; never below TEKKEN4_NET_RBSTART).
+        g_np.autoVsUserRbStart = g_np.rbStart;
         g_np.rbStart = std::max(g_np.rbStart, g_np.autoVsEnd + 1u);
-        // Hash the effective buttons, not spelling/order of the input list. The transport checks the nonzero
-        // fingerprint even with an unknown build ID, before any input is primed. No host time enters this hash.
+        g_np.autoVsT0 = std::chrono::steady_clock::now();
+        // Both PCs must run the same automation (rule version, bound, boundary): the transport compares this
+        // fingerprint at HELLO, before any input is primed. No host time enters it.
         uint64_t fingerprint = 14695981039346656037ull;
         const auto mix = [&fingerprint](uint64_t value)
         {
@@ -2990,28 +3103,30 @@ namespace tekken4_rollback
                 fingerprint *= 1099511628211ull;
             }
         };
-        mix(1u); // automation contract version
+        mix(2u); // automation contract version: 2 = state-driven host navigation (1 = fixed frame script)
         mix(g_np.autoVsEnd);
-        mix(g_np.rbStart);
+        mix(g_np.autoVsUserRbStart);
+        mix(g_np.sessionCard ? 1u : 0u);
         mix(g_cfg.boundaryVblank ? 1u : 0u);
         mix(g_cfg.boundaryAny ? 1u : 0u);
         mix(static_cast<uint32_t>(g_cfg.boundaryReason));
         mix(static_cast<uint32_t>(g_cfg.boundaryId));
-        for (uint64_t frame = 0; frame <= g_np.autoVsEnd; ++frame)
-            mix(npSampleLocal(frame).buttons);
+        for (const uint32_t v : {kAvScene, kAvMenu, kAvCursor, kAvGameType, kAvSceneLogo, kAvSceneTitle,
+                                 kAvSceneModeSelect, kAvSceneSelect, kAvMenuDifficulty, kAvMenuModes, kAvModeVs,
+                                 kAvGameTypeVs, static_cast<uint32_t>(kAvHold)})
+            mix(v);
         c.autoVsFingerprint = fingerprint ? fingerprint : 1u;
-        std::fprintf(g_log, "NETAUTO_VS enabled: source=%s end=%" PRIu64 " normal_from=%" PRIu64
-                            " lockstep_until=%" PRIu64 " fingerprint=%016" PRIx64
-                            "; both pads shared, devices neutral, select unverified\n",
-                     input ? "TEKKEN4_RB_INPUT" : "pair_prefix", g_np.autoVsEnd, g_np.autoVsEnd + 1u,
-                     g_np.rbStart, c.autoVsFingerprint);
+        std::fprintf(g_log, "NETAUTO_VS enabled: state-driven, bound=%" PRIu64 " lockstep until VS select (at most %" PRIu64
+                            ") fingerprint=%016" PRIx64 "; the host's pad walks the menus, P2 and real pads neutral\n",
+                     g_np.autoVsEnd, g_np.rbStart, c.autoVsFingerprint);
         return true;
     }
 
     bool npConfigure(PS2Runtime &runtime)
     {
+        // Default ON for every netplay session (lobby, Easy Launcher Host/Join); TEKKEN4_NET_AUTO_VS=0 turns it off.
         const char *autoVs = std::getenv("TEKKEN4_NET_AUTO_VS");
-        g_np.autoVs = autoVs && std::strcmp(autoVs, "1") == 0;
+        g_np.autoVs = !(autoVs && std::strcmp(autoVs, "0") == 0);
         const char *spec = std::getenv("TEKKEN4_NET");
         if (!spec || !*spec)
             return false;
@@ -3037,6 +3152,30 @@ namespace tekken4_rollback
             RUNTIME_LOG("[rollback] TEKKEN4_NET=" << spec << ": expected host:<port> or join:<ip>:<port>\n");
             return false;
         }
+        // Memory cards: by default an online game uses mc0/mc1 in its working directory (net_play.ps1 and the lobby
+        // start every session in a new run dir: an empty card on both PCs). The runtime's card is otherwise
+        // game\disc\mc0 next to the ELF, shared with offline play: a player's own save there changes the boot path
+        // (no SET GAME DIFFICULTY prompt) and the loaded options/records, so two PCs with different saves would
+        // not start from the same state. TEKKEN4_NET_CARD=shared keeps the ELF folder's card (both PCs must agree).
+        if (const char *card = std::getenv("TEKKEN4_NET_CARD"); card && std::strcmp(card, "shared") == 0)
+            g_np.sessionCard = false;
+        if (g_np.sessionCard)
+        {
+            std::error_code ec;
+            const std::filesystem::path cwd = std::filesystem::current_path(ec);
+            if (!ec)
+            {
+                PS2Runtime::IoPaths paths = PS2Runtime::getIoPaths();
+                paths.mcRoot = (cwd / "mc0").lexically_normal();
+                PS2Runtime::setIoPaths(paths);
+                std::fprintf(g_log, "NETCARD session: memory card = the run directory's mc0/mc1 (TEKKEN4_NET_CARD=shared"
+                                    " for the game folder's card)\n");
+            }
+            else
+                g_np.sessionCard = false;
+        }
+        if (!g_np.sessionCard)
+            std::fprintf(g_log, "NETCARD shared: memory card = the game folder's mc0 (both PCs need the same save)\n");
         if (const char *bind = std::getenv("TEKKEN4_NET_BIND"))
             c.bind = bind;
         if (const char *delay = std::getenv("TEKKEN4_NET_DELAY"); delay && *delay && std::strcmp(delay, "auto") != 0)
@@ -3137,6 +3276,10 @@ namespace tekken4_rollback
         }
         if (!npConfigureAutoVs(c))
             return false;
+        // Native names modify the guest draw queue. Always check their effective P1/P2 values, even when
+        // AUTO_VS is off. Local role, rank badges and host presentation never enter this contract.
+        c.autoVsFingerprint = tekken4_names::fingerprint(c.autoVsFingerprint, tekken4_names::settings());
+        std::fprintf(g_log, "NETNAMES shared boot/name fingerprint=%016" PRIx64 "\n", c.autoVsFingerprint);
         const size_t ring = static_cast<size_t>(g_np.maxPred + 3u);
         g_np.ring.resize(ring);
         g_np.ringFrame.assign(ring, ~0ull);
@@ -3189,6 +3332,16 @@ namespace tekken4_rollback
         // its resim flag. Drawn tails and frames without render cuts are still repeated simulation.
         if (!frameIsResimulating() && tekken4_state_probe::enabled())
             tekken4_state_probe::sample(g_frame, g_runtime->memory().getRDRAM(), false);
+        // Match state: netplay samples every visit (a re-simulated visit replaces the mispredicted sample) and
+        // decides in npBoundary on confirmed frames; offline every frame is final at once; the self-test's
+        // repeated and wrong-input passes and selfnet's predictions are never sampled.
+        if (g_cfg.mode == Mode::Net)
+            g_match.observe(g_frame, g_runtime->memory().getRDRAM());
+        else if ((g_cfg.mode == Mode::Measure || g_cfg.mode == Mode::Test) && !frameIsResimulating())
+        {
+            g_match.observe(g_frame, g_runtime->memory().getRDRAM());
+            g_match.confirm(g_frame, g_log);
+        }
         std::vector<uint64_t> pages;
         const ps2_rollback::StateHash hash =
             g_cfg.frameHash ? ps2_rollback::hashState(*g_runtime, g_cfg.masks, &pages) : ps2_rollback::StateHash{};
@@ -3207,6 +3360,7 @@ namespace tekken4_rollback
         const uint64_t gsNsNow = g_gsNs.load(std::memory_order_relaxed);
         const double gsMs = static_cast<double>(gsNsNow - g_lastGsNs) / 1e6;
         g_lastGsNs = gsNsNow;
+        ps2_rollback::g_hostProfile.iopNs = ps2x::iop::iopProfileNs(); // PS2X_IOP_PROF=1 (t4iop), else 0
         const ps2_rollback::HostProfile &prof = ps2_rollback::g_hostProfile;
         const double vuMs = static_cast<double>(prof.vu1Ns - g_lastProfile.vu1Ns) / 1e6;
         const double vifMs = static_cast<double>(prof.vif1Ns - g_lastProfile.vif1Ns) / 1e6;
@@ -3265,6 +3419,26 @@ namespace tekken4_rollback
         }
         if (std::find(g_cfg.dumpFrames.begin(), g_cfg.dumpFrames.end(), g_frame) != g_cfg.dumpFrames.end())
             dumpFrame(g_frame);
+#ifdef TEKKEN4_NETPLAY
+        // offline runs: TEKKEN4_NET_SHOTS pictures at exact frames too (net_shot_f<frame>.bmp; netplay takes them in
+        // npBoundary at the live frame)
+        if (g_cfg.mode == Mode::Measure && !g_np.shots.empty())
+            npShots(g_frame);
+        if (std::find(g_cfg.shotFrames.begin(), g_cfg.shotFrames.end(), g_frame) != g_cfg.shotFrames.end())
+        {
+            std::vector<uint8_t> pixels;
+            uint32_t width = 0u, height = 0u;
+            if (g_runtime->gs().copyLatchedHostPresentationFrame(pixels, width, height) && width && height &&
+                pixels.size() >= static_cast<size_t>(width) * height * 4u)
+            {
+                uint64_t ph = 1469598103934665603ull;
+                for (size_t i = 0; i < static_cast<size_t>(width) * height * 4u; ++i)
+                    ph = (ph ^ pixels[i]) * 1099511628211ull;
+                writeBmp("rb_shot_f" + std::to_string(g_frame) + ".bmp", pixels, width, height);
+                std::fprintf(g_log, "SHOT f=%" PRIu64 " %ux%u pix=%016" PRIx64 "\n", g_frame, width, height, ph);
+            }
+        }
+#endif
 
         if (g_cfg.mode == Mode::Test)
             testBoundary(hash, pages, eeMs);
@@ -3413,6 +3587,15 @@ namespace tekken4_rollback
         }
         g_runtime = &runtime;
         g_start = std::chrono::steady_clock::now();
+#ifdef TEKKEN4_NETPLAY
+        if (g_cfg.mode == Mode::Measure)
+            if (const char *v = std::getenv("TEKKEN4_NET_SHOTS"))
+            {
+                for (const std::string &item : split(v, ','))
+                    g_np.shots.push_back(parseNumber(item));
+                std::sort(g_np.shots.begin(), g_np.shots.end());
+            }
+#endif
         g_cfg.masks = kBuiltinMasks;
         if (const char *masks = std::getenv("TEKKEN4_RB_MASK"))
             for (const std::string &item : split(masks, ','))
@@ -3472,6 +3655,11 @@ namespace tekken4_rollback
         if (const char *dump = std::getenv("TEKKEN4_RB_DUMP"))
             for (const std::string &item : split(dump, ','))
                 g_cfg.dumpFrames.push_back(parseNumber(item));
+        // TEKKEN4_RB_SHOTS="<frame>,...": rb_shot_f<frame>.bmp = the presented picture at that frame boundary, and a
+        // SHOT line with its pixel hash in rb_frames.log (frame-exact picture comparisons between builds; t4vurecomp)
+        if (const char *shots = std::getenv("TEKKEN4_RB_SHOTS"))
+            for (const std::string &item : split(shots, ','))
+                g_cfg.shotFrames.push_back(parseNumber(item));
         if (const char *pagesSpec = std::getenv("TEKKEN4_RB_PAGES"))
         {
             const auto parts = split(pagesSpec, ':');

@@ -30,3 +30,6 @@ __pycache__/
 help/
 to clean/
 imgui.ini
+
+# Local PS2Recomp clone and its generated game code
+deps/

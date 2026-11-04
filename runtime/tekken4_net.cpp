@@ -234,6 +234,9 @@ namespace t4net
             uint64_t leadStale = 0, leadStaleDiff = 0, leadRejected = 0;
             uint32_t localHashMax = 0, remoteHashMax = 0, checked = 0, compared = 0, mismatches = 0;
             std::deque<std::array<uint64_t, 3>> mismatchQueue;
+            // per hashed frame: 1 = both hashes known and equal, -1 = different (tag = frame + 1)
+            int8_t verdict[kRing]{};
+            uint32_t verdictTag[kRing]{};
             // round trip
             float rtt[32]{};
             uint32_t nrtt = 0;
@@ -530,6 +533,8 @@ namespace t4net
                     break;
                 }
                 s.compared++;
+                s.verdictTag[i] = f + 1;
+                s.verdict[i] = s.local.hash[i] == s.remote.hash[i] ? 1 : -1;
                 if (s.local.hash[i] != s.remote.hash[i])
                 {
                     if (s.mismatches < 10)
@@ -655,7 +660,7 @@ namespace t4net
                         {
                             sendRejectLocked(from, REJ_AUTO_VS);
                             failLocked("auto_vs_mismatch", addrText(from) +
-                                       " has a different AUTO_VS script/window; use the same settings on both PCs");
+                                       " has different boot/native-name settings; use the same settings on both PCs");
                         }
                         return;
                     }
@@ -743,7 +748,7 @@ namespace t4net
                 else if (why == REJ_AUTO_VS)
                 {
                     if (!s.connected)
-                        failLocked("auto_vs_mismatch", addrText(from) + " refused us: AUTO_VS script/window differs");
+                        failLocked("auto_vs_mismatch", addrText(from) + " refused us: boot/native-name settings differ");
                 }
                 else if (!s.connected)
                     failLocked("rejected", addrText(from) + " is playing another session");
@@ -1245,7 +1250,7 @@ namespace t4net
         if (s.matchDelay)
             note("TEKKEN4_NET_DELAY_MATCH=1: protocol v%u uses equal explicit settings or measured-RTT auto, fixed for this session", s.netVersion);
         if (s.cfg.autoVsFingerprint)
-            note("TEKKEN4_NET_AUTO_VS=1: protocol v%u requires matching boot script/window fingerprint %016llx",
+            note("protocol v%u requires matching boot/native-name fingerprint %016llx",
                  s.netVersion, static_cast<unsigned long long>(s.cfg.autoVsFingerprint));
         if (s.sim)
             note("network simulator on this side's sends: one-way %.1f ms +- %.1f ms, %.1f %% loss", config.simLatencyMs,
@@ -1596,6 +1601,16 @@ namespace t4net
         State &s = S();
         std::lock_guard<std::mutex> lk(s.mu);
         return s.compared;
+    }
+
+    int hashAgreement(uint32_t frame)
+    {
+        State &s = S();
+        std::lock_guard<std::mutex> lk(s.mu);
+        const uint32_t i = frame % kRing;
+        if (s.verdictTag[i] == frame + 1)
+            return s.verdict[i];
+        return frame < s.checked ? 2 : 0;
     }
 
     uint32_t hashMismatches()

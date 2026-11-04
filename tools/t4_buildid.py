@@ -29,23 +29,14 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+from player_common import build_tree
 
 
 def us_tree():
     """tools/us_tree.ps1's rule: TEKKEN4_SRC, else ../tekken4-fork-ps2recomp_usa when it exists, else the plain sibling
     when it is free or on branch t4-us, else ../tekken4-fork-ps2recomp_usa (the plain one is the PAL cousin project's)."""
-    if os.environ.get("TEKKEN4_SRC"):
-        return os.environ["TEKKEN4_SRC"]
-    parent = os.path.dirname(ROOT)
-    own = os.path.join(parent, "tekken4-fork-ps2recomp_usa")
-    plain = os.path.join(parent, "tekken4-fork-ps2recomp")
-    if os.path.isdir(own):
-        return own
-    if not os.path.isdir(os.path.join(plain, ".git")):
-        return plain
-    branch = subprocess.run(["git", "-C", plain, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True,
-                            text=True).stdout.strip()
-    return plain if branch == "t4-us" else own
+    return str(build_tree(ROOT))
 
 
 def sha1_file(path, chunk=1 << 20):
@@ -75,6 +66,34 @@ def git(src, *args):
     return subprocess.run(["git", "-C", src] + list(args), capture_output=True, check=False).stdout
 
 
+def compiler_metadata_dir(build, version):
+    """CMake vendors may suffix the numeric cache version (for example -msvc6)."""
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        sys.exit("invalid or missing CMake cache version: " + version)
+    parent = os.path.join(build, "CMakeFiles")
+    pattern = re.compile(re.escape(version) + r"(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?")
+    try:
+        candidates = sorted(entry.path for entry in os.scandir(parent)
+                            if entry.is_dir() and pattern.fullmatch(entry.name))
+    except OSError as error:
+        sys.exit(f"cannot read CMake compiler metadata: {error}")
+    if len(candidates) != 1:
+        sys.exit(f"{parent}: expected one compiler metadata directory for {version}, found {len(candidates)}")
+    return candidates[0]
+
+
+def compiler_scalar(text, variable, path):
+    """Read one literal scalar; missing, duplicate and compound definitions are unsafe."""
+    declarations = re.findall(rf"^\s*(?i:set)\s*\(\s*{re.escape(variable)}(?=\s|\))[^\r\n]*", text, re.M)
+    if len(declarations) != 1:
+        sys.exit(f"{path}: expected one {variable}, found {len(declarations)}")
+    match = re.fullmatch(rf'\s*(?i:set)\s*\(\s*{re.escape(variable)}\s+(?:"([^"\r\n]*)"|([^\s()"#;]+))\s*\)\s*(?:#[^\r\n]*)?', declarations[0])
+    value = (match.group(1) if match.group(1) is not None else match.group(2)) if match else ""
+    if not value or not re.fullmatch(r"[A-Za-z0-9_.+-]+", value):
+        sys.exit(f"{path}: invalid scalar {variable}")
+    return value
+
+
 def toolchain(build):
     """What the CMake build at <build> compiles with, one "name=value" per line. Exits when it cannot be read: an id
     without the compiler would match a peer on another compiler."""
@@ -88,23 +107,25 @@ def toolchain(build):
             if m:
                 cache[m.group(1)] = (m.group(2), m.group(3))
     cmake = ".".join(cache.get(f"CMAKE_CACHE_{p}_VERSION", ("", ""))[1] for p in ("MAJOR", "MINOR", "PATCH"))
+    metadata = compiler_metadata_dir(build, cmake)
     lines = []
     for lang, name in (("C", "CMakeCCompiler.cmake"), ("CXX", "CMakeCXXCompiler.cmake")):
-        path = os.path.join(build, "CMakeFiles", cmake, name)
-        text = open(path, encoding="utf-8", errors="replace").read() if os.path.isfile(path) else ""
+        path = os.path.join(metadata, name)
+        try:
+            with open(path, encoding="utf-8") as stream:
+                text = stream.read()
+        except (OSError, UnicodeError) as error:
+            sys.exit(f"cannot read compiler metadata {path}: {error}")
         for key in ("ID", "VERSION", "ARCHITECTURE_ID"):
-            m = re.search(rf'set\(CMAKE_{lang}_COMPILER_{key} "([^"]+)"\)', text)
-            if not m:
-                sys.exit(f"{path}: no CMAKE_{lang}_COMPILER_{key}")
-            lines.append(f"{lang}_{key}={m.group(1)}")
+            value = compiler_scalar(text, f"CMAKE_{lang}_COMPILER_{key}", path)
+            lines.append(f"{lang}_{key}={value}")
     build_type = cache.get("CMAKE_BUILD_TYPE", ("", ""))[1]
     lines.append(f"build_type={build_type}")
     for var in ("CMAKE_C_FLAGS", "CMAKE_CXX_FLAGS", f"CMAKE_C_FLAGS_{build_type.upper()}",
                 f"CMAKE_CXX_FLAGS_{build_type.upper()}"):
         lines.append(f"{var}={' '.join(cache.get(var, ('', ''))[1].split())}")
     for name in sorted(cache):
-        # PS2X_SIMD_BASELINE (SSE2-only build for old CPUs) computes the same game state bit for bit (patch 90, pairs
-        # in docs/PERF.md "Old PCs"): players with and without it must meet, so it is not part of the id.
+        # The SSE2 build computes the same state and must share its peers' identity.
         if name.startswith("PS2X_") and cache[name][0] == "BOOL" and name != "PS2X_SIMD_BASELINE":
             lines.append(f"{name}={cache[name][1]}")
     # native VU1 blocks or the interpreter; the directory itself is a path
@@ -139,7 +160,7 @@ def code_id(src, tool_lines):
             h.update(b"config:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     runner = os.path.join(src, "ps2xRuntime", "src", "runner")
     for pattern in ("*_overrides.cpp", "tekken4_net*.cpp", "tekken4_net*.h",
-                    "tekken4_state_probe.h", "tekken4_online_result.h"):
+                    "tekken4_state_probe.h", "tekken4_online_result.h", "tekken4_match_state.h", "tekken4_rank_badges.h", "tekken4_native_names.h"):
         for path in sorted(glob.glob(os.path.join(runner, pattern))):
             h.update(b"module:" + os.path.basename(path).encode() + b":" + sha1_text(path).encode())
     return h.hexdigest()
@@ -147,11 +168,12 @@ def code_id(src, tool_lines):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", default=us_tree())
+    ap.add_argument("--src")
     ap.add_argument("--out", help="directory for t4net_build.txt/.json (default: print only)")
     ap.add_argument("--build", help="CMake build directory (default: the parent of --out, else <src>/out/$TEKKEN4_BUILD_DIR or out/runtime)")
     ap.add_argument("--elf", default=os.path.join(ROOT, "game", "disc", "SLUS_203.28"))
     a = ap.parse_args()
+    a.src = a.src or us_tree()
     cmake_build = a.build or (os.path.dirname(os.path.abspath(a.out)) if a.out else
                               os.path.join(a.src, "out", os.environ.get("TEKKEN4_BUILD_DIR") or "runtime"))
     tool_lines = toolchain(cmake_build)
