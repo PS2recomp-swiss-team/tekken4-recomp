@@ -2,6 +2,7 @@
 // a predicted KO that a rollback removes before its frame is confirmed, an abandoned match, the fighter and stage
 // reads, a second match. Built and run by tools/test_match_state.py.
 #include "../runtime/tekken4_match_state.h"
+#include "../runtime/tekken4_rounds.h"
 
 #include <cstdio>
 #include <cstring>
@@ -171,6 +172,50 @@ namespace
         CHECK(!t.hasEnd() && t.inMatch());
     }
 
+    void test_negotiated_rounds_and_first_to_three()
+    {
+        using tekken4_rounds::parse;
+        CHECK(parse(nullptr).valid && parse(nullptr).value == 0);
+        CHECK(parse("").valid && parse("").value == 0);
+        for (const char *s : {"1", "2", "3", "4", "5"})
+            CHECK(parse(s).valid && parse(s).value == static_cast<uint32_t>(s[0] - '0'));
+        for (const char *s : {"0", "6", "-1", "3x", "3 ", " 3", "+3", "03", "999999999999999999"})
+            CHECK(!parse(s).valid);
+        const auto hash = tekken4_rounds::fingerprint(42, parse("3"));
+        CHECK(hash == tekken4_rounds::fingerprint(42, parse("3")));
+        CHECK(hash != tekken4_rounds::fingerprint(42, parse("2")));
+        CHECK(tekken4_rounds::fingerprint(0, parse("2")) != tekken4_rounds::fingerprint(0, parse(nullptr)));
+
+        Ram r;
+        Tracker t;
+        uint64_t f = 0;
+        r.w32(kRoundsToWin, 3);
+        select_then_fight(t, r, f, 14, 0, 9);
+        r.wins(1, 0);
+        live(t, r, f);
+        r.wins(2, 0);
+        live(t, r, f);
+        CHECK(t.inMatch() && !t.hasEnd());
+        // A predicted third win must disappear when the frame is replayed with corrected input.
+        r.wins(3, 0);
+        r.code(1);
+        t.observe(f + 1, r.m.data());
+        r.wins(2, 0);
+        r.code(0);
+        t.observe(f + 1, r.m.data());
+        t.confirm(++f, nullptr);
+        CHECK(!t.hasEnd());
+        r.wins(2, 1);
+        live(t, r, f);
+        r.wins(3, 1);
+        r.code(1);
+        live(t, r, f);
+        CHECK(t.hasEnd());
+        const auto &end = t.endEvent();
+        CHECK(end.consistent && end.winner == 0 && end.score[0] == 3 && end.score[1] == 1);
+        CHECK(end.roundsToWin == 3 && end.rounds.size() == 4);
+    }
+
     void test_abandoned_and_second_match()
     {
         Ram r;
@@ -205,6 +250,7 @@ int main()
     test_inconsistent_code_is_not_consistent();
     test_predicted_ko_rolled_back();
     test_abandoned_and_second_match();
+    test_negotiated_rounds_and_first_to_three();
     if (g_failures)
     {
         std::printf("%d failure(s)\n", g_failures);

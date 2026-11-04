@@ -988,6 +988,34 @@ def load_images(paths):
     return imgs
 
 
+def infer_jr_targets(code, unit, entries):
+    """Conservative candidates for register jumps from immediate VI assignments.
+
+    A candidate is used only behind an exact run-time target equality test. It need
+    not be reachable from that assignment; the generated branch still preserves
+    the current timing context. Restrict to already discovered program entries to
+    avoid treating arbitrary addresses/data constants as instruction boundaries.
+    This derives game-specific targets from the player's image, never a source map.
+    """
+    mask = 0x3FFF if unit == 1 else 0xFFF
+    constants = {}
+    jumps = []
+    for pc in range(0, len(code), 8):
+        lo, up = struct.unpack_from('<II', code, pc)
+        if up & 0x80000000:  # I-bit: lower word is a float literal
+            continue
+        op = (lo >> 25) & 0x7F
+        source, dest = (lo >> 11) & 15, (lo >> 16) & 15
+        if op == 0x08 and source == 0 and dest:  # IADDIU vi, vi0, imm15
+            immediate = ((lo >> 10) & 0x7800) | (lo & 0x7FF)
+            target = (immediate * 8) & mask
+            if target < len(code) and target in entries:
+                constants.setdefault(dest, set()).add(target)
+        elif op in (0x24, 0x25):  # JR / JALR
+            jumps.append((pc, source))
+    return {pc: set(constants[reg]) for pc, reg in jumps if reg in constants}
+
+
 def read_heads(path):
     """Optional local file: lines 'vu1 <pc>' / 'vu0 <pc>' (extra entries) and 'jr1 <jr pc> <target>' (JR targets).
     Run-time logs name what is missing ('no lifted program at pc', 'handed ... at pc'). Addresses only."""
@@ -1038,7 +1066,10 @@ def main(argv):
                 continue
             tag = f'u{unit}_{fnv32(code):08x}'
             entries = sorted(default_entries(code, unit) | extra[unit])
-            reach_of = {e: reach(code, unit, e, jr[unit]) for e in entries}
+            targets = infer_jr_targets(code, unit, set(entries))
+            for pc, values in jr[unit].items():
+                targets.setdefault(pc, set()).update(values)
+            reach_of = {e: reach(code, unit, e, targets) for e in entries}
             # groups: union entries whose reachable pairs overlap
             groups = []
             for e in entries:
@@ -1053,14 +1084,14 @@ def main(argv):
             for k, (ents, _pcs) in enumerate(sorted(groups, key=lambda x: min(x[0]))):
                 name = f'{tag}_{k}'
                 try:
-                    grp = Group(unit, code, ents, jr[unit], name)
+                    grp = Group(unit, code, ents, targets, name)
                     fn = grp.generate()
                 except Unliftable as ex:
                     # try the entries one by one: one bad program must not take the others with it
                     log.append(f'{name}: group not liftable ({ex}); entries one by one')
                     for e in sorted(ents):
                         try:
-                            grp = Group(unit, code, {e}, jr[unit], f'{name}_{e:x}')
+                            grp = Group(unit, code, {e}, targets, f'{name}_{e:x}')
                             fn = grp.generate()
                         except Unliftable as ex2:
                             log.append(f'  VU{unit} {e:#06x}: not lifted ({ex2})')

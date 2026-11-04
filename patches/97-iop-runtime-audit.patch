@@ -1,0 +1,166 @@
+Subject: [PATCH] Add opt-in exact IOP interpreter and HLE runtime audit
+
+Host-only counters; no guest state, scheduling, serialization or hash changes.
+
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -1104,6 +1104,15 @@
+                 if (m_profiling)
+                     s0 = __rdtsc();
+                 const ImportDisposition disposition = dispatchImport(*import, cpu);
++                if (m_recompAuditEnabled)
++                {
++                    if (disposition == ImportDisposition::Handled)
++                        ++m_audit.hle;
++                    else if (disposition == ImportDisposition::JumpToGuest)
++                        ++m_audit.guestImportJumps;
++                    else
++                        ++m_audit.missingImports;
++                }
+                 if (m_profiling)
+                 {
+                     const std::string_view lib = import->library;
+@@ -1127,6 +1136,8 @@
+                 return !cpu.stopped;
+             }
+ 
++            if (m_recompAuditEnabled)
++                ++m_audit.interpreted; // Exactly one instruction fetch/decode/execute; model charges one IOP cycle.
+             const bool running = cpuCore.executeInstruction(cpu);
+             // No IOP BIOS is mapped, so the vector at 0x80000080 is low RAM and a taken
+             // exception spins until the RPC budget dies (sound-run-6: pc=0x80000a00).
+@@ -1430,8 +1441,52 @@
+                 return false;
+             ++m_idleSkipCount;
+             ++m_fastIdleCount;
++            if (m_recompAuditEnabled)
++            {
++                m_audit.idleSkippedCycles += cycles;
++                ++m_audit.fastIdleCalls;
++            }
+             totalCycles = target;
++            if (m_recompAuditEnabled)
++                reportRecompAudit();
+             return true;
++        }
++
++        // Audit counters measure host work and intentionally stay outside saved IOP state.
++        // Poll the wall clock at most once per guest frame, then report about once per
++        // wall second. Interpreter/HLE counters need neither atomics nor TSC reads.
++        void reportRecompAudit()
++        {
++            if (!m_recompAuditEnabled)
++                return;
++            if (totalCycles >= m_auditLastPollCycle && totalCycles - m_auditLastPollCycle < 614400u)
++                return;
++            m_auditLastPollCycle = totalCycles;
++            const auto now = std::chrono::steady_clock::now();
++            const double seconds = std::chrono::duration<double>(now - m_auditLastReport).count();
++            if (seconds < 1.0)
++                return;
++            const auto delta = [this](uint64_t AuditCounters::*field) {
++                return m_audit.*field - m_auditLast.*field;
++            };
++            const uint64_t interpreted = delta(&AuditCounters::interpreted);
++            char line[800];
++            std::snprintf(line, sizeof(line),
++                "[recomp-audit] iop wall_s=%.3f interval_s=%.6f interpreted_calls=%llu interpreted_per_s=%.3f "
++                "interpreted_model_cycles=%llu hle_calls=%llu hle_per_s=%.3f guest_import_jumps=%llu missing_imports=%llu "
++                "idle_skipped_cycles=%llu fast_idle_calls=%llu full_idle_skips=%llu native_recompiled_calls=0 jit_calls=0",
++                std::chrono::duration<double>(now - m_auditStarted).count(), seconds,
++                static_cast<unsigned long long>(interpreted), interpreted / seconds,
++                static_cast<unsigned long long>(interpreted),
++                static_cast<unsigned long long>(delta(&AuditCounters::hle)), delta(&AuditCounters::hle) / seconds,
++                static_cast<unsigned long long>(delta(&AuditCounters::guestImportJumps)),
++                static_cast<unsigned long long>(delta(&AuditCounters::missingImports)),
++                static_cast<unsigned long long>(delta(&AuditCounters::idleSkippedCycles)),
++                static_cast<unsigned long long>(delta(&AuditCounters::fastIdleCalls)),
++                static_cast<unsigned long long>(delta(&AuditCounters::fullIdleSkips)));
++            log(LogLevel::Info, line);
++            m_auditLast = m_audit;
++            m_auditLastReport = now;
+         }
+ 
+         void runCycles(uint64_t cycles) noexcept
+@@ -1455,9 +1510,13 @@
+                 p.iopCycles += totalCycles - cyc0;
+                 p.samples += (m_sound.mixedUpTo() - mixed0) / SoundEngine::CyclesPerSample;
+                 iopProfileReport(totalCycles, &Impl::profileLog, this);
++                if (m_recompAuditEnabled)
++                    reportRecompAudit();
+                 return;
+             }
+             runCyclesImpl(cycles);
++            if (m_recompAuditEnabled)
++                reportRecompAudit();
+         }
+ 
+         void runCyclesImpl(uint64_t cycles) noexcept
+@@ -1476,7 +1535,14 @@
+                     {
+                         const uint64_t stop = std::min(target, m_idleUntil);
+                         if (stop > totalCycles)
++                        {
+                             ++m_idleSkipCount;
++                            if (m_recompAuditEnabled)
++                            {
++                                m_audit.idleSkippedCycles += stop - totalCycles;
++                                ++m_audit.fullIdleSkips;
++                            }
++                        }
+                         totalCycles = stop;
+                         if (totalCycles >= target)
+                             break;
+@@ -1504,7 +1570,13 @@
+                         }
+                         else
+                             m_idleValid = false;
+-                        totalCycles = std::max(totalCycles + 1u, std::min(target, horizon));
++                        const uint64_t idleTarget = std::max(totalCycles + 1u, std::min(target, horizon));
++                        if (m_recompAuditEnabled)
++                        {
++                            m_audit.idleSkippedCycles += idleTarget - totalCycles;
++                            ++m_audit.fullIdleSkips;
++                        }
++                        totalCycles = idleTarget;
+                         continue;
+                     }
+                     m_idleValid = false;
+@@ -1719,6 +1791,21 @@
+         bool servicingDmaInterrupts = false;
+         bool servicingGuestCallbacks = false;
+         bool m_profiling = false; // PS2X_IOP_PROF: inside a profiled runCycles (host-only, not IOP state)
++        // Counts actual runtime work, including RPCs/callbacks and repeated work after rollback.
++        // No fields below participate in forEachScalar/saveState/serialization/hash.
++        const bool m_recompAuditEnabled = [] {
++            const char *env = std::getenv("PS2X_RECOMP_AUDIT");
++            return env && env[0] == '1' && env[1] == '\0';
++        }();
++        struct AuditCounters
++        {
++            uint64_t interpreted = 0, hle = 0, guestImportJumps = 0, missingImports = 0;
++            uint64_t idleSkippedCycles = 0, fastIdleCalls = 0, fullIdleSkips = 0;
++        };
++        AuditCounters m_audit{}, m_auditLast{};
++        const std::chrono::steady_clock::time_point m_auditStarted = std::chrono::steady_clock::now();
++        std::chrono::steady_clock::time_point m_auditLastReport = m_auditStarted;
++        uint64_t m_auditLastPollCycle = 0;
+         uint32_t callDepth = 0u;
+         GuestCallback secrMcCommandHandler;
+         GuestCallback secrMcDevIdHandler;
+--- a/ps2xIOP/include/ps2x/iop/iop_profile.h
++++ b/ps2xIOP/include/ps2x/iop/iop_profile.h
+@@ -4,6 +4,13 @@
+ // relaxed load per runCycles otherwise). Counters are written by the thread that runs the IOP only.
+ //   PS2X_IOP_PROF=1          count + time (TSC) every IOP advance; a "[iop-prof]" line every 600 guest frames
+ //   PS2X_IOP_PROF_PCS=1      also a histogram of the interpreted PCs (top functions/loops in the report)
++//   PS2X_RECOMP_AUDIT=1      independent exact interpreter/HLE counters, about once per wall second.
++//     interpreted_calls counts only cpuCore.executeInstruction, including RPC/callback work;
++//     interpreted_model_cycles is identical because this runtime charges one cycle per instruction,
++//     not a hardware-accurate R3000 cycle count. HLE calls, guest import jumps and missing imports
++//     are separate; idle_skipped_cycles covers both sealed-idle and no-runnable-thread advances.
++//     Counts are host-only, do not rewind during rollback, and never enter save/hash state.
++//     Existing [iop-prof] instr includes HLE import steps and must not be used as this exact count.
+ 
+ #include <cstdint>
+ 

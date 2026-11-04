@@ -2,6 +2,7 @@
 #include "../runtime/tekken4_native_names.h"
 #include <cassert>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 using namespace tekken4_names;
@@ -35,6 +36,36 @@ int main()
     assert(selectSide(0x1f507c, kSelectNameObject + kSelectStride) == 1);
     assert(selectSide(0x1f507c, kSelectNameObject + 1) == -1);
     assert(selectSide(0x1f5078, kSelectNameObject) == -1);
+    assert(selectWidgetSide(0x27ef78, 0, 0x104) == 0);
+    assert(selectWidgetSide(0x27ef78, 1, 0x105) == 1);
+    assert(selectWidgetSide(0x27ef74, 0, 0x104) == -1);
+    assert(selectWidgetSide(0x27ef78, 0, 0x105) == -1);
+    assert(selectWidgetSide(0x27ef78, 2, 0x106) == -1);
+    std::array<float, 16> matrix{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -216, 5, -297, 1};
+    int cx = -1, cy = -1;
+    assert(selectWidgetCentre(matrix, cx, cy) && cx == 104 && cy == 219);
+    matrix[12] = 216;
+    assert(selectWidgetCentre(matrix, cx, cy) && cx == 536 && cy == 219);
+    const auto validMatrix = matrix;
+    // Unsupported transforms/coordinates must fall back, without changing output positions.
+    for (size_t index : {size_t{0}, size_t{1}, size_t{14}, size_t{15}})
+    {
+        matrix = validMatrix;
+        matrix[index] += 0.5f;
+        assert(!selectWidgetCentre(matrix, cx, cy) && cx == 536 && cy == 219);
+    }
+    matrix = validMatrix;
+    matrix[12] = 321;
+    assert(!selectWidgetCentre(matrix, cx, cy));
+    matrix = validMatrix;
+    matrix[13] = 225;
+    assert(!selectWidgetCentre(matrix, cx, cy));
+    matrix = validMatrix;
+    matrix[12] = std::numeric_limits<float>::infinity();
+    assert(!selectWidgetCentre(matrix, cx, cy));
+    matrix = validMatrix;
+    matrix[13] = std::numeric_limits<float>::quiet_NaN();
+    assert(!selectWidgetCentre(matrix, cx, cy));
     // A mirror's fighter/name texture id is irrelevant: caller and per-side object still distinguish sides.
     assert(host.names[static_cast<size_t>(selectSide(0x1f507c, kSelectNameObject))] == "Alice");
     assert(join.names[static_cast<size_t>(selectSide(0x1f507c, kSelectNameObject + kSelectStride))] == "Bob");
@@ -61,6 +92,7 @@ int main()
     assert(fit(ram.data(), "A").name.empty());
     write<uint32_t>(ram.data(), kFontDescriptor, metrics);
 
+    {
     // The real VS select uses PS2D node IDs and a different caller from the legacy 3D select.
     assert(selectNodeSide(0x27ef78, 0, 0x104) == 0);
     assert(selectNodeSide(0x27ef78, 1, 0x105) == 1);
@@ -95,6 +127,8 @@ int main()
     assert(!selectNodeAnchor(ram.data(), node, cx, cy, alpha));
     assert(!selectNodeAnchor(ram.data(), 0xfffffff0u, cx, cy, alpha));
 
+    }
+
     const uint32_t start = kQueue + 8;
     write<uint32_t>(ram.data(), kQueue, start);
     assert(enqueue(ram.data(), text, 66, 48, 128));
@@ -102,10 +136,10 @@ int main()
     assert(next == start + 18 && ram[start] == 9 && ram[start + 1] == 0);
     assert(ram[start + 2] == 66 && ram[start + 4] == 48);
     assert(ram[start + 6] == 0xff && ram[start + 7] == 0xff);
-    // Independent renderer contract: signed queue depth is shifted4 then truncated to Z24.
-    const auto depth = static_cast<int16_t>(ram[start + 6] | (ram[start + 7] << 8));
-    const uint32_t glyphZ = static_cast<uint32_t>(static_cast<int32_t>(depth)) * 16u;
-    assert((glyphZ & 0xffffffu) == 0xfffff0u); // same front layer as original HUD name
+    uint16_t depth = 0;
+    std::memcpy(&depth, ram.data() + start + 6, sizeof(depth));
+    const uint32_t glyphZ = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(depth)) * 16);
+    assert((glyphZ & 0x00ffffffu) == (0x0ffffff0u & 0x00ffffffu)); // original name Z, GS Z24
     assert(ram[start + 8] == 6 && ram[start + 9] == 7 && ram[start + 10] == 128);
     assert(std::strcmp(reinterpret_cast<const char *>(ram.data() + start + 11), "Alice") == 0);
     assert(ram[start + 17] == 0 && ram[next] == 0 && ram[next + 1] == 0);

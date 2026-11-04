@@ -30,8 +30,19 @@ class NativeNamesTests(unittest.TestCase):
                              (0x1f5308, 0x24f0d8), (0x1f1b5c, 0x24f0c0),
                              (0x27ef70, 0x236eb8), (0x27eef8, 0x236eb8)):
             self.assertEqual(word(call), (3 << 26) | (target >> 2), hex(call))
-        self.assertEqual(word(0x27ef10), 0x24100105)  # P2 label node, not portrait 0xCB
-        self.assertEqual(word(0x27ef14), 0x24020104)  # P1 label node, not portrait 0xC9
+        # Active select uses the preserved s3 side loop and separate name widget IDs.
+        self.assertEqual(word(0x27e9b0), 0x0000982d)  # s3=0
+        self.assertEqual(word(0x27ed90), 0x26640001)  # side+1 for the next iteration
+        self.assertEqual(word(0x27ef78), 0x8fb30014)  # s3 restored only after the name draw
+        self.assertEqual(word(0x27ef10), 0x24100105)  # P2 name widget
+        self.assertEqual(word(0x27ef14), 0x24020104)  # P1 name widget
+        # Original HUD names use Z=0x0ffffff0. The font queue must reproduce its low
+        # 24 bits after its signed halfword depth is multiplied by 16.
+        for load, finish in ((0x1f1b68, 0x1f1b84), (0x1f1bac, 0x1f1bc8)):
+            self.assertEqual(word(load), 0x3c080fff)  # lui t0,0x0fff
+            self.assertEqual(word(finish), 0x3508fff0)  # ori t0,t0,0xfff0
+        self.assertEqual(word(0x22c6f8), 0x00073c03)  # signed queue depth
+        self.assertEqual(word(0x1ec7c8), 0x00108100)  # font depth * 16
         descriptor = word(0x31f208)
         offset = descriptor - 0x180080 + 0x1080
         metrics = data[offset:offset + 256]

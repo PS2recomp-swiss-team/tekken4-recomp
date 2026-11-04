@@ -26,7 +26,7 @@ rem a unity batch whose dependency list never had that header: touch them so Nin
 if errorlevel 1 powershell -NoProfile -Command "(Get-Item -LiteralPath '%RT%\src\runner\tekken4_rollback_overrides.cpp').LastWriteTime = Get-Date"
 rem Header-only opt-in state discovery, match state and online result reporting (included by the rollback overrides),
 rem and native online names / rank badges (tekken4_hud_overrides.cpp; badge art by OpenRecomp-FGC tools\make_rank_badges.py).
-robocopy "%~dp0..\runtime" "%RT%\src\runner" tekken4_state_probe.h tekken4_online_result.h tekken4_match_state.h tekken4_rank_badges.h tekken4_native_names.h /NJH /NJS /NFL /NDL /NP
+robocopy "%~dp0..\runtime" "%RT%\src\runner" tekken4_state_probe.h tekken4_online_result.h tekken4_match_state.h tekken4_rank_badges.h tekken4_badge_draw.h tekken4_rank_cache.h tekken4_rank_label.h tekken4_native_names.h tekken4_rounds.h /NJH /NJS /NFL /NDL /NP
 if errorlevel 8 (echo copying the state probe and result headers failed & exit /b 1)
 rem Touch the including translation unit when either header is first staged or changed (including unity builds).
 if errorlevel 1 powershell -NoProfile -Command "(Get-Item -LiteralPath '%RT%\src\runner\tekken4_rollback_overrides.cpp').LastWriteTime = Get-Date"

@@ -2,8 +2,8 @@
 // SLUS-20328 v1.00. Host configuration and the game's font queue adapter; no game assets in this file.
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -127,6 +127,31 @@ namespace tekken4_names
         return nameObject == kSelectNameObject ? 0 : nameObject == kSelectNameObject + kSelectStride ? 1 : -1;
     }
 
+    inline int selectWidgetSide(uint32_t returnAddress, uint32_t side, uint32_t widgetId)
+    {
+        return returnAddress == 0x0027ef78u && side < 2 && widgetId == 0x104u + side
+                   ? static_cast<int>(side) : -1;
+    }
+
+    inline bool selectWidgetCentre(const std::array<float, 16> &matrix, int &cx, int &cy)
+    {
+        // Active VS select's identity-oriented UI plane: origin at (320,224), Y upwards.
+        // Other transforms/depths retain the game's draw rather than assume a projection.
+        for (float value : matrix)
+            if (!std::isfinite(value)) return false;
+        for (size_t i = 0; i < 12; ++i)
+            if (std::fabs(matrix[i] - ((i == 0 || i == 5 || i == 10) ? 1.0f : 0.0f)) > 0.0001f)
+                return false;
+        if (std::fabs(matrix[14] + 297.0f) > 0.0001f || std::fabs(matrix[15] - 1.0f) > 0.0001f)
+            return false;
+        const float x = 320.0f + matrix[12], y = 224.0f - matrix[13];
+        if (x < 0.0f || x > 640.0f || y < 0.0f || y > 448.0f)
+            return false;
+        cx = static_cast<int>(std::lround(x));
+        cy = static_cast<int>(std::lround(y));
+        return true;
+    }
+
     // Scene 7's PS2D labels are distinct from scene 6's 3D select-name path above.
     // FUN_0027e900 draws nodes 0x104/0x105 at 0x27ef70, while $s3 still holds the side.
     inline int selectNodeSide(uint32_t returnAddress, uint32_t callerSide, uint32_t nodeId)
@@ -223,8 +248,8 @@ namespace tekken4_names
         write<uint16_t>(ram, cursor, static_cast<uint16_t>(bytes / 2));
         write<int16_t>(ram, cursor + 2, static_cast<int16_t>(x));
         write<int16_t>(ram, cursor + 4, static_cast<int16_t>(y));
-        // The font renderer shifts this signed depth by four. -1 gives FFFFFFF0,
-        // matching the original HUD layer in the Z24 buffer; -16 would sit behind it.
+        // The font path sign-extends this depth and multiplies it by 16. -1 produces
+        // 0xfffffff0, matching the original HUD names' 0x0ffffff0 after GS Z24 truncation.
         write<uint16_t>(ram, cursor + 6, 0xffffu);
         ram[cursor + 8] = 6; // game proportional font, including lowercase
         ram[cursor + 9] = 7; // game's white palette

@@ -41,7 +41,7 @@ function Set-EnvList([string]$list) {
     foreach ($kv in ($list -split ';')) { if ($kv) { $k, $v = $kv -split '=', 2; Set-Item -Path "env:$k" -Value $v } }
 }
 function Clear-NetEnv {
-    Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_)' } | ForEach-Object { Remove-Item "env:$($_.Name)" }
+    Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_|PS3_AUDIO_MUTE$|PS3_WINDOW_BACKGROUND$|OPENRECOMP_HOME$|APPDATA$|LOCALAPPDATA$)' } | ForEach-Object { Remove-Item "env:$($_.Name)" }
 }
 function Write-TimingProcess($x) {
     if (-not $TimingDiag -or $x.p.HasExited) { return }
@@ -68,7 +68,7 @@ $sides = @(
 )
 . (Join-Path $PSScriptRoot "run_lock.ps1")
 if (-not $NoLock) { Enter-RunLock $root "net_pair $Name (host + join)" }
-$saved = @(Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_)' } | ForEach-Object { @{ n = $_.Name; v = $_.Value } })
+$saved = @(Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_|PS3_AUDIO_MUTE$|PS3_WINDOW_BACKGROUND$|OPENRECOMP_HOME$|APPDATA$|LOCALAPPDATA$)' } | ForEach-Object { @{ n = $_.Name; v = $_.Value } })
 $procs = @()
 $t0 = Get-Date
 try {
@@ -79,6 +79,15 @@ try {
         $env:TEKKEN4_SRC = $Src; $env:TEKKEN4_BUILD_DIR = $BuildDir
         $env:PS2X_GS_BACKEND = "gl"; $env:PS2X_GS_THREADS = "auto"
         $env:TEKKEN4_SOUND = "0"
+        $env:TEKKEN4_MOVIE_GAIN = "0"
+        $env:PS3_AUDIO_MUTE = "1"
+        $env:PS3_WINDOW_BACKGROUND = "1"
+        $env:TEKKEN4_NET_BIND = "127.0.0.1"
+        $sandbox = Join-Path $dir 'sandbox'
+        $env:OPENRECOMP_HOME = Join-Path $sandbox 'OpenRecomp'
+        $env:APPDATA = Join-Path $sandbox 'Roaming'
+        $env:LOCALAPPDATA = Join-Path $sandbox 'Local'
+        New-Item -ItemType Directory -Force $env:OPENRECOMP_HOME, $env:APPDATA, $env:LOCALAPPDATA | Out-Null
         Set-EnvList $Env
         Set-EnvList $s.extra
         if ($TimingDiag) { $env:TEKKEN4_NET_DIAG = "1" }
@@ -91,10 +100,13 @@ try {
         if ($Shots) { $env:TEKKEN4_NET_SHOTS = $Shots }
         if ($buildId -and -not $env:TEKKEN4_NET_BUILD) { $env:TEKKEN4_NET_BUILD = $buildId }
         @("started  " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), "side     $($s.side)", "rtt      $Rtt jitter $Jitter loss $Loss",
-          "exe      $exe") + @(Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_)' } | Sort-Object Name |
+          "exe      $exe") + @(Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_|PS3_AUDIO_MUTE$|PS3_WINDOW_BACKGROUND$|OPENRECOMP_HOME$|APPDATA$|LOCALAPPDATA$)' } | Sort-Object Name |
           ForEach-Object { "env      $($_.Name)=$($_.Value)" }) | Set-Content -Encoding utf8 (Join-Path $dir "params.txt")
-        $p = Start-Process -FilePath $exe -ArgumentList "`"$elf`"" -WorkingDirectory $dir `
+        $p = Start-Process -FilePath $exe -ArgumentList "`"$elf`"" -WorkingDirectory $dir -WindowStyle Hidden `
             -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -PassThru
+        $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+        "process pid=$($p.Id) priority=$($p.PriorityClass) isolated_home=$env:OPENRECOMP_HOME" |
+            Add-Content -Encoding utf8 (Join-Path $dir 'params.txt')
         $procs += @{ side = $s.side; p = $p; dir = $dir; titled = $false }
         Write-TimingProcess $procs[-1]
         Start-Sleep -Milliseconds 500

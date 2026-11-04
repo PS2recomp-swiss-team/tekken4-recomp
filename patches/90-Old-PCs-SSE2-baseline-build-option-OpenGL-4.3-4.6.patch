@@ -242,10 +242,12 @@ diff --git a/ps2xRuntime/src/lib/ps2_audio.cpp b/ps2xRuntime/src/lib/ps2_audio.c
 index 7abe27c..75480b4 100644
 --- a/ps2xRuntime/src/lib/ps2_audio.cpp
 +++ b/ps2xRuntime/src/lib/ps2_audio.cpp
-@@ -513,6 +513,14 @@ namespace
+@@ -632,8 +632,16 @@ namespace
          int16_t *out = static_cast<int16_t *>(buffer);
          deviceQueue().pull(out, frames);
          mixDeviceMovie(out, frames);
+         if (deviceWavEnabled())
+             deviceWavDump().push(out, frames);
 +        // TEKKEN4_AUDIO_MUTE=1: the device plays silence; everything before it (IOP, SPU2 mix, queue, movie copy) runs
 +        // as usual. Host output only (test runs next to a player on the same PC).
 +        static const bool mute = [] {

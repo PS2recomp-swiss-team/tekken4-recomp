@@ -1,0 +1,583 @@
+From: t5dr <t5dr@local>
+Subject: [PATCH] 96 Buffered frame trace, presentation-stage timing and truthful shared-image counters
+
+Opt-in host diagnostics only. No guest scheduling or simulation changes.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_perf_stats.h b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+--- a/ps2xRuntime/include/runtime/ps2_perf_stats.h
++++ b/ps2xRuntime/include/runtime/ps2_perf_stats.h
+@@ -31,6 +31,9 @@
+     }
+ 
+     bool enabled() noexcept;
++    bool frameTrace() noexcept;
++    // Sound-driver frame call from the game loop; host-only counts by scene.
++    void noteGameLogic(uint32_t scene) noexcept;
+ 
+     struct Counters
+     {
+@@ -85,12 +88,22 @@
+ 
+     // Starts the reporter thread (once) when PS2X_PERF_STATS is set.
+     void start(PS2Runtime &runtime);
++    // Join and flush the reporter while runtime is still alive.
++    void stop();
+ 
+     // Frame pacing ("[frames]" line per second when the stats are on): the window thread notes every present with the
+     // guest vsync tick it shows (interval between swaps; a tick shown twice = repeat, ticks never shown = skipped), the
+     // EE thread every VBlankStart it processes (interval between guest frames in host time).
+-    void notePresent(uint64_t shownTick) noexcept;
+-    void noteVblank(uint64_t hostWaitNs = 0) noexcept; // hostWaitNs: the scheduler's pacing-wait total so far
++    struct PresentWork
++    {
++        uint64_t uploadNs = 0, drawNs = 0, swapNs = 0, sharedWaitNs = 0, cycles = 0;
++        uint64_t sharedSequence = 0, sharedFresh = 0, sharedTick = 0, sharedRenderSequence = 0, requestedTick = 0;
++    };
++    void notePresent(uint64_t shownTick, PresentWork work = {}) noexcept;
++    // Legacy QPC probes are queued too: no file I/O on the presentation/EE threads.
++    void notePresentQpc(uint64_t tick, uint64_t vb, uint64_t latch, uint64_t swap, uint64_t frequency) noexcept;
++    void noteDisplayCopy(uint64_t tick, uint32_t fbp, double afterVblankMs) noexcept;
++    void noteVblank(uint64_t hostWaitNs = 0, uint64_t tick = 0) noexcept; // hostWaitNs: the scheduler's pacing-wait total so far
+ }
+ 
+ // Counts one event in g_counters.<name> when the stats are on (an expression, usable after a comma).
+diff --git a/ps2xRuntime/src/lib/ps2_perf_stats.cpp b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+--- a/ps2xRuntime/src/lib/ps2_perf_stats.cpp
++++ b/ps2xRuntime/src/lib/ps2_perf_stats.cpp
+@@ -5,6 +5,7 @@
+ #include "runtime/ps2_vu1_async.h"
+ 
+ #include <cstdio>
++#include <condition_variable>
+ #include <cstdlib>
+ #include <mutex>
+ #include <string>
+@@ -14,9 +15,24 @@
+ namespace ps2_perf_stats
+ {
+     Counters g_counters;
++    static std::atomic<uint64_t> g_logic[17]{};
++    void noteGameLogic(uint32_t scene) noexcept
++    {
++        if (frameTrace()) g_logic[scene < 16 ? scene : 16].fetch_add(1, std::memory_order_relaxed);
++    }
++
++    bool frameTrace() noexcept
++    {
++        static const bool on = [] { const char *v = std::getenv("PS2X_FRAME_TRACE"); return v && *v == '1'; }();
++        return on;
++    }
+ 
+     namespace
+     {
++        std::thread g_reporter;
++        std::atomic<bool> g_stop{false};
++        std::mutex g_reporterMutex;
++        std::condition_variable g_reporterCv;
+         int seconds()
+         {
+             static const int value = []
+@@ -24,7 +40,9 @@
+                 const char *env = std::getenv("PS2X_PERF_STATS");
+                 // PS2X_PERF_STATS=<seconds to report>; 1 (the natural "on") = until the program exits, not one line.
+                 const int n = env && *env ? std::atoi(env) : 0;
+-                return n == 1 ? 1000000 : n;
++                const char *probe = std::getenv("TEKKEN4_PRESENT_LOG");
++                const char *hashProbe = std::getenv("TEKKEN4_VBLANK_HASH");
++                return n == 1 || frameTrace() || (probe && *probe == '1') || (hashProbe && *hashProbe == '1') ? 1000000 : n;
+             }();
+             return value;
+         }
+@@ -38,24 +56,40 @@
+ 
+     namespace
+     {
++        struct HitchSnap
++        {
++            uint64_t eeGif = 0, pubWait = 0, drainWait = 0, worker = 0, texDec = 0, rtUp = 0, drains = 0, hostWait = 0;
++        };
++        struct FrameEvent
++        {
++            char kind = 0; // p/g: present/guest; q/c: legacy QPC/display-copy probe
++            uint64_t t = 0, tick = 0;
++            uint32_t intervalUs = 0;
++            HitchSnap then{}, now{};
++            PresentWork work{};
++            uint64_t vb = 0, latch = 0, swap = 0, frequency = 0;
++            uint32_t fbp = 0;
++            double afterVblankMs = 0;
++        };
++        constexpr size_t kFrameCapacity = 16384; // bounded; overflow is explicitly reported
+         struct FrameLog
+         {
+             std::mutex mutex;
+-            std::vector<uint32_t> presentUs, vblankUs; // intervals in microseconds
+-            uint64_t lastPresentNs = 0, lastVblankNs = 0, lastTick = 0;
++            std::vector<uint32_t> presentUs, vblankUs;
++            std::vector<FrameEvent> events;
++            uint64_t lastPresentNs = 0, lastVblankNs = 0, lastTick = 0, dropped = 0;
+             uint32_t repeats = 0, skipped = 0;
+             bool haveTick = false;
+         };
+         FrameLog g_frames;
+-
+-        // Hitch log (PS2X_PERF_HITCH_MS, default 20; 0 = off): a present / guest-vblank interval longer than that prints
+-        // one "[hitch]" line right away with what the other threads did since the previous event of the same kind
+-        // (deltas: EE time in GIF, GS publish / drain waits, GS worker busy, texture decodes, render-target uploads), so
+-        // a hitch can be matched to a stage load, texture burst or GS stall in stdout order.
+-        struct HitchSnap
+-        {
+-            uint64_t eeGif = 0, pubWait = 0, drainWait = 0, worker = 0, texDec = 0, rtUp = 0, drains = 0, hostWait = 0;
+-        };
++        void enqueue(const FrameEvent &event) // g_frames.mutex held; never allocate on a game thread
++        {
++            if (g_frames.events.size() < g_frames.events.capacity())
++                g_frames.events.push_back(event);
++            else
++                ++g_frames.dropped;
++        }
++
+         std::atomic<uint64_t> g_t0Ns{0};
+         double hitchMs()
+         {
+@@ -97,33 +131,22 @@
+         }
+     }
+ 
+-    void notePresent(uint64_t shownTick) noexcept
+-    {
+-        if (!enabled())
+-            return;
++    void notePresent(uint64_t shownTick, PresentWork work) noexcept
++    {
++        if (!enabled()) return;
+         const uint64_t t = nowNs();
+         const HitchSnap snap = takeHitchSnap();
+-        uint32_t hitchUs = 0;
+-        HitchSnap then;
+         std::lock_guard lock(g_frames.mutex);
+-        if (g_frames.lastPresentNs)
+-        {
+-            const auto us = static_cast<uint32_t>((t - g_frames.lastPresentNs) / 1000u);
++        const uint32_t us = g_frames.lastPresentNs ? static_cast<uint32_t>((t - g_frames.lastPresentNs) / 1000u) : 0u;
++        if (us && g_frames.presentUs.size() < g_frames.presentUs.capacity())
+             g_frames.presentUs.push_back(us);
+-            if (hitchMs() > 0.0 && us > hitchMs() * 1000.0)
+-            {
+-                hitchUs = us;
+-                then = g_presentSnap;
+-            }
+-        }
++        if (frameTrace() || (hitchMs() > 0.0 && us > hitchMs() * 1000.0))
++            enqueue(FrameEvent{'p', t, shownTick, us, g_presentSnap, snap, work});
+         g_presentSnap = snap;
+-        if (hitchUs)
+-            reportHitch("present", t, hitchUs, then, snap);
+         g_frames.lastPresentNs = t;
+         if (g_frames.haveTick)
+         {
+-            if (shownTick == g_frames.lastTick)
+-                ++g_frames.repeats;
++            if (shownTick == g_frames.lastTick) ++g_frames.repeats;
+             else if (shownTick > g_frames.lastTick + 1u)
+                 g_frames.skipped += static_cast<uint32_t>(shownTick - g_frames.lastTick - 1u);
+         }
+@@ -131,22 +154,44 @@
+         g_frames.haveTick = true;
+     }
+ 
+-    void noteVblank(uint64_t hostWaitNs) noexcept
+-    {
+-        if (!enabled())
+-            return;
++    void noteVblank(uint64_t hostWaitNs, uint64_t tick) noexcept
++    {
++        if (!enabled()) return;
+         const uint64_t t = nowNs();
+         const HitchSnap snap = takeHitchSnap(hostWaitNs);
+         std::lock_guard lock(g_frames.mutex);
+-        if (g_frames.lastVblankNs)
+-        {
+-            const auto us = static_cast<uint32_t>((t - g_frames.lastVblankNs) / 1000u);
++        const uint32_t us = g_frames.lastVblankNs ? static_cast<uint32_t>((t - g_frames.lastVblankNs) / 1000u) : 0u;
++        if (us && g_frames.vblankUs.size() < g_frames.vblankUs.capacity())
+             g_frames.vblankUs.push_back(us);
+-            if (hitchMs() > 0.0 && us > hitchMs() * 1000.0)
+-                reportHitch("guest", t, us, g_vblankSnap, snap);
+-        }
++        if (frameTrace() || (hitchMs() > 0.0 && us > hitchMs() * 1000.0))
++            enqueue(FrameEvent{'g', t, tick, us, g_vblankSnap, snap});
+         g_vblankSnap = snap;
+         g_frames.lastVblankNs = t;
++    }
++
++    void notePresentQpc(uint64_t tick, uint64_t vb, uint64_t latch, uint64_t swap, uint64_t frequency) noexcept
++    {
++        if (!enabled()) return;
++        FrameEvent event{}; event.kind = 'q'; event.tick = tick;
++        event.vb = vb; event.latch = latch; event.swap = swap; event.frequency = frequency;
++        std::lock_guard lock(g_frames.mutex);
++        enqueue(event);
++    }
++
++    void noteDisplayCopy(uint64_t tick, uint32_t fbp, double afterVblankMs) noexcept
++    {
++        if (!enabled()) return;
++        FrameEvent event{}; event.kind = 'c'; event.tick = tick;
++        event.fbp = fbp; event.afterVblankMs = afterVblankMs;
++        std::lock_guard lock(g_frames.mutex);
++        enqueue(event);
++    }
++
++    void stop()
++    {
++        g_stop.store(true, std::memory_order_release);
++        g_reporterCv.notify_all();
++        if (g_reporter.joinable()) g_reporter.join();
+     }
+ 
+     void start(PS2Runtime &runtime)
+@@ -159,7 +204,10 @@
+             ps2_rollback::g_hostProfile.on = true;
+         PS2Runtime *rt = &runtime;
+         g_t0Ns.store(nowNs(), std::memory_order_relaxed);
+-        std::thread([rt]()
++        g_frames.presentUs.reserve(kFrameCapacity);
++        g_frames.vblankUs.reserve(kFrameCapacity);
++        g_frames.events.reserve(kFrameCapacity);
++        g_reporter = std::thread([rt]()
+                     {
+             struct Snap
+             {
+@@ -178,10 +226,24 @@
+             const auto ms = [](uint64_t a, uint64_t b) { return static_cast<double>(b - a) / 1e6; };
+             Snap last = take();
+             uint64_t lastBy[kDrainKinds] = {};
+-            const uint64_t t0 = last.t;
++            uint64_t lastLogic[17] = {};
++            const uint64_t t0 = g_t0Ns.load(std::memory_order_relaxed);
++            std::vector<uint32_t> pres, vbl;
++            std::vector<FrameEvent> events;
++            pres.reserve(kFrameCapacity); vbl.reserve(kFrameCapacity); events.reserve(kFrameCapacity);
++            std::FILE *trace = frameTrace() ? std::fopen("frame_trace.csv", "w") : nullptr;
++            if (frameTrace() && !trace) std::fprintf(stderr, "[frame-trace] ERROR opening frame_trace.csv\n");
++            if (trace)
++            {
++                std::fprintf(trace, "# steady_clock nanoseconds; deltas overlap across threads, not an exclusive CPU breakdown\n");
++                std::fprintf(trace, "kind,t_ns,t_s,tick,requested_tick,interval_us,upload_ns,draw_ns,swap_ns,shared_wait_ns,present_cycles,shared_sequence,shared_fresh,shared_tick,shared_render_sequence,ee_gif_ns,gs_pubwait_ns,gs_drainwait_ns,gs_worker_ns,texdec,rtup,drains,hostwait_ns\n");
++            }
+             for (int s = 0; s < seconds(); ++s)
+             {
+-                std::this_thread::sleep_for(std::chrono::seconds(1));
++                {
++                    std::unique_lock lock(g_reporterMutex);
++                    g_reporterCv.wait_for(lock, std::chrono::seconds(1), [] { return g_stop.load(std::memory_order_acquire); });
++                }
+                 const Snap now = take();
+                 const double wall = ms(last.t, now.t);
+                 // EE busy = wall time minus the scheduler's host pacing waits (the game thread is idle there)
+@@ -198,6 +260,16 @@
+                             static_cast<unsigned long long>(now.rowDec - last.rowDec),
+                             static_cast<unsigned long long>(now.verHits - last.verHits),
+                             static_cast<unsigned long long>(now.rtUp - last.rtUp), ms(last.vu1, now.vu1), ms(last.vif1, now.vif1));
++                if (frameTrace())
++                    for (unsigned scene = 0; scene < 17; ++scene)
++                    {
++                        const uint64_t n = g_logic[scene].load(std::memory_order_relaxed);
++                        if (n != lastLogic[scene])
++                            std::printf("[logic] t=%.3f scene=%u frames=%llu wall_ms=%.3f\n",
++                                static_cast<double>(now.t - t0) / 1e9, scene,
++                                static_cast<unsigned long long>(n - lastLogic[scene]), wall);
++                        lastLogic[scene] = n;
++                    }
+                 std::string by;
+                 for (size_t k = 0; k < kDrainKinds; ++k)
+                 {
+@@ -224,16 +296,59 @@
+                     lastAsync = a;
+                 }
+                 {
+-                    std::vector<uint32_t> pres, vbl;
+                     uint32_t rep = 0, skip = 0;
++                    uint64_t dropped = 0;
+                     {
+                         std::lock_guard lock(g_frames.mutex);
++                        pres.clear(); vbl.clear(); events.clear();
+                         pres.swap(g_frames.presentUs);
++                        events.swap(g_frames.events);
++                        dropped = g_frames.dropped;
++                        g_frames.dropped = 0;
+                         vbl.swap(g_frames.vblankUs);
+                         rep = g_frames.repeats;
+                         skip = g_frames.skipped;
+                         g_frames.repeats = g_frames.skipped = 0;
+                     }
++                    for (const FrameEvent &e : events)
++                    {
++                        if (e.kind == 'q')
++                        {
++                            std::fprintf(stderr, "[present] tick=%llu vb=%llu latch=%llu swap=%llu qpc_freq=%llu\n",
++                                static_cast<unsigned long long>(e.tick), static_cast<unsigned long long>(e.vb),
++                                static_cast<unsigned long long>(e.latch), static_cast<unsigned long long>(e.swap),
++                                static_cast<unsigned long long>(e.frequency));
++                            continue;
++                        }
++                        if (e.kind == 'c')
++                        {
++                            std::fprintf(stderr, "[dispcopy] tick=%llu fbp=%x after_vblank_ms=%.2f\n",
++                                static_cast<unsigned long long>(e.tick), e.fbp, e.afterVblankMs);
++                            continue;
++                        }
++                        if (hitchMs() > 0.0 && e.intervalUs > hitchMs() * 1000.0)
++                            reportHitch(e.kind == 'p' ? "present" : "guest", e.t, e.intervalUs, e.then, e.now);
++                        if (trace)
++                            std::fprintf(trace, "%c,%llu,%.9f,%llu,%llu,%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
++                                e.kind, static_cast<unsigned long long>(e.t), static_cast<double>(e.t - t0) / 1e9,
++                                static_cast<unsigned long long>(e.tick), static_cast<unsigned long long>(e.work.requestedTick), e.intervalUs,
++                                static_cast<unsigned long long>(e.work.uploadNs), static_cast<unsigned long long>(e.work.drawNs),
++                                static_cast<unsigned long long>(e.work.swapNs), static_cast<unsigned long long>(e.work.sharedWaitNs),
++                                static_cast<unsigned long long>(e.work.cycles),
++                                static_cast<unsigned long long>(e.work.sharedSequence), static_cast<unsigned long long>(e.work.sharedFresh),
++                                static_cast<unsigned long long>(e.work.sharedTick), static_cast<unsigned long long>(e.work.sharedRenderSequence),
++                                static_cast<unsigned long long>(e.now.eeGif - e.then.eeGif),
++                                static_cast<unsigned long long>(e.now.pubWait - e.then.pubWait), static_cast<unsigned long long>(e.now.drainWait - e.then.drainWait),
++                                static_cast<unsigned long long>(e.now.worker - e.then.worker), static_cast<unsigned long long>(e.now.texDec - e.then.texDec),
++                                static_cast<unsigned long long>(e.now.rtUp - e.then.rtUp), static_cast<unsigned long long>(e.now.drains - e.then.drains),
++                                static_cast<unsigned long long>(e.now.hostWait - e.then.hostWait));
++                    }
++                    if (dropped)
++                    {
++                        std::fprintf(stderr, "[frame-trace] DROPPED events=%llu (trace incomplete)\n", static_cast<unsigned long long>(dropped));
++                        if (trace) std::fprintf(trace, "# DROPPED events=%llu\n", static_cast<unsigned long long>(dropped));
++                    }
++                    if (trace) std::fflush(trace);
+                     // intervals in 0.1 ms: p = presents (window swaps), g = guest vblanks; rep/skip = guest frames
+                     // shown twice / never shown (tools/perf_smooth.py)
+                     std::printf("[frames] t=%.1f rep=%u skip=%u p=%s g=%s\n", static_cast<double>(now.t - t0) / 1e9, rep,
+@@ -241,7 +356,9 @@
+                 }
+                 std::fflush(stdout);
+                 last = now;
+-            } })
+-            .detach();
++                if (g_stop.load(std::memory_order_acquire)) break;
++            }
++            if (trace) std::fclose(trace);
++        });
+     }
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+--- a/ps2xRuntime/src/lib/ps2_input_latency.cpp
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -2,6 +2,7 @@
+ // and does not include raylib). src/lib/*.cpp is an explicit CMake list; this
+ // file is #included from gs/gpu/gs_gl.cpp so it links without a CMake edit.
+ #include "runtime/ps2_input_latency.h"
++#include "runtime/ps2_perf_stats.h"
+ 
+ #include <atomic>
+ #include <cstdio>
+@@ -329,6 +330,9 @@
+         g_hwnd.store(reinterpret_cast<uintptr_t>(window), std::memory_order_release);
+         if (!legacy())
+             setTimerPeriod(true);
++        if (ps2_perf_stats::enabled())
++            std::fprintf(stderr, "[present-config] timeBeginPeriod_1ms=%s legacy=%d (request status, not wake precision)\n",
++                g_timerPeriod ? "success" : "inactive", legacy() ? 1 : 0);
+         if (!g_oldProc)
+         {
+             g_oldProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(wndProc)));
+@@ -450,8 +454,7 @@
+         const uint64_t vb = g_vbQpc[tick % kTickRing].load(std::memory_order_acquire);
+         const uint64_t now = qpc();
+         const double ms = vb && now > vb ? static_cast<double>(now - vb) * 1000.0 / static_cast<double>(qpcFreq()) : -1.0;
+-        std::fprintf(stderr, "[dispcopy] tick=%llu fbp=%x after_vblank_ms=%.2f\n", static_cast<unsigned long long>(tick),
+-                     destFbp, ms);
++        ps2_perf_stats::noteDisplayCopy(tick, destFbp, ms);
+     }
+ 
+     double msSinceVBlank(uint64_t tick)
+@@ -518,10 +521,8 @@
+         if (presentLog() && g_latched)
+         {
+             const uint64_t now = qpc();
+-            std::fprintf(stderr, "[present] tick=%llu vb=%llu latch=%llu swap=%llu\n",
+-                         static_cast<unsigned long long>(g_latchTick),
+-                         static_cast<unsigned long long>(g_vbQpc[g_latchTick % kTickRing].load(std::memory_order_acquire)),
+-                         static_cast<unsigned long long>(g_latchQpc), static_cast<unsigned long long>(now));
++            ps2_perf_stats::notePresentQpc(g_latchTick,
++                g_vbQpc[g_latchTick % kTickRing].load(std::memory_order_acquire), g_latchQpc, now, qpcFreq());
+         }
+         if (!enabled())
+         {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -19,6 +19,7 @@
+ #include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_rollback_cuts.h"
+ #include "runtime/ps2_perf_stats.h"
++#include "runtime/ps2_recomp_audit.h"
+ #include "ps2_host_overlay.h"
+ #if defined(PS2X_GS_GL)
+ #include "runtime/gs/gs_shared_present.h"
+@@ -385,7 +386,8 @@
+ }
+ 
+ // The guest vsync tick of the picture the last present latched (perf counters: repeated / skipped frames).
+-static uint64_t s_presentedTick = 0;
++static uint64_t s_presentedTick = 0, s_requestedTick = 0;
++static uint64_t s_sharedWaitNs = 0, s_sharedFrameSequence = 0, s_sharedFresh = 0, s_sharedTick = 0, s_sharedRenderSequence = 0; // presentation thread only; opt-in trace
+ // Tekken 4 port (PC graphics options, docs/GRAPHICS.md): how the presented picture is scaled to the window.
+ // TEKKEN4_WINDOW_FILTER=area (default: area average when the picture is larger than the window, i.e. supersampling at
+ // a high internal resolution; bilinear when it is smaller) | sharp (sharp bilinear when enlarging: crisp pixels, smooth
+@@ -443,6 +445,7 @@
+     static uint64_t s_lastRunaheadLatch = 0; // run-ahead latches on the game thread; copy each new picture
+ 
+     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
++    s_requestedTick = currentTick;
+     // A re-simulated frame (rollback) is never shown: keep the last live frame until the live frames go on.
+     const bool needsLatch = !s_hasLatchedInitialFrame ||
+                             (currentTick != s_lastPresentationTick &&
+@@ -476,15 +479,28 @@
+         bool have = GSSharedPresent::Acquire(frame);
+         if (needsLatch)
+         {
++            const uint64_t waitStart = ps2_perf_stats::frameTrace() ? ps2_perf_stats::nowNs() : 0;
+             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
+             while ((!have || frame.sequence <= s_sharedSequence) && std::chrono::steady_clock::now() < deadline)
+             {
+                 std::this_thread::yield();
+                 have = GSSharedPresent::Acquire(frame);
+             }
++            if (waitStart) s_sharedWaitNs = ps2_perf_stats::nowNs() - waitStart;
++        }
++        if (ps2_perf_stats::frameTrace() && have)
++        {
++            s_sharedFrameSequence = frame.sequence;
++            s_sharedFresh = frame.sequence > s_sharedSequence ? 1 : 0;
++            s_sharedTick = frame.vsyncTick;
++            s_sharedRenderSequence = frame.renderSequence;
+         }
+         if (have)
++        {
+             s_sharedSequence = std::max(s_sharedSequence, frame.sequence);
++            // Diagnostic tick belongs to the completed shared image, even after an acquire timeout.
++            s_presentedTick = frame.vsyncTick;
++        }
+         if (have && !frame.blank && frame.texture && frame.width && frame.height)
+         {
+             Texture2D shared{};
+@@ -929,6 +945,8 @@
+ 
+ bool PS2Runtime::initialize(const char *title)
+ {
++    if (ps2_recomp_audit::enabled())
++        std::fprintf(stderr, "[recomp-audit] capabilities ee=static-generated cop2_macro=static-generated vu=static-with-exact-fallback iop=interpreter-plus-native-HLE guest_jit=absent\n");
+     try
+     {
+         if (!m_memory.initialize())
+@@ -1425,6 +1443,7 @@
+                                        GuestBranchKind kind,
+                                        const char *debugName)
+ {
++    ps2_recomp_audit::noteEeMissing();
+     const MissingFunctionPolicy policy = missingFunctionPolicy();
+     const bool firstReport = !m_missingFunctionReported.exchange(true, std::memory_order_acq_rel);
+ 
+@@ -2598,6 +2617,7 @@
+ 
+     std::atomic<bool> gameThreadFinished{false};
+     ps2_perf_stats::start(*this);
++    struct PerfReporterGuard { ~PerfReporterGuard() { ps2_perf_stats::stop(); } } perfReporterGuard;
+ 
+     ps2_runahead::install(*this); // after the game overrides installed their boundary hooks
+     std::thread gameThread([&]()
+@@ -2702,7 +2722,20 @@
+         uint32_t presentWidth = FB_WIDTH;
+         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
+         Texture2D drawTex = frameTex;
++        const bool trace = ps2_perf_stats::frameTrace();
++        ps2_perf_stats::PresentWork work{};
++        const uint64_t cycleStart = trace ? ps2_perf_stats::threadCycles() : 0;
++        const uint64_t uploadStart = trace ? ps2_perf_stats::nowNs() : 0;
++        s_sharedWaitNs = s_sharedFrameSequence = s_sharedFresh = s_sharedTick = s_sharedRenderSequence = 0;
+         UploadFrame(frameTex, this, presentWidth, presentHeight, &drawTex);
++        const uint64_t drawStart = trace ? ps2_perf_stats::nowNs() : 0;
++        if (trace)
++        {
++            work.uploadNs = drawStart - uploadStart; work.sharedWaitNs = s_sharedWaitNs;
++            work.sharedSequence = s_sharedFrameSequence; work.sharedFresh = s_sharedFresh;
++            work.sharedTick = s_sharedTick; work.sharedRenderSequence = s_sharedRenderSequence;
++            work.requestedTick = s_requestedTick;
++        }
+         // Keys posted during the readback are dispatched before the swap, so the
+         // game thread can see them for the rest of this guest frame.
+         if (!ps2_input_latency::legacy())
+@@ -2769,11 +2802,18 @@
+         {
+             m_debugUiDrawCallback(*this, m_debugUiUserData);
+         }
+-        EndDrawing(); // polls input too
++        const uint64_t swapStart = trace ? ps2_perf_stats::nowNs() : 0;
++        EndDrawing(); // swaps and polls input too; swapNs is this entire scope, not scanout time
++        const uint64_t swapEnd = trace ? ps2_perf_stats::nowNs() : 0;
++        if (trace)
++        {
++            work.drawNs = swapStart - drawStart;
++            work.swapNs = swapEnd - swapStart;
++            work.cycles = ps2_perf_stats::threadCycles() - cycleStart;
++        }
+         padBackend().publishHostPads();
+         ps2_input_latency::onSwapReturned();
+-        ps2_perf_stats::notePresent(s_presentedTick);
+-        ps2_input_latency::onSwapReturned();
++        ps2_perf_stats::notePresent(s_presentedTick, work);
+     };
+ 
+     uint64_t tick = 0;
+@@ -2888,6 +2928,7 @@
+         gameThread.join();
+     }
+ 
++    ps2_perf_stats::stop();
+     if (m_debugUiInitialized && m_debugUiShutdownCallback)
+     {
+         m_debugUiShutdownCallback(*this, m_debugUiUserData);
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -2082,7 +2082,7 @@
+         }
+         ps2_input_latency::noteVBlank(m_vsyncTick + 1u);
+         ++m_vsyncTick;
+-        ps2_perf_stats::noteVblank(m_hostWaitNs);
++        ps2_perf_stats::noteVblank(m_hostWaitNs, m_vsyncTick);
+         ps2_input_latency::notifyTick();
+         m_vblankPending = static_cast<bool>(m_boundaryHook);
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+diff --git a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+--- a/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
++++ b/ps2xRuntime/src/lib/gs/gpu/gs_gl.cpp
+@@ -139,7 +139,21 @@
+     void RestoreHostContext()
+     {
+         if (s_hostDc && s_hostContext)
++        {
+             wglMakeCurrent(s_hostDc, s_hostContext);
++            // Report the actual context/monitor once, without changing driver or display settings.
++            using GetSwapInterval = int(WINAPI *)();
++            const auto getSwapInterval = reinterpret_cast<GetSwapInterval>(loadProc("wglGetSwapIntervalEXT"));
++            MONITORINFOEXA monitor{}; monitor.cbSize = sizeof(monitor);
++            DEVMODEA mode{}; mode.dmSize = sizeof(mode);
++            const HMONITOR handle = MonitorFromWindow(WindowFromDC(s_hostDc), MONITOR_DEFAULTTONEAREST);
++            const bool haveMode = GetMonitorInfoA(handle, reinterpret_cast<MONITORINFO *>(&monitor)) &&
++                EnumDisplaySettingsA(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode);
++            std::fprintf(stderr, "[present-config] wgl_swap_interval=%d monitor_hz=%lu monitor_size=%lux%lu (driver/compositor scanout not measured)\n",
++                getSwapInterval ? getSwapInterval() : -999,
++                haveMode ? mode.dmDisplayFrequency : 0ul,
++                haveMode ? mode.dmPelsWidth : 0ul, haveMode ? mode.dmPelsHeight : 0ul);
++        }
+     }
+ 
+     bool Active()

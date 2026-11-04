@@ -54,6 +54,16 @@ class OnlineCommandTests(unittest.TestCase):
         self.assertIn("-NoAutoVs", command)
         self.assertEqual(["-Join", "127.0.0.1"], command[-2:])
 
+    def test_rounds_are_explicit_and_identical_for_host_and_join(self):
+        self.ready()
+        self.assertNotIn("-Rounds", core.online_command({}, "host"))
+        for role in ("host", "join"):
+            command = core.online_command({}, role, "127.0.0.1", rounds=3)
+            self.assertEqual("3", command[command.index("-Rounds") + 1])
+        for rounds in (0, 6, True, "3", 3.5):
+            with self.subTest(rounds=rounds), self.assertRaises(ValueError):
+                core.online_command({}, "host", rounds=rounds)
+
     def test_invalid_role_port_and_peer_fail_before_play_checks(self):
         cases = (("lobby", "", 7400), ("host", "", 0), ("host", "", 65536),
                  ("host", "", "bad"), ("join", "host.invalid", 7400),
@@ -93,6 +103,7 @@ class BuildCommandTests(unittest.TestCase):
 class EnvironmentTests(unittest.TestCase):
     def test_offline_and_online_helper_start_without_inherited_net_test_state(self):
         inherited = {"TEKKEN4_NET": "host:7400", "TEKKEN4_NET_AUTO_VS": "1",
+                     "TEKKEN4_NET_ROUNDS": "5",
                      "TEKKEN4_NET_SIM": "old experiment", "TEKKEN4_RB_SELFTEST": "1",
                      "TEKKEN4_RAND_SEED": "42", "UNRELATED_SETTING": "keep"}
         settings = dict(core.DEFAULTS)

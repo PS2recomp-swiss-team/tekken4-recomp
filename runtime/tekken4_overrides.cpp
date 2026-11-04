@@ -6,6 +6,7 @@
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
 #include "runtime/ps2_audio.h"
+#include "runtime/ps2_perf_stats.h"
 #include "runtime/ps2_memory.h"
 #include "ps2x/iop/iop_host.h"
 #include "runtime/gs/gs_frontend.h"
@@ -886,6 +887,12 @@ namespace tekken4
             if (function == kSoundFrameCall)
                 captureGameThread();
 #endif
+            if (function == kSoundFrameCall && ps2_perf_stats::enabled())
+            {
+                uint32_t scene = 0;
+                std::memcpy(&scene, runtime->memory().getRDRAM() + 0x00357d38u, sizeof(scene));
+                ps2_perf_stats::noteGameLogic(scene);
+            }
             if (function == kSoundFrameCall && ++g_frames == g_nextFrameLog)
             {
                 const auto now = std::chrono::steady_clock::now();
@@ -956,6 +963,12 @@ namespace tekken4
         if (function == kSoundFrameCall)
             captureGameThread();
 #endif
+        if (function == kSoundFrameCall && ps2_perf_stats::enabled())
+        {
+            uint32_t scene = 0;
+            std::memcpy(&scene, runtime->memory().getRDRAM() + 0x00357d38u, sizeof(scene));
+            ps2_perf_stats::noteGameLogic(scene);
+        }
         if (function == kSoundFrameCall && ++g_frames == g_nextFrameLog)
         {
             const auto now = std::chrono::steady_clock::now();

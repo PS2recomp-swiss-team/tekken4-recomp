@@ -732,7 +732,7 @@ class GameRun:
                 "ok": not crashed, "log": LAST_RUN_LOG, "note": note}
 
 
-def online_command(s, role, peer="", port=7400):
+def online_command(s, role, peer="", port=7400, rounds=None):
     """Use the selected local build with the existing identity/UDP preflight."""
     if role not in ("host", "join"):
         raise ValueError("Choose Host or Join.")
@@ -742,6 +742,8 @@ def online_command(s, role, peer="", port=7400):
     port = int(port)
     if not 1 <= port <= 65535:
         raise ValueError("UDP port must be 1..65535.")
+    if rounds is not None and (isinstance(rounds, bool) or not isinstance(rounds, int) or not 1 <= rounds <= 5):
+        raise ValueError("Rounds to win must be 1..5.")
     if role == "join":
         try:
             peer = str(ipaddress.IPv4Address(peer.strip()))
@@ -762,15 +764,17 @@ def online_command(s, role, peer="", port=7400):
            "-Src", os.path.dirname(out_dir), "-BuildDir", os.path.basename(build_dir), "-Delay", "auto", "-Sound", "1"]
     if not s.get("auto_vs", True):
         cmd.append("-NoAutoVs")    # both PCs must agree: the game refuses a peer with the other setting
+    if rounds is not None:
+        cmd += ["-Rounds", str(rounds)]
     return cmd + (["-Host"] if role == "host" else ["-Join", peer])
 
 
 class OnlineRun(GameRun):
     """One cold online process, including the existing preflight; no lobby."""
 
-    def __init__(self, s, role, peer="", port=7400):
+    def __init__(self, s, role, peer="", port=7400, rounds=None):
         super().__init__(s)
-        self.command = online_command(s, role, peer, port)
+        self.command = online_command(s, role, peer, port, rounds)
 
     def start(self):
         os.makedirs(LAUNCHER_LOG_DIR, exist_ok=True)

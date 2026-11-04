@@ -75,6 +75,17 @@ class ArgumentsTests(unittest.TestCase):
                 env = net_play.player_environment(net_play.parser().parse_args(flags), inherited)
                 self.assertEqual(env["TEKKEN4_NET_AUTO_VS"], expected)
 
+    def test_rounds_forwarding_clears_stale_rule_and_preserves_explicit_rule(self):
+        for role in (["-Host"], ["-Join", "127.0.0.1"]):
+            default = net_play.player_environment(net_play.parser().parse_args(role), {"TEKKEN4_NET_ROUNDS": "5"})
+            self.assertNotIn("TEKKEN4_NET_ROUNDS", default)
+            for rounds in range(1, 6):
+                explicit = net_play.player_environment(net_play.parser().parse_args(role + ["-Rounds", str(rounds)]), {"TEKKEN4_NET_ROUNDS": "5"})
+                self.assertEqual(explicit["TEKKEN4_NET_ROUNDS"], str(rounds))
+        for rounds in ("0", "6", "three"):
+            with self.subTest(rounds=rounds), patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+                net_play.parser().parse_args(["-Host", "-Rounds", rounds])
+
     def test_inherited_profile_and_no_diagnostics(self):
         a = net_play.parser().parse_args(["-Join", "127.0.0.1", "-UseInheritedProfile", "-NoDiagnostics", "-Sim", "20"])
         env = net_play.player_environment(a, {"TEKKEN4_RB_SELFTEST": "1"})

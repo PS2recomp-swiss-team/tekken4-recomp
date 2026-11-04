@@ -1,3 +1,21 @@
+## 2026-11-04: integrated TEST+FIX, native coverage verified; pacing acceptance blocked
+
+The known VU1 indirect-target handover is covered by build-time inference from the player's micro image.
+Five synthetic tests, 32,242 valid fuzz comparisons and >=1.02 million real VU oracle checks passed;
+4,758 stopped random oracle cases remain excluded. Original/current 6500-frame full hashes and216 NETHASH
+samples agree. One local rollback pair reached4800 both sides,162/161rollbacks,0hash mismatches/NETDESYNC.
+The candidate81d558b686ecf118 was rebuilt and staged into LocalTest; no commit/push.
+
+The local owner sound starter incorrectly inherited background/BelowNormal test flags; its native game now
+requests normal priority and normal window focus, while automated runs/build tools stay BelowNormal.
+No normal-game FPS improvement is established: the concurrent full-hash work-cost comparison shows no clear
+improvement, and Computer Use rejected PerfLaunch and START_T4 app access. The16.7ms/zero>20ms-per-minute
+acceptance and visible menu-lag diagnosis remain OPEN. IOP still interprets the physical sound-driver code;
+this is not an interpreter-free whole executable. Movie A/V work is unchanged and remains separate.
+
+Full evidence, all failed/limited runs and pending work: [PERF_STUTTER_AUDIT.md](PERF_STUTTER_AUDIT.md),
+local `logs/stutter/RUNS.md`. Proposed commit: `Expand VU indirect recompilation coverage and add runtime pacing audits`.
+
 # Status
 
 2026-11-04 (`t4-ranked`, native names, uncommitted): replaced Plates v2 panels with literal game-font queue names

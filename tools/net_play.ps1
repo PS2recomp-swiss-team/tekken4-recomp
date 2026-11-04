@@ -4,7 +4,7 @@ param([Alias("Host")][switch]$AsHost, [string]$Join = "", [ValidateRange(1,65535
       [string]$Src = $env:TEKKEN4_SRC, [string]$BuildDir = $env:TEKKEN4_BUILD_DIR,
       [Alias("IsoPath")][string]$Iso = $env:TEKKEN4_ISO, [switch]$NoDiagnostics,
       [switch]$SkipPreflight, [ValidateRange(5,600)][int]$PreflightTimeoutSeconds = 90,
-      [switch]$UseInheritedProfile, [switch]$NoAutoVs)
+      [switch]$UseInheritedProfile, [switch]$NoAutoVs, [ValidateRange(1,5)][Nullable[int]]$Rounds = $null)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'player_python.ps1')
 Invoke-PlayerPython 'net_play.py' $PSBoundParameters

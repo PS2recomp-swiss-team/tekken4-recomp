@@ -22,6 +22,7 @@ def parser():
     option(ap, "Port", type=integer_range(1, 65535), default=7400)
     option(ap, "Pad", type=int, default=0)
     option(ap, "Sound", type=int, default=1)
+    option(ap, "Rounds", type=integer_range(1, 5), default=None)
     option(ap, "PreflightTimeoutSeconds", type=integer_range(5, 600), default=90)
     for name in ("NoDiagnostics", "SkipPreflight", "UseInheritedProfile", "NoAutoVs"):
         option(ap, name, action="store_true")
@@ -37,7 +38,7 @@ def player_environment(a, inherited):
         env.update(TEKKEN4_RB_AUDIO_TIMELINE="0", TEKKEN4_NET_MAXPRED="8", TEKKEN4_NET_AUTO_VS="1")
         if env.get("TEKKEN4_NET_COALESCE") != "0":
             env["TEKKEN4_NET_COALESCE"] = "1"
-        clear = {"TEKKEN4_NET_" + name for name in "SIM SEED END SHOTS DESYNC_DUMP RBSTART EARLY_MS LOCKDELAY HASH_EVERY AUTO_VS_END RESULT".split()}
+        clear = {"TEKKEN4_NET_" + name for name in "SIM SEED END SHOTS DESYNC_DUMP RBSTART EARLY_MS LOCKDELAY HASH_EVERY AUTO_VS_END RESULT ROUNDS".split()}
         clear.add("TEKKEN4_RAND_SEED")
         for name in list(env):
             if name in clear or (name.startswith("TEKKEN4_RB_") and name != "TEKKEN4_RB_AUDIO_TIMELINE"):
@@ -50,6 +51,8 @@ def player_environment(a, inherited):
         env["TEKKEN4_NET_DIAG"] = "1"
     env.update(TEKKEN4_NET=f"host:{a.Port}" if a.AsHost else f"join:{a.Join}:{a.Port}",
                TEKKEN4_NET_DELAY=a.Delay, TEKKEN4_NET_PAD=str(a.Pad), TEKKEN4_SOUND=str(a.Sound))
+    if a.Rounds is not None:
+        env["TEKKEN4_NET_ROUNDS"] = str(a.Rounds)
     if a.Sim:
         env["TEKKEN4_NET_SIM"] = a.Sim
     if not env.get("PS2X_GS_BACKEND"):
