@@ -14,8 +14,10 @@
 //                                               the working directory at those seconds after start
 //   TEKKEN4_HUD_WINDOW  <w>x<h>                 test hook: the window's size (pictures at 1280x896 etc.)
 //
-// Where: VS character select (scene 7, game type 3 VS Battle -- t4autovs's scene record) under each side's preview
-// (P1 left, P2 right), and in the fight (scene 4 with a round running) under each life bar's fighter name.
+// Where (owner 2026-11-04: "instead of the CHARACTER name use the PLAYER's name, the rank badge LEFT of the name"):
+// over the game's fighter name -- at VS character select (scene 7, game type 3 VS Battle, t4autovs's scene record)
+// under each side's preview, in the fight (scene 4 with a round running) under each life bar. [badge][name] on both
+// sides (P2 right-aligned like the game's P2 name). Plates off: the game's own fighter names show.
 #include "game_overrides.h"
 #include "ps2_host_overlay.h"
 #include "ps2_log.h"
@@ -257,68 +259,42 @@ namespace tekken4_hud
         }
     }
 
-    // A side's plate: "P1" / "P2" tag, the name, the badge. `right` = aligned to the right edge (P2).
-    void fightPlate(int side, float edgeX, float y, float h, bool right)
+    // The player's name where the game prints the fighter's name, the rank badge directly LEFT of the name (owner,
+    // 2026-11-04). `cover` = the box over the game's own name text (frame pixels): a dark panel hides it, the badge and
+    // the name sit on it -- left-aligned for P1 (x = cover.x + pad), right-aligned for P2 (the game's P2 name is
+    // right-aligned), centred at the select screen. Both orders are [badge][name]: the badge is always left.
+    enum class Align { Left, Right, Centre };
+    void nameplate(int side, Rectangle cover, float nameSize, Align align)
     {
         const Side &s = g.side[side];
-        if (s.name.empty() && s.tier < 0)
+        if (s.name.empty())
             return;
-        const float pad = h * 0.18f;
-        const float badgeW = s.tier >= 0 ? h * 2.0f : 0.0f;
-        const float nameSize = h * 0.62f, tagSize = h * 0.5f;
-        const std::string tag = side == 0 ? "P1" : "P2";
-        const float rankSize = h * 0.48f;
-        const std::string rank = s.tier >= 0 ? tekken4_rank_badges::kBadges[s.tier].name : "";
-        const float tagW = textWidth(tag, tagSize), nameW = textWidth(s.name, nameSize);
-        const float rankW = rank.empty() ? 0.0f : textWidth(rank, rankSize);
-        const float w = pad + tagW + pad + nameW + (badgeW > 0 ? pad + badgeW + rankW + pad : 0.0f) + pad;
-        const float x = right ? edgeX - w : edgeX;
-        DrawRectangleRounded(Rectangle{x, y, w, h}, 0.35f, 8, Color{0, 0, 0, 150});
-        const Color tagCol = side == 0 ? Color{235, 70, 60, 255} : Color{70, 130, 245, 255};
-        // P1: tag, name, badge, rank (left to right); P2 mirrors it: rank, badge, name, tag.
-        float cur = x + pad;
-        auto put = [&](int what) {
-            if (what == 0)
-            {
-                text(tag, cur, y + h * 0.5f, tagSize, tagCol, BLACK, false);
-                cur += tagW + pad;
-            }
-            else if (what == 1)
-            {
-                text(s.name, cur, y + h * 0.5f, nameSize, WHITE, BLACK, false);
-                cur += nameW + pad;
-            }
-            else if (what == 2 && badgeW > 0)
-            {
-                badge(s.tier, Rectangle{cur, y - h * 0.05f, badgeW * 1.05f, h * 1.05f});
-                cur += badgeW + pad;
-            }
-            else if (what == 3 && rankW > 0)
-            {
-                text(rank, cur, y + h * 0.5f, rankSize, rgb(tekken4_rank_badges::kBadges[s.tier].light), BLACK, false);
-                cur += rankW + pad;
-            }
-        };
-        if (!right)
-            put(0), put(1), put(2), put(3);
-        else
-            put(3), put(2), put(1), put(0);
-    }
-
-    // At the select screen: under the side's preview, centred on cx -- tag + name, the badge below.
-    void selectPlate(int side, float cx, float y, float unit)
-    {
-        const Side &s = g.side[side];
-        if (s.name.empty() && s.tier < 0)
-            return;
-        const float nameSize = unit * 0.55f;
-        const std::string line = std::string(side == 0 ? "P1 " : "P2 ") + s.name;
-        const float w = std::max(textWidth(line, nameSize) + unit * 0.5f, s.tier >= 0 ? unit * 3.0f : 0.0f);
-        const float h = unit * (s.tier >= 0 ? 2.45f : 0.95f);
-        DrawRectangleRounded(Rectangle{cx - w * 0.5f, y, w, h}, 0.25f, 8, Color{0, 0, 0, 150});
-        text(line, cx, y + unit * 0.48f, nameSize, WHITE, BLACK, true);
-        if (s.tier >= 0)
-            badge(s.tier, Rectangle{cx - unit * 1.35f, y + unit * 0.95f, unit * 2.7f, unit * 1.35f});
+        const float h = cover.height;
+        const float pad = h * 0.16f;
+        const float badgeH = h * 0.92f, badgeW = s.tier >= 0 ? badgeH * 2.0f : 0.0f;
+        const float nameW = textWidth(s.name, nameSize);
+        const float content = (badgeW > 0 ? badgeW + pad : 0.0f) + nameW;
+        // the panel covers the game's name and grows with a long player name
+        const float panelW = std::max(cover.width, content + 2 * pad);
+        Rectangle panel{cover.x, cover.y, panelW, h};
+        if (align == Align::Right)
+            panel.x = cover.x + cover.width - panelW;
+        else if (align == Align::Centre)
+            panel.x = cover.x + (cover.width - panelW) * 0.5f;
+        DrawRectangleRounded(panel, 0.3f, 8, Color{8, 10, 16, 225});
+        DrawRectangleRoundedLinesEx(panel, 0.3f, 8, std::max(1.0f, h * 0.04f),
+                                    side == 0 ? Color{235, 70, 60, 160} : Color{70, 130, 245, 160});
+        float x = panel.x + pad;
+        if (align == Align::Right)
+            x = panel.x + panel.width - pad - content;
+        else if (align == Align::Centre)
+            x = panel.x + (panel.width - content) * 0.5f;
+        if (badgeW > 0)
+        {
+            badge(s.tier, Rectangle{x, cover.y + (h - badgeH) * 0.5f, badgeW, badgeH});
+            x += badgeW + pad;
+        }
+        text(s.name, x, cover.y + h * 0.5f, nameSize, WHITE, BLACK, false);
     }
 
     void maybeShot()
@@ -361,9 +337,10 @@ namespace tekken4_hud
             const int32_t type = static_cast<int32_t>(rd32(rdram, kGameType));
             if (type == kTypeVs && scene == kSceneSelect)
             {
-                const float unit = f.h * 0.06f;
-                selectPlate(0, f.x + f.w * 0.165f, f.y + f.h * 0.545f, unit);
-                selectPlate(1, f.x + f.w * 0.835f, f.y + f.h * 0.545f, unit);
+                // over the fighter's name under each side's preview (VS select: centred at 16.5 % / 83.5 %)
+                const float w = f.w * 0.25f, h = f.h * 0.064f, y = f.y + f.h * 0.458f, size = f.h * 0.04f;
+                nameplate(0, Rectangle{f.x + f.w * 0.165f - w * 0.5f, y, w, h}, size, Align::Centre);
+                nameplate(1, Rectangle{f.x + f.w * 0.835f - w * 0.5f, y, w, h}, size, Align::Centre);
             }
             else if (type == kTypeVs && scene == kSceneFight)
             {
@@ -382,9 +359,11 @@ namespace tekken4_hud
                     }
                 if (running)
                 {
-                    const float h = f.h * 0.052f;
-                    fightPlate(0, f.x + f.w * 0.04f, f.y + f.h * 0.155f, h, false);
-                    fightPlate(1, f.x + f.w * 0.96f, f.y + f.h * 0.155f, h, true);
+                    // over the fighter's name under each life bar: P1 from 5.2 % (left-aligned), P2 up to 94.8 %
+                    // (right-aligned), the round markers (from 35 % / to 65 %) stay visible
+                    const float w = f.w * 0.235f, h = f.h * 0.05f, y = f.y + f.h * 0.104f, size = f.h * 0.034f;
+                    nameplate(0, Rectangle{f.x + f.w * 0.052f, y, w, h}, size, Align::Left);
+                    nameplate(1, Rectangle{f.x + f.w * 0.948f - w, y, w, h}, size, Align::Right);
                 }
             }
         }

@@ -7,12 +7,15 @@ match-found sides). This page is the game's part: each player's **name and rank 
 
 ## What the players see
 
-- VS character select (scene 7, VS Battle -- the online games boot straight there, t4-autovs): under each side's
-  preview a plate "P1 Alice" / "P2 Bob" with the rank badge below it.
-- The fight (scene 4 with a round running): under each life bar's fighter name a plate -- P1 left: `P1 name [badge]`,
-  P2 right, mirrored: `[badge] name P2`.
-- P1 is the host's side on both PCs, so both PCs show the same names on the same sides (each player sees where they
-  really are). A guest has no badge. Offline (no names handed in) nothing is drawn.
+Owner (2026-11-04): "instead of the CHARACTER name use the PLAYER's name, and the rank (badge) LEFT of the name".
+
+- Where the game prints the fighter's name -- under each side's preview at VS character select (scene 7, VS Battle;
+  the online games boot straight there, t4-autovs) and under each life bar in the fight (scene 4 with a round running)
+  -- a dark panel covers it and shows `[badge] Player name`. P1 left-aligned, P2 right-aligned like the game's P2 name;
+  the badge is directly left of the name on both sides, the panel grows for a long name.
+- P1 is the host's side on both PCs, so both PCs show the same names on the same sides.
+- Ranked and casual look the same: an account shows its T4 rank badge (casual matches too: the account has a rank),
+  a guest shows the name only. Offline, or with the plates off, the game's own fighter names show.
 
 ## How
 
