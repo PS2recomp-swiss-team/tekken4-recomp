@@ -159,11 +159,11 @@ namespace tekken4_hud
         if (!g.fontTried)
         {
             g.fontTried = true;
-            const char *windir = std::getenv("WINDIR");
-            for (const std::string path : {std::string(windir ? windir : "C:\\Windows") + "\\Fonts\\arialbd.ttf",
-                                           std::string(windir ? windir : "C:\\Windows") + "\\Fonts\\segoeuib.ttf"})
+            const char *windir = std::getenv("WINDIR"); // the Windows folder (its Fonts); none -> raylib's own font
+            const std::string fonts = std::string(windir ? windir : "") + "/Fonts/";
+            for (const std::string path : {fonts + "arialbd.ttf", fonts + "segoeuib.ttf"})
             {
-                if (!FileExists(path.c_str()))
+                if (!windir || !*windir || !FileExists(path.c_str()))
                     continue;
                 Font f = LoadFontEx(path.c_str(), 64, nullptr, 0);
                 if (f.texture.id != 0)
