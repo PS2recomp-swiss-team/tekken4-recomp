@@ -267,12 +267,15 @@ namespace tekken4_hud
         const float badgeW = s.tier >= 0 ? h * 2.0f : 0.0f;
         const float nameSize = h * 0.62f, tagSize = h * 0.5f;
         const std::string tag = side == 0 ? "P1" : "P2";
+        const float rankSize = h * 0.48f;
+        const std::string rank = s.tier >= 0 ? tekken4_rank_badges::kBadges[s.tier].name : "";
         const float tagW = textWidth(tag, tagSize), nameW = textWidth(s.name, nameSize);
-        const float w = pad + tagW + pad + nameW + (badgeW > 0 ? pad + badgeW : 0.0f) + pad;
+        const float rankW = rank.empty() ? 0.0f : textWidth(rank, rankSize);
+        const float w = pad + tagW + pad + nameW + (badgeW > 0 ? pad + badgeW + rankW + pad : 0.0f) + pad;
         const float x = right ? edgeX - w : edgeX;
         DrawRectangleRounded(Rectangle{x, y, w, h}, 0.35f, 8, Color{0, 0, 0, 150});
         const Color tagCol = side == 0 ? Color{235, 70, 60, 255} : Color{70, 130, 245, 255};
-        // P1: tag, name, badge (left to right); P2 mirrors it: badge, name, tag.
+        // P1: tag, name, badge, rank (left to right); P2 mirrors it: rank, badge, name, tag.
         float cur = x + pad;
         auto put = [&](int what) {
             if (what == 0)
@@ -285,16 +288,21 @@ namespace tekken4_hud
                 text(s.name, cur, y + h * 0.5f, nameSize, WHITE, BLACK, false);
                 cur += nameW + pad;
             }
-            else if (badgeW > 0)
+            else if (what == 2 && badgeW > 0)
             {
                 badge(s.tier, Rectangle{cur, y - h * 0.05f, badgeW * 1.05f, h * 1.05f});
                 cur += badgeW + pad;
             }
+            else if (what == 3 && rankW > 0)
+            {
+                text(rank, cur, y + h * 0.5f, rankSize, rgb(tekken4_rank_badges::kBadges[s.tier].light), BLACK, false);
+                cur += rankW + pad;
+            }
         };
         if (!right)
-            put(0), put(1), put(2);
+            put(0), put(1), put(2), put(3);
         else
-            put(2), put(1), put(0);
+            put(3), put(2), put(1), put(0);
     }
 
     // At the select screen: under the side's preview, centred on cx -- tag + name, the badge below.
