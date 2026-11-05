@@ -70,6 +70,11 @@
 //                          and both PCs' real pads stay neutral. Test scripts only apply after the hand-over.
 // TEKKEN4_NET_AUTO_VS_END  bound in logical frames (default 3000, 1..3600): no VS select by then = the players take
 //                          over with their pads. Both PCs must use the same switch and bound (checked at HELLO).
+// TEKKEN4_NET_MOVIE_GUARD  default on (0 = off, only to reproduce the movie-start desync): rollback runs only in the
+//                          online VS flow (scene 7 VS select / scene 4 VS fight with game type 3); in any other scene (title,
+//                          MODE SELECT, attract, story, movies, ...) and while the scene manager has another scene
+//                          requested, the boundary runs as lockstep (every input confirmed, no prediction) plus 8 frames
+//                          after it, so no re-simulation can start a movie (docs/MOVIE_ROLLBACK_T4.md).
 // TEKKEN4_NET_ROUNDS      1..5 round wins per match (ranked: 3); unset retains the game's Round option. Included
 //                          in HELLO; applied at the native match-init setter on every guest call, including replay.
 // TEKKEN4_NET_CARD         "session" (default): the memory card is mc0/mc1 in the working directory (a new run dir
@@ -1314,6 +1319,9 @@ namespace tekken4_rollback
         double headroomWaitMs = 0;
         // Automatic VS (docs/DIRECTFIGHT_T4.md "Online boot: straight to VS select"): the host's pad walks the menus
         // from the game's own scene/menu state until VS character select shows; lockstep until then.
+        bool movieGuard = true;
+        uint64_t guardFrom = 0, guardUntil = 0, guardWindows = 0, guardFrames = 0, guardLastLogged = ~0ull;
+        uint32_t guardScene = ~0u, guardType = ~0u, guardReq = ~0u;
         bool sessionCard = true;             // memory card in the run dir (TEKKEN4_NET_CARD=shared: the ELF folder's)
         bool autoVs = false, autoVsReleased = false;
         uint64_t autoVsEnd = 3000;           // bound: no select by then = players take over
@@ -1691,6 +1699,55 @@ namespace tekken4_rollback
     {
         // a press must be visible in the state before the next decision: hold + the input delay + a few frames
         return std::max<uint64_t>(24u, static_cast<uint64_t>(std::max(g_np.lockDelay, g_np.delay)) + kAvHold + 12u);
+    }
+
+    constexpr uint32_t kAvSceneRequested = 0x00357d3cu, kAvSceneFight = 4u, kAvSceneNone = 14u;
+    constexpr uint64_t kGuardHold = 8u;
+
+    // The movie guard (docs/MOVIE_ROLLBACK_T4.md): a re-simulation that starts a movie (or any host-side stream: title
+    // -> attract, Story prologue, ...) diverges from the live run, so rollback is only used where the online flow
+    // lives (VS select, VS fight). Anywhere else the boundary is lockstep. Live boundaries only; the state read is
+    // the live state of that boundary (a rollback can still correct it: the window then just ends a few frames later).
+    bool avOnlineFlowScene(uint32_t scene, uint32_t type)
+    {
+        return type == kAvGameTypeVs && (scene == kAvSceneSelect || scene == kAvSceneFight);
+    }
+
+    void npMovieGuard(uint64_t f)
+    {
+        if (!g_np.movieGuard || g_np.resim || !g_np.started || g_np.failed)
+            return;
+        const uint32_t scene = avRead(kAvScene), type = avRead(kAvGameType), req = avRead(kAvSceneRequested);
+        const bool flow = avOnlineFlowScene(scene, type) &&
+                          (req == kAvSceneNone || req == kAvSceneSelect || req == kAvSceneFight || req == scene);
+        if (scene != g_np.guardScene || type != g_np.guardType || req != g_np.guardReq)
+        {
+            g_np.guardScene = scene;
+            g_np.guardType = type;
+            g_np.guardReq = req;
+            if (g_np.guardLastLogged != f)
+            {
+                g_np.guardLastLogged = f;
+                std::fprintf(g_log, "NETSCENE f=%" PRIu64 " scene=%u type=%u requested=%u flow=%d phase=%u\n", f, scene, type,
+                             req, flow ? 1 : 0, avRead(kAvScene + 12u));
+                std::fflush(g_log);
+            }
+        }
+        if (flow)
+            return;
+        if (g_np.guardUntil <= f)
+        {
+            g_np.guardFrom = f;
+            ++g_np.guardWindows;
+            std::fprintf(g_log, "NETGUARD lockstep from f=%" PRIu64 " (scene=%u type=%u requested=%u)\n", f, scene, type, req);
+            std::fflush(g_log);
+        }
+        g_np.guardUntil = std::max(g_np.guardUntil, f + kGuardHold + 1u);
+    }
+
+    bool npLockstepAt(uint64_t f)
+    {
+        return f < g_np.rbStart || (f >= g_np.guardFrom && f < g_np.guardUntil);
     }
 
     t4net::PadInput npSampleLocal(uint64_t frame)
@@ -2846,7 +2903,10 @@ namespace tekken4_rollback
             g_np.sendPrepFrame = f;
             g_np.sendPrepLastMs = ms;
         }
-        const bool lockstep = f < g_np.rbStart;
+        npMovieGuard(f);
+        const bool lockstep = npLockstepAt(f);
+        if (lockstep && f >= g_np.rbStart)
+            ++g_np.guardFrames;
         if (g_np.liveTFrame != f)
         {
             // first visit of this live boundary: its vblank time (the schedule runs earlyMs ahead of it)
@@ -3234,6 +3294,8 @@ namespace tekken4_rollback
             g_np.bootRendezvous = std::strcmp(v, "1") == 0;
         if (const char *v = std::getenv("TEKKEN4_NET_RBSTART"))
             g_np.rbStart = parseNumber(v);
+        if (const char *v = std::getenv("TEKKEN4_NET_MOVIE_GUARD"))
+            g_np.movieGuard = std::strcmp(v, "0") != 0;
         if (const char *v = std::getenv("TEKKEN4_NET_END"))
             g_np.endFrame = parseNumber(v);
         if (const char *v = std::getenv("TEKKEN4_NET_TIMESYNC"))
@@ -3337,7 +3399,7 @@ namespace tekken4_rollback
             return g_net.resim ? "R" : (g_frame >= g_cfg.netStart ? "S" : "-");
 #ifdef TEKKEN4_NETPLAY
         if (g_cfg.mode == Mode::Net)
-            return g_np.resim ? "R" : (g_frame < g_np.rbStart ? "L" : "N");
+            return g_np.resim ? "R" : (npLockstepAt(g_frame) ? "L" : "N");
 #endif
         return g_test.resim ? "R" : (g_test.wrong ? "W" : (g_test.active ? "1" : "-"));
     }
