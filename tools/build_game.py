@@ -101,8 +101,9 @@ def stage_generated(root, tree):
     for src in (root / "runtime").glob("*_overrides.cpp"):
         copy_changed(src, runner / src.name)
     touch = False
-    for pattern in ("tekken4_net*.cpp", "tekken4_net*.h", "tekken4_state_probe.h", "tekken4_online_result.h",
-                    "tekken4_match_state.h", "tekken4_rank_badges.h", "tekken4_native_names.h"):
+    # Stage every maintained runtime header: names, rounds and the host badge renderer
+    # have transitive includes that must also be present in fresh portable builds.
+    for pattern in ("tekken4_net*.cpp", "tekken4_*.h"):
         for src in (root / "runtime").glob(pattern):
             touch = copy_changed(src, runner / src.name) or touch
     rollback = runner / "tekken4_rollback_overrides.cpp"
@@ -139,9 +140,10 @@ def cmake_plan(root, tree, build_dir, runtime, portable, env):
         native = any(micro.glob("*.bin")) and env.get("TEKKEN4_VU1N") != "0"
         micro0 = root / "game/vu0/micro"
         lift = env.get("TEKKEN4_VULIFT") != "0"
+        # CMake PCH/unity sources embed absolute UTF-8 paths, including player folder names.
         configure += ["-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-                      "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG",
-                      "-DCMAKE_C_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG",
+                      "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG /utf-8",
+                      "-DCMAKE_C_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG /utf-8",
                       "-DPS2X_BUILD_RECOMP=OFF", "-DPS2X_BUILD_ANALYZER=OFF",
                       "-DPS2X_BUILD_TEST=OFF", "-DPS2X_BUILD_STUDIO=OFF",
                       "-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF", "-DPS2X_ENABLE_RUNTIME_LOGS=ON", "-DPS2X_ENABLE_IOP_RPC_TRACE=ON",
@@ -480,7 +482,9 @@ class Build:
             self.say("    NOTE: the netplay build id could not be written: online matches will refuse this build.")
 
     def runtime(self):
-        fp = sha_text(f"{self.get('stage', 'fingerprint') or ''}|{fingerprint(self.paths('patches', '*.patch'))}|{fingerprint(self.paths('game/vu1/micro', '*.bin'))}|{fingerprint(self.paths('game/vu0/micro', '*.bin'))}|{fingerprint(self.paths('tools/vu', '*.py'))}|{fingerprint(self.paths('runtime', '*.cpp', True))}|{self.head()}|{self.build_dir}|{self.env.get('TEKKEN4_VULIFT', '')}|{simd_baseline(self.env)}")
+        # A resumed player build must also pick up changed compiler/CMake options.
+        configuration = sha_text("\n".join(cmake_plan(self.root, self.tree, self.build_dir, True, self.portable, self.env)[0]))
+        fp = sha_text(f"{self.get('stage', 'fingerprint') or ''}|{fingerprint(self.paths('patches', '*.patch'))}|{fingerprint(self.paths('game/vu1/micro', '*.bin'))}|{fingerprint(self.paths('game/vu0/micro', '*.bin'))}|{fingerprint(self.paths('tools/vu', '*.py'))}|{fingerprint(self.paths('runtime', '*.cpp', True))}|{self.head()}|{self.build_dir}|{self.env.get('TEKKEN4_VULIFT', '')}|{simd_baseline(self.env)}|{configuration}")
         if not needs_step("runtime", self.a.Force, self.changed, self.runner.is_file(), self.get("runtime", "fingerprint"), fp):
             if not self.a.WhatIf:
                 self.write_build_id()

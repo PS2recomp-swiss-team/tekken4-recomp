@@ -93,7 +93,7 @@ class ToolchainMetadataTests(unittest.TestCase):
 
     def test_missing_metadata_is_refused(self):
         path = self.build("missing")
-        with self.assertRaisesRegex(SystemExit, "expected one compiler metadata directory"):
+        with self.assertRaisesRegex(SystemExit, "cannot read CMake compiler metadata"):
             buildid.toolchain(str(path))
 
     def test_missing_cxx_compiler_metadata_is_refused(self):

@@ -1,3 +1,36 @@
+<!-- RELEASE_GATE_0_1_1_STATUS_BEGIN -->
+## 2026-11-05: v0.1.1 release gate - IN PROGRESS / NO-GO
+
+Final main build `2cc44895ff88b691` passed the actual rebuild (498.3s); the independent fresh
+Unicode/space-path ISO build `afdb353c7e6525fc` passed (430.7s), and its final-helper resume
+passed with a full runtime recompile (409.9s). The portable Python suite passed 58/58.
+Python staging now includes all ranked badge headers; Windows runtime compilation
+uses UTF-8, and resume fingerprints include effective CMake configuration.
+
+Direct rollback/main/guest P1: PASS correctness. The accepted case has 533 in-range equal
+checkpoints, both NETEND f=16000, real rollback 8/2459, mirrored fighters14/14 and matching
+P1 wins3-0/end 14057. Guest/name/cache/drawn visuals passed sampled review.
+Fresh whole-session lockstep/guest P2: PASS: all16000 L, zero rollback/resim;533 in-range equal checkpoints; sampled guest/badge visuals pass. Local-lobby ranked-set/result-reporting,
+guest swap/rematch and normal 60 Hz menu/player-fight acceptance are not inferred from
+the direct case. Serialized file replay remains unsupported/unverified; intro A/V<45ms
+is not accepted. Broad source policy and its IPv6 fixture failure remain unresolved.
+
+Widescreen remains OFF: current external render candidate still lacks the full current
+matrix/performance/replay evidence. Exactv0.1.0 upgrade provenance remains unattested.
+The final537-file LocalTest overlay and German NO-GO note are verified, but actual
+`D:/T4-LocalTest` application is blocked by writable roots. Explorer path discovery was
+rejected by automatic app approval and was not bypassed. Proton notes are unchanged.
+
+This gate issued no commit or push. An external process created `99e259e`; it was
+preserved, not attributed to this gate. Main/fresh natural IDs differ because existing
+Git/vendored recipes differ, plus local FFmpeg CMake adaptation. Their compiler/source
+components match, but normal stamped mixed-ID online compatibility is unavailable;
+no override or compatibility approval was introduced.
+
+Full current evidence, every recorded run, remaining gates and proposed commit:
+[RELEASE_GATE_0.1.1.md](RELEASE_GATE_0.1.1.md). Snapshot `2026-11-05T01:04:27+01:00`.
+<!-- RELEASE_GATE_0_1_1_STATUS_END -->
+
 ## 2026-11-04: integrated TEST+FIX, native coverage verified; pacing acceptance blocked
 
 The known VU1 indirect-target handover is covered by build-time inference from the player's micro image.

@@ -115,7 +115,7 @@ class PlanningTests(unittest.TestCase):
             self.assertIn("-DCMAKE_TOOLCHAIN_FILE=" + (root / "tools/t4_toolchain_clangcl.cmake").as_posix(), commands[0])
             self.assertFalse(any("powershell" in str(arg).lower() or str(arg).endswith(".cmd") for command in commands for arg in command))
             if runtime:
-                self.assertIn("-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG", commands[0])
+                self.assertIn("-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=/Z7 /O2 /Ob2 /DNDEBUG /utf-8", commands[0])
                 self.assertIn("-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF", commands[0])
                 self.assertEqual(commands[1][-2:], ["--target", "ps2EntryRunner"])
 
@@ -137,6 +137,37 @@ class PlanningTests(unittest.TestCase):
                                            {"TEKKEN4_VULIFT": "0", "TEKKEN4_VU1N": "0"})[0]
             self.assertIn("-DPS2X_VULIFT_GEN=", command)
             self.assertIn("-DPS2X_VU1_MICROCODE_DIR=", command)
+
+    def test_runtime_resume_rebuilds_when_compiler_configuration_changes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tree = root / "source"
+            with patch.dict(os.environ, {"TEKKEN4_SRC": str(tree)}):
+                args = build_game.parser().parse_args(["-Steps", "runtime", "-LogDir", str(root / "logs")])
+                build = build_game.Build(args, root=root)
+            try:
+                build.env["TEKKEN4_SIMD_BASELINE"] = "0"
+                for vu in ("vu0", "vu1"):
+                    micro = root / "game" / vu / "micro"
+                    micro.mkdir(parents=True)
+                    (micro / "synthetic.bin").write_bytes(b"synthetic micro fixture")
+                build.runner.parent.mkdir(parents=True)
+                build.runner.write_text("synthetic existing runner")
+                with patch.object(build, "head", return_value="test-head"), patch.object(build, "compile") as compile_runtime, patch.object(build, "write_build_id"):
+                    self.assertEqual(build.runtime(), "built")
+                    build.changed.clear()
+                    self.assertEqual(build.runtime(), "up to date")
+                    compile_runtime.assert_called_once_with(True)
+                    original_plan = build_game.cmake_plan
+                    def changed_plan(*args):
+                        commands = original_plan(*args)
+                        commands[0].append("-DCMAKE_CXX_FLAGS=/DPLAYER_REBUILD_TEST")
+                        return commands
+                    with patch.object(build_game, "cmake_plan", side_effect=changed_plan):
+                        self.assertEqual(build.runtime(), "built")
+                    self.assertEqual(compile_runtime.call_count, 2)
+            finally:
+                build.log.close()
 
     def test_fork_applies_patches_without_creating_commits(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -199,6 +230,26 @@ class PlanningTests(unittest.TestCase):
             self.assertFalse((root / "source").exists())
             self.assertFalse((root / "logs/build_game_state.json").exists())
             self.assertTrue((root / "logs/build_game.log").is_file())
+
+    def test_staging_copies_complete_production_header_dependencies(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "generated").mkdir()
+            (root / "runtime").mkdir()
+            (root / "generated/register_functions.cpp").write_text("synthetic registration")
+            for source in (ROOT / "runtime").glob("tekken4_*.h"):
+                shutil.copyfile(source, root / "runtime" / source.name)
+            for source in (ROOT / "runtime").glob("*_overrides.cpp"):
+                shutil.copyfile(source, root / "runtime" / source.name)
+            tree = root / "source"
+            build_game.stage_generated(root, tree)
+            runner = tree / "ps2xRuntime/src/runner"
+            # Check the actual maintained include closure, independently of the staging list.
+            for source in (root / "runtime").iterdir():
+                for dependency in __import__("re").findall(r'^#include "(tekken4_[^"]+\.h)"', source.read_text(), __import__("re").M):
+                    self.assertTrue((runner / dependency).is_file(), dependency)
+            for name in ("tekken4_rounds.h", "tekken4_badge_draw.h", "tekken4_rank_cache.h", "tekken4_rank_label.h"):
+                self.assertEqual((runner / name).read_bytes(), (ROOT / "runtime" / name).read_bytes())
 
     def test_staging_does_not_purge_and_touches_rollback_for_new_header(self):
         with tempfile.TemporaryDirectory() as temp:

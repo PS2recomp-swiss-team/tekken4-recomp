@@ -64,7 +64,7 @@ class RankBadgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT / "logs") as folder:
             header = Path(folder) / "metadata.h"
             badges.header(header)
-            self.assertEqual(header.read_bytes(), (ROOT / "runtime/tekken4_rank_badges.h").read_bytes())
+            self.assertEqual(header.read_text(encoding="utf-8"), (ROOT / "runtime/tekken4_rank_badges.h").read_text(encoding="utf-8"))
 
     def test_cpp_helpers(self):
         vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / (

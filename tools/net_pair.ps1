@@ -15,7 +15,7 @@
 param([string]$Name = "", [int]$Rtt = 0, [double]$Jitter = 0, [double]$Loss = 0, [int]$End = 9000, [int]$Seconds = 1800,
       [string]$Env = "", [string]$HostEnv = "", [string]$JoinEnv = "", [string]$Shots = "", [int]$Port = 7400,
       [string]$Src = "D:\tekken4-fork-net", [string]$BuildDir = "net", [switch]$NoLock, [switch]$TimingDiag,
-      [switch]$AutoVs)
+      [switch]$AutoVs, [switch]$Background)
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Src) { $Src = Join-Path (Split-Path -Parent $root) "tekken4-fork-net" }
 if (-not $BuildDir) { $BuildDir = "net" }
@@ -69,6 +69,10 @@ $sides = @(
 . (Join-Path $PSScriptRoot "run_lock.ps1")
 if (-not $NoLock) { Enter-RunLock $root "net_pair $Name (host + join)" }
 $saved = @(Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_|PS3_AUDIO_MUTE$|PS3_WINDOW_BACKGROUND$|OPENRECOMP_HOME$|APPDATA$|LOCALAPPDATA$)' } | ForEach-Object { @{ n = $_.Name; v = $_.Value } })
+$profileSaved = @{}
+foreach ($key in @('OPENRECOMP_HOME','APPDATA','LOCALAPPDATA','TEMP','TMP')) {
+    $profileSaved[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+}
 $procs = @()
 $t0 = Get-Date
 try {
@@ -94,6 +98,15 @@ try {
         # The runtime boots online games straight to VS select by default; this harness keeps its scripted menus
         # (and the old timings) unless -AutoVs. An -Env TEKKEN4_NET_AUTO_VS value wins.
         if ($AutoVs) { $env:TEKKEN4_NET_AUTO_VS = "1" } elseif (-not $env:TEKKEN4_NET_AUTO_VS) { $env:TEKKEN4_NET_AUTO_VS = "0" }
+        if ($Background) {
+            $env:PS3_AUDIO_MUTE = "1"; $env:PS3_WINDOW_BACKGROUND = "1"
+            $env:TEKKEN4_AUDIO_MUTE = "1"; $env:TEKKEN4_NET_BIND = "127.0.0.1"
+            foreach ($key in @('OPENRECOMP_HOME','APPDATA','LOCALAPPDATA','TEMP','TMP')) {
+                $profile = Join-Path $dir ("profile\" + $key)
+                New-Item -ItemType Directory -Force $profile | Out-Null
+                Set-Item -Path "env:$key" -Value $profile
+            }
+        }
         $env:TEKKEN4_NET = $s.net
         $env:TEKKEN4_NET_END = "$End"
         if ($sim) { $env:TEKKEN4_NET_SIM = "$sim,seed=$($s.seed)" }
@@ -103,11 +116,12 @@ try {
           "exe      $exe") + @(Get-ChildItem env: | Where-Object { $_.Name -match '^(TEKKEN4_|PS2X_|PS3_AUDIO_MUTE$|PS3_WINDOW_BACKGROUND$|OPENRECOMP_HOME$|APPDATA$|LOCALAPPDATA$)' } | Sort-Object Name |
           ForEach-Object { "env      $($_.Name)=$($_.Value)" }) | Set-Content -Encoding utf8 (Join-Path $dir "params.txt")
         $p = Start-Process -FilePath $exe -ArgumentList "`"$elf`"" -WorkingDirectory $dir -WindowStyle Hidden `
-            -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -PassThru
+            -RedirectStandardOutput "$dir\stdout.txt" -RedirectStandardError "$dir\stderr.txt" -PassThru -ErrorAction Stop
+        # Track the child before priority assignment, so any setup exception still cleans it up.
+        $procs += @{ side = $s.side; p = $p; dir = $dir; titled = $false }
         $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
         "process pid=$($p.Id) priority=$($p.PriorityClass) isolated_home=$env:OPENRECOMP_HOME" |
             Add-Content -Encoding utf8 (Join-Path $dir 'params.txt')
-        $procs += @{ side = $s.side; p = $p; dir = $dir; titled = $false }
         Write-TimingProcess $procs[-1]
         Start-Sleep -Milliseconds 500
     }
@@ -120,7 +134,7 @@ try {
         foreach ($x in $procs) {
             $x.p.Refresh()
             Write-TimingProcess $x
-            if (-not $x.titled -and $x.p.MainWindowHandle -ne [IntPtr]::Zero) {
+            if (-not $Background -and -not $x.titled -and $x.p.MainWindowHandle -ne [IntPtr]::Zero) {
                 [void][NetPairWin]::SetWindowText($x.p.MainWindowHandle, "TEKKEN 4 - Claude: $Name $($x.side) ($(if ($x.side -eq 'host') {'P1'} else {'P2'}))")
                 [void][NetPairWin]::MoveWindow($x.p.MainWindowHandle, 20 + 660 * $i, 40, 640, 520, $true)
                 # F1 hides the runtime's debug panel (as tools\run_capture.ps1)
@@ -142,12 +156,18 @@ try {
 } finally {
     foreach ($x in $procs) {
         if (-not $x.p.HasExited) {
-            $null = $x.p.CloseMainWindow()
-            if (-not $x.p.WaitForExit(8000)) { $x.p.Kill(); $null = $x.p.WaitForExit(5000) }
+            if ($Background) { $x.p.Kill(); $null = $x.p.WaitForExit(5000) }
+            else {
+                $null = $x.p.CloseMainWindow()
+                if (-not $x.p.WaitForExit(8000)) { $x.p.Kill(); $null = $x.p.WaitForExit(5000) }
+            }
         }
     }
     Clear-NetEnv
     foreach ($e in $saved) { Set-Item -Path "env:$($e.n)" -Value $e.v }
+    foreach ($key in $profileSaved.Keys) {
+        [Environment]::SetEnvironmentVariable($key, $profileSaved[$key], 'Process')
+    }
     if (-not $NoLock) { Exit-RunLock $root }
 }
 "ran {0:N0} s, output in $base" -f ((Get-Date) - $t0).TotalSeconds

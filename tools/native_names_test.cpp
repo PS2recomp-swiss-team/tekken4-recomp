@@ -93,40 +93,39 @@ int main()
     write<uint32_t>(ram.data(), kFontDescriptor, metrics);
 
     {
-    // The real VS select uses PS2D node IDs and a different caller from the legacy 3D select.
-    assert(selectNodeSide(0x27ef78, 0, 0x104) == 0);
-    assert(selectNodeSide(0x27ef78, 1, 0x105) == 1);
-    assert(selectNodeSide(0x27ef00, 0, 0xc9) == -1); // portrait draw must remain intact
-    assert(selectNodeSide(0x27ef78, 0, 0x105) == -1);
-    assert(selectNodeSide(0x27ef78, 2, 0x106) == -1);
-    constexpr uint32_t node = 0x210000u, projection = 0x1cd7e20u;
-    write<uint32_t>(ram.data(), node, 0);
-    write<uint16_t>(ram.data(), node + 0x52, 1);
-    write<uint32_t>(ram.data(), node + 0x58, 0);
-    const float rows[8] = {1, 0, 0, -1, 0, 0, 2048, 2048};
-    for (uint32_t col = 0; col < 4; ++col)
-        for (uint32_t row = 0; row < 2; ++row)
-            write<float>(ram.data(), projection + col * 16 + row * 4, rows[col * 2 + row]);
-    write<float>(ram.data(), node + 0x40, -216.0f);
-    write<float>(ram.data(), node + 0x44, 5.0f);
-    write<float>(ram.data(), node + 0x5c, 1.0f);
-    int cx = 0, cy = 0;
-    uint8_t alpha = 0;
-    assert(selectNodeAnchor(ram.data(), node, cx, cy, alpha) && cx == 104 && cy == 219 && alpha == 128);
-    write<float>(ram.data(), node + 0x40, 216.0f);
-    write<float>(ram.data(), node + 0x44, 9.0f);
-    write<float>(ram.data(), node + 0x5c, 0.5f);
-    assert(selectNodeAnchor(ram.data(), node, cx, cy, alpha) && cx == 536 && cy == 215 && alpha == 64);
-    write<uint16_t>(ram.data(), node + 0x52, 0);
-    assert(!selectNodeAnchor(ram.data(), node, cx, cy, alpha));
-    write<uint16_t>(ram.data(), node + 0x52, 1);
-    write<uint32_t>(ram.data(), node + 0x58, 1);
-    assert(!selectNodeAnchor(ram.data(), node, cx, cy, alpha));
-    write<uint32_t>(ram.data(), node + 0x58, 0);
-    write<float>(ram.data(), projection, 2.0f);
-    assert(!selectNodeAnchor(ram.data(), node, cx, cy, alpha));
-    assert(!selectNodeAnchor(ram.data(), 0xfffffff0u, cx, cy, alpha));
-
+        // The real VS select uses PS2D node IDs and a different caller from the legacy 3D select.
+        assert(selectNodeSide(0x27ef78, 0, 0x104) == 0);
+        assert(selectNodeSide(0x27ef78, 1, 0x105) == 1);
+        assert(selectNodeSide(0x27ef00, 0, 0xc9) == -1); // portrait draw must remain intact
+        assert(selectNodeSide(0x27ef78, 0, 0x105) == -1);
+        assert(selectNodeSide(0x27ef78, 2, 0x106) == -1);
+        constexpr uint32_t node = 0x210000u, projection = 0x1cd7e20u;
+        write<uint32_t>(ram.data(), node, 0);
+        write<uint16_t>(ram.data(), node + 0x52, 1);
+        write<uint32_t>(ram.data(), node + 0x58, 0);
+        const float rows[8] = {1, 0, 0, -1, 0, 0, 2048, 2048};
+        for (uint32_t col = 0; col < 4; ++col)
+            for (uint32_t row = 0; row < 2; ++row)
+                write<float>(ram.data(), projection + col * 16 + row * 4, rows[col * 2 + row]);
+        write<float>(ram.data(), node + 0x40, -216.0f);
+        write<float>(ram.data(), node + 0x44, 5.0f);
+        write<float>(ram.data(), node + 0x5c, 1.0f);
+        int nodeCx = 0, nodeCy = 0;
+        uint8_t alpha = 0;
+        assert(selectNodeAnchor(ram.data(), node, nodeCx, nodeCy, alpha) && nodeCx == 104 && nodeCy == 219 && alpha == 128);
+        write<float>(ram.data(), node + 0x40, 216.0f);
+        write<float>(ram.data(), node + 0x44, 9.0f);
+        write<float>(ram.data(), node + 0x5c, 0.5f);
+        assert(selectNodeAnchor(ram.data(), node, nodeCx, nodeCy, alpha) && nodeCx == 536 && nodeCy == 215 && alpha == 64);
+        write<uint16_t>(ram.data(), node + 0x52, 0);
+        assert(!selectNodeAnchor(ram.data(), node, nodeCx, nodeCy, alpha));
+        write<uint16_t>(ram.data(), node + 0x52, 1);
+        write<uint32_t>(ram.data(), node + 0x58, 1);
+        assert(!selectNodeAnchor(ram.data(), node, nodeCx, nodeCy, alpha));
+        write<uint32_t>(ram.data(), node + 0x58, 0);
+        write<float>(ram.data(), projection, 2.0f);
+        assert(!selectNodeAnchor(ram.data(), node, nodeCx, nodeCy, alpha));
+        assert(!selectNodeAnchor(ram.data(), 0xfffffff0u, nodeCx, nodeCy, alpha));
     }
 
     const uint32_t start = kQueue + 8;
