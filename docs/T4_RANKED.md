@@ -124,13 +124,36 @@ Changed guest RAM includes the text queue, its head/formatter cursor and downstr
 identical guest calls, so these bytes are identical by construction. No new hash mask or exclusion was added.
 This reasoning is not a replacement for zero-mismatch rollback/lockstep acceptance runs.
 
-The badge presenter reads a mutex-protected host copy of the actual queued text position and checks scene and
-visibility/opacity. It never feeds simulation state. The former frame-age comparison against live guest RAM was
-removed: RAM can advance or roll back while an older framebuffer is presented, causing valid badges to disappear
-intermittently. Hidden active-select widgets and fallback draws invalidate their badge anchor. Badge shapes,
-outline, text and highlight now receive the name's alpha (128 means opaque; the highlight keeps its 0.22 factor).
-Badges contain no host-font lettering; select rank labels and player names use the game font. Final screenshot and
-pair evidence must establish the completed candidate's visual and netplay acceptance.
+The badge presenter reads a mutex-protected host copy of the actual queued text position and checks scene,
+visibility/opacity and **the frame the text was queued in**. It never feeds simulation state and never writes guest
+RAM. Each name hook stamps its anchor with the game-loop counter (`0x356018`, u32) it saw while queueing the text;
+`runtime/tekken4_badge_gate.h` draws the badge only when that counter is still the presenter's: at most one frame
+ahead (the game increments right after the frame's draw calls) and at most 16 behind (a rollback restores the
+counter below the last live queue while it re-simulates; the picture shown stays the last live one). Where the game
+queues no name text -- the KO replay, KO slow motion without the HUD, intros and win poses without life bars, menus
+-- the counter moves on, the anchor goes stale after two frames and the badge disappears with the names. The scene
+and `type == VS` registers alone are not enough: they stay 4/3 through the whole replay (the v0.1.1 bug: badges
+drawn over the replay where the names used to be).
+
+Why not an exact `counter == queued` test: measured with `TEKKEN4_HUD_GATE_LOG=1` (below) the presenter reads
+queued+0 or queued+1 on every live pass (queued+2/+3 on fewer than 0.1 % of passes, at HUD transitions), so an exact
+test hid the badge on 85-98 % of the presents. The window is the measured distance, not a tolerance for old state: a
+replay frame is queued+2 after two frames and stays off for its whole length (hundreds of frames).
+The former frame-age comparison against live RAM was removed earlier because it was a bare `==`-style test: RAM can
+advance or roll back while an older framebuffer is presented. Hidden active-select widgets and fallback draws
+invalidate their badge anchor. Badge shapes, outline, text and highlight receive the name's alpha (128 means opaque;
+the highlight keeps its 0.22 factor). Badges contain no host-font lettering; select rank labels and player names use
+the game font. Final screenshot and pair evidence must establish the completed candidate's visual and netplay
+acceptance.
+
+Checks: `python -I tools/test_badge_gate.py` (MSVC `/W4 /WX` synthetic counters: live distance 0/1, replay frames
+off for 5,000 frames, alpha 0, scene change, rollback distances, counter wrap; source guard that the presenter uses
+the gate and the override stores nothing into guest RAM). Local game evidence 2026-11-05 (build with the gate,
+rollback pair `lat=75 jitter=5 loss=3`, 16,000 frames, 536 common hashes, 0 mismatches, 2,989 rollbacks on the joiner,
+max depth 6): across the run the badge decision changed only 9 times per side on both PCs -- round starts and
+ends, select entry -- with no flicker under rollback; window shots during the live fight show both badges,
+shots during the final KO replay show none (`C:\T5DROnline\build\t4ranked\shots\v6_live.png`, `v6_replay.png`;
+not committed).
 
 ## Environment and staging
 
@@ -141,6 +164,7 @@ pair evidence must establish the completed candidate's visual and netplay accept
 | `TEKKEN4_HUD_PLATES` | `0` restores fighter names; effective setting must match on both peers |
 | `TEKKEN4_HUD_SHOTS` | `s,s,...` -> window screenshots `hud_<s>s.png` |
 | `TEKKEN4_HUD_WINDOW` | `WxH` for screenshot window size |
+| `TEKKEN4_HUD_GATE_LOG` | `1` logs `[hud-gate]` badge on/off changes (capped) and a counter-distance histogram every 240 presents; host-only diagnostic |
 
 `tools/stage_generated.cmd` stages the new header along with existing overrides/badges. The production tree
 is built by the coordinator; do not edit the game/generated junctions. Patch 88 still provides the badge overlay.

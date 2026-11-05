@@ -12,6 +12,7 @@
 #include "tekken4_rank_badges.h"
 #include "tekken4_native_names.h"
 #include "tekken4_badge_draw.h"
+#include "tekken4_badge_gate.h"
 #include "tekken4_rank_cache.h"
 #include "tekken4_rank_label.h"
 
@@ -39,6 +40,7 @@ namespace tekken4_hud
     {
         int x = 0, y = 0, scene = 0;
         uint8_t alpha = 0;
+        uint32_t frame = 0; // game-loop counter (tekken4_badge_gate::kGameFrame) when the name text was queued
         bool valid = false;
     };
     std::mutex g_anchorMutex;
@@ -81,7 +83,7 @@ namespace tekken4_hud
         if (!tekken4_names::enqueue(ram, text, x, y, alpha))
             return false;
         std::lock_guard<std::mutex> lock(g_anchorMutex);
-        g_anchor[side] = Anchor{x, y, scene, alpha, true};
+        g_anchor[side] = Anchor{x, y, scene, alpha, rd32(ram, tekken4_badge_gate::kGameFrame), true};
         return true;
     }
 
@@ -234,6 +236,40 @@ namespace tekken4_hud
                        Color{255,255,255,static_cast<uint8_t>(alpha*255/128)});
     }
 
+    // TEKKEN4_HUD_GATE_LOG=1: histogram of the counter distance from a side's last name queue to the presenter's
+    // reading (behind = after a rollback, 0..3, 4+, none = no queue in this scene), and every change of the badge
+    // decision (capped) with the time since start, for choosing picture times.
+    void gateStats(int side, const Anchor &a, int scene, uint32_t frame)
+    {
+        static const bool on = std::getenv("TEKKEN4_HUD_GATE_LOG") != nullptr;
+        if (!on)
+            return;
+        static uint64_t hist[2][7]{}, presents[2]{};
+        static bool shown[2]{};
+        static int lines = 0;
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - g.start).count();
+        int bin = 6; // none
+        if (a.valid && a.scene == scene)
+        {
+            const int32_t d = tekken4_badge_gate::distance(a.frame, frame);
+            bin = d < 0 ? 0 : d < 4 ? 1 + static_cast<int>(d) : 5;
+        }
+        ++hist[side][bin];
+        const bool now = tekken4_badge_gate::visible(a.valid, a.scene, a.alpha, a.frame, scene, frame);
+        if (now != shown[side] && lines < 600)
+        {
+            shown[side] = now;
+            ++lines;
+            RUNTIME_LOG("[hud-gate] t " << t << " side " << side << (now ? " badge ON" : " badge off") << " frame " << frame
+                                        << " queued " << a.frame << " scene " << scene << "\n");
+        }
+        if (++presents[side] % 240 == 0)
+            RUNTIME_LOG("[hud-gate] t " << t << " side " << side << " frame " << frame << " scene " << scene << " behind "
+                                        << hist[side][0] << " d0 " << hist[side][1] << " d1 " << hist[side][2] << " d2 "
+                                        << hist[side][3] << " d3 " << hist[side][4] << " d4+ " << hist[side][5] << " none "
+                                        << hist[side][6] << "\n");
+    }
+
     void draw(PS2Runtime &runtime, const ps2_host_overlay::Frame &f, void *)
     {
         windowSize();
@@ -243,6 +279,7 @@ namespace tekken4_hud
         {
             const int32_t scene = static_cast<int32_t>(rd32(rdram, kScene));
             const int32_t type = static_cast<int32_t>(rd32(rdram, kGameType));
+            const uint32_t frame = rd32(rdram, tekken4_badge_gate::kGameFrame);
             if (type == kTypeVs && (scene == kSceneSelect || scene == kSceneFight))
             {
                 Anchor anchors[2];
@@ -253,9 +290,8 @@ namespace tekken4_hud
                 for (int side = 0; side < 2; ++side)
                 {
                     const Anchor &a = anchors[side];
-                    // Live guest RAM can advance or roll back while a frame is presented.
-                    // Scene/visibility are stable guards; a current-RAM frame-age test flickers.
-                    if (!a.valid || a.scene != scene || !a.alpha)
+                    gateStats(side, a, scene, frame);
+                    if (!tekken4_badge_gate::visible(a.valid, a.scene, a.alpha, a.frame, scene, frame))
                         continue;
                     // Direct window-resolution geometry, baseline anchored to the native font.
                     const int tier = g.side[side].tier;
