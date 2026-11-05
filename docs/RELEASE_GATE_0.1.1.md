@@ -3,6 +3,22 @@
 Status: **IN PROGRESS / NO-GO. No release acceptance is granted.**
 Snapshot: `2026-11-05T01:04:27+01:00`. Later results must be added before a final decision.
 
+## Final gate run 2026-11-05 (movie guard, build `00bf3c0dd94fc2da`, source f3a5e5c)
+
+Decision: **NETCODE GO, FRAME-TIME CRITERION NOT MET (NO-GO as written)**. All paths are under `logs/release-gate/` unless noted.
+
+- Ancestry: `t4-ranked` (98c51bd, 425e4ea) recorded with `merge -s ours`; every added line of the branch was already in HEAD (99e259e). Widescreen stays off by default and is not merged.
+- Build: `build-final-tree-r5` (stage + runtime, 169 s, exit 0). Needs `GIT_CONFIG_*` safe.directory for `deps/ps2recomp` (owned by the Codex sandbox user), no global git config change.
+- Movie finding: it is a **scene change inside a re-simulation**, not a movie decoder problem (docs/MOVIE_ROLLBACK_T4.md). Repro `mv-title-off` (guard off): first mismatch 1230, 26 sampled hashes differ. Fix `mv-title-on` (guard on): 0 mismatches, 69 common hashes, lockstep until VS select. The normal online flow never leaves scenes 7/4 (NETSCENE lines of every lobby run), scripted exits from select (`mv-story-on`, `mv-story2-on`) did not leave scene 7; the guard covers the take-over and AUTO_VS=0 cases.
+- Local lobby, NET_SIM lat=75 jitter=5 loss=3 per side (RTT ~150), names + badges (cached T5DR plate on one PC, drawn on the other), mirror Kazuya, first-to-3:
+  `build/release-gate/lobby-runs/gate-lobby-ranked-r5-rb` PASS (2 matches 3-0, lobby `confirmed`, 487 + 487 hash frames, 0 mismatches, same result hash; ~2,150 rollbacks per match on the joiner, max depth 7-9);
+  `gate-lobby-guest-r5-rb` PASS (guest account, sides swapped between the two matches = guest on P1 and P2, 487 + 487, 0 mismatches);
+  `gate-lobby-ranked-r5-ls` PASS (whole-session lockstep, 0 rollbacks, 487 + 487, 0 mismatches).
+  Not covered: a rematch inside one running process (T4 has no persistent game; every lobby match starts a new process).
+- Unit/tool tests (isolated profile, PowerShell host): 142 tests, 2 failing: `test_publish_source.test_server_addresses` (known IPv6 fixture) and `test_player_python.test_dot_sourced_preflight_keeps_identity_api` (UTF-8 BOM on the preflight request pipe in this host; not touched by this change). `tools/test_movie_guard.py` 3/3. Player source catalog scan (`tools/test_zip.py --check-only`): PASS, 160 files.
+- Frame times, no input, quiet PC (no other game running; 59 Hz monitor, `run_native_noinput.py`, demo fights = CPU vs CPU): `mv-perf-r5b` fights p50 16.6 / p95 17.6-17.9 / p99 18.1-18.5 ms, over 20 ms: 0, 6 and 4 per fight window (0-10 per minute), max 28.6 ms; title/menu window 2 per minute, p99 18.2. Whole run 47 intervals over 20 ms in 350 s. First run `mv-perf-r5` (other agents' programs active): title 446/min, fights 3-18/min. The "0 above 20 ms per minute" criterion is NOT met; no player-controlled fight and no intro A/V offset measurement (still unestablished).
+- LocalTest: runtime staged from this tree with `D:\T4-LocalTest	oolsuild_local_game.py --stage-only` (build id above), `START_HERE.txt` rewritten in German.
+
 ## Current candidate and gate decision
 
 Final main natural build ID: `2cc44895ff88b691`. EXE SHA-256: `6baf32534ef4dbc7cae5ce923c5817371366f431ed91263a6602d38057709ee1`. The actual pipeline rebuilt stage/runtime in 498.3 s; its controller ledger includes slot waiting and totals 538.656 s. Evidence: [logs/release-gate/build-final-tree-r3/result.json](<../logs/release-gate/build-final-tree-r3/result.json>) and [logs/release-gate/final-build.json](<../logs/release-gate/final-build.json>).
