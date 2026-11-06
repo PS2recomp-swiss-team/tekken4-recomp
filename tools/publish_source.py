@@ -40,9 +40,12 @@ GAME_SYMBOL = re.compile(rb"(?:func_[0-9a-fA-F]{6,8}|[A-Za-z_]\w*_0x[0-9a-fA-F]{
 HANDWRITTEN_SHA256 = {"c7cec562d2550f3e73f8a11f39b8b5bd9e3da28846bb7f6575424ccead034c91"}
 # Reviewed immutable patch: its guest CD path examples resemble a UNC path.
 # Only the personal-path category uses this pin; any byte change loses it.
-GUEST_PATH_SHA256 = {"9b0151764e50f9eeb7d227d6048ef65567124b89185df24a3ce24e9ff08e0864"}
+GUEST_PATH_SHA256 = {"9b0151764e50f9eeb7d227d6048ef65567124b89185df24a3ce24e9ff08e0864",
+                     # patches/99 (0.1.4): its manifest comment names a made-up example folder (umlaut + Cyrillic)
+                     "fb9001e6544830858a99e5024c1638cef52652940e1ebd84c2d7affd05e09f7a"}
 # Public documentation and dependency downloads are not lobby addresses.
 PUBLIC_HOSTS = {
+    "schemas.microsoft.com",          # XML namespace names in a Windows manifest (patches/99), not a server
     "github.com", "www.github.com", "api.github.com", "raw.githubusercontent.com",
     "objects.githubusercontent.com", "release-assets.githubusercontent.com",
     "gnu.org", "www.gnu.org", "fsf.org", "www.fsf.org", "ps2recomp.com",

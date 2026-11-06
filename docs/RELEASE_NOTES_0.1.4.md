@@ -9,7 +9,7 @@
   changed. 0.1.3 needed about 4 minutes plus a 240 MB download.
 - **Smaller download:** about 136 MB for Tekken 4 (0.1.3: 274 MB).
 - **Same build for every player**, whatever is installed on the PC. Everybody builds once more after updating.
-- **Folders with special characters work** (for example `C:\Users\Müller\...` or a Cyrillic folder name). Before,
+- **Folders with special characters work** (for example a user name like Müller, or a Cyrillic folder name). Before,
   the game could not start from such a folder.
 - Old processors without SSE4.1 get the matching version of the game program automatically (same game, you can play
   each other online).

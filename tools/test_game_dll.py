@@ -143,8 +143,8 @@ class GameDllTool(unittest.TestCase):
     def test_headers_compile_without_visual_studio(self):
         """The game-DLL headers (tools/gamedll/include) with clang's own headers only: a function in the
         generated code's style compiles with /X (needs a clang-cl, e.g. the release's toolchain)."""
-        cl = shutil.which("clang-cl") or next((str(p) for p in (ROOT / "toolchain/llvm/bin/clang-cl.exe",
-                                                                 Path(r"D:\t4-night\inputs\llvm\bin\clang-cl.exe")) if p.is_file()), None)
+        cl = os.environ.get("T4_TEST_CLANG_CL") or shutil.which("clang-cl") or next(
+            (str(p) for p in (ROOT / "toolchain/llvm/bin/clang-cl.exe",) if p.is_file()), None)
         if not cl:
             self.skipTest("no clang-cl here")
         with tempfile.TemporaryDirectory() as tmp:
