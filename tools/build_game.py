@@ -19,9 +19,6 @@ from player_common import ROOT, NO_WINDOW, PlayerParser, build_tree, configure_o
 EXPECTED_ELF = "a4b7dde20a2918c550badd127a245db155c36815"
 PINNED = "eb8688b2fd191129f103a39543002c005b33409c"
 ALL_STEPS = ("prereq", "verify", "extract", "fork", "tools", "recomp", "stage", "runtime")
-# A release folder's full build (0.1.3): the disc's steps run on their own thread beside fork + tools (disk vs CPU), so
-# they are listed -- and waited for -- after tools; recomp needs both.
-RELEASE_ORDER = ("prereq", "fork", "tools", "verify", "extract", "recomp", "stage", "runtime")
 TITLES = {
     "prereq": "bundled compiler (clang-cl, lld-link, CMake, Ninja, Python) or, in a source checkout, Git + VS + CMake + Ninja",
     "extract": "SYSTEM.CNF, SLUS_203.28, IRX\\IOPRP243.IMG, TEKKEN\\DATA.BIN -> game\\disc",
@@ -246,8 +243,6 @@ class Build:
         self.portable = (self.root / "toolchain/toolchain.json").is_file()
         if self.portable:
             self.env = release_environment(self.env)
-            if not args.WhatIf and {"prereq", "verify", "extract", "tools"} <= set(self.steps):
-                self.steps = [step for step in RELEASE_ORDER if step in self.steps]
         self.tree = build_tree(self.root, self.env)
         self.vendored = (self.tree / ".t4-vendored.json").is_file()
         self.build_dir = self.env.get("TEKKEN4_BUILD_DIR") or "runtime"
@@ -632,11 +627,9 @@ class Build:
 
     def _disc_start(self):
         """0.1.3: in a full release build the disc's steps (verify, extract: reading 2.7 GB from the ISO, disk-bound)
-        run beside fork + tools (CMake and the recompiler tools: CPU); recomp needs both and waits. They start after
-        prereq when that unpacks Microsoft's files (both disk-bound: measured slower together), else at once. Nothing
-        of the result changes, only the order of the log lines."""
-        if (self.a.WhatIf or not self.portable or self._disc is not None or "prereq" not in self.steps
-                or not {"verify", "extract"} <= set(self.steps)):
+        run beside the compiler's (Microsoft's files, CMake, the recompiler tools: network and CPU); recomp needs both
+        and waits. Nothing of the result changes, only the order of the log lines."""
+        if self.a.WhatIf or not self.portable or "prereq" not in self.steps or not {"verify", "extract"} <= set(self.steps):
             return
         disc = dict(results={}, times={}, error=None)
 
@@ -679,8 +672,7 @@ class Build:
                 if not self.iso.is_file():
                     raise ValueError(f"ISO not found: {self.iso}")
                 self.iso_fp = f"{str(self.iso).lower()}|{self.iso.stat().st_size}|{ticks(self.iso)}"
-            if self.portable and (self.sysroot() / "sysroot.json").is_file():
-                self._disc_start()               # Microsoft's files are on this PC already: prereq only checks them
+            self._disc_start()
             for n, step in enumerate(self.steps, 1):
                 title = TITLES.get(step) or (f"ISO is Tekken 4 US (SLUS-20328): {self.iso}" if step == "verify" else f"PS2Recomp tree at eb8688b + patches\\*.patch ({self.tree})" if step == "fork" else f"tools\\build_runtime{'_portable' if self.portable else ''}.cmd -> {self.runner}")
                 self.say("")
@@ -694,8 +686,6 @@ class Build:
                     elapsed = time.monotonic() - timer
                 self.timings.append(f"{step:<8} {result:<12} {elapsed:.1f}s")
                 self.say(f"    {result} ({elapsed:.1f}s)")
-                if step == "prereq":
-                    self._disc_start()
             self.say("\n--- timings ---")
             for timing in self.timings:
                 self.say("  " + timing)

@@ -42,11 +42,6 @@ STEPS = [  # (script step name, short label shown in the Build tab)
     ("stage", "Stage the translated code"),
     ("runtime", "Build the game (the long step)"),
 ]
-if os.path.isfile(os.path.join(ROOT, "toolchain", "toolchain.json")):
-    # A release folder's build lists the disc's steps after tools (tools/build_game.py RELEASE_ORDER: they run beside
-    # fork + tools and are waited for there), so the Build tab shows the steps in the order they finish.
-    STEPS = [(name, dict(STEPS)[name]) for name in
-             ("prereq", "fork", "tools", "verify", "extract", "recomp", "stage", "runtime")]
 
 # ------------------------------------------------------------------ settings
 RESOLUTIONS = [  # key = TEKKEN4_INTERNAL_RES value (docs/GRAPHICS.md), label; the same steps as T5DR's launcher

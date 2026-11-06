@@ -166,64 +166,45 @@ class DeveloperShell(unittest.TestCase):
 
 
 class DiscBesideCompiler(unittest.TestCase):
-    """0.1.3: verify + extract (disk) run on their own thread beside fork + tools (CPU); recomp waits for both. With
-    Microsoft's files still to unpack (disk too) they start after prereq, else at once."""
+    """0.1.3: verify + extract (disk) run beside prereq/fork/tools (network, CPU); recomp waits for both."""
 
-    def build(self, temp, sysroot=False, **steps):
+    def build(self, temp, **steps):
         import threading
         import time as clock
         root = Path(temp) / "T4"
         (root / "toolchain").mkdir(parents=True)
         (root / "toolchain" / "toolchain.json").write_text("{}", encoding="utf-8")
-        if sysroot:
-            (root / "toolchain" / "sysroot.json").write_text("{}", encoding="utf-8")
         iso = Path(temp) / "t4.iso"
         iso.write_bytes(b"x")
-        args = build_game.parser().parse_args(["-Iso", str(iso), "-Steps", "prereq,verify,extract,fork,tools"])
+        args = build_game.parser().parse_args(["-Iso", str(iso), "-Steps", "prereq,verify,extract,fork"])
         build = build_game.Build(args, root)
         seen = []
 
         def step(name, seconds=0.0, fail=False):
             def run():
-                seen.append((name, threading.current_thread().name, clock.monotonic(), "start"))
+                seen.append((name, threading.current_thread().name, clock.monotonic()))
                 clock.sleep(seconds)
-                seen.append((name, threading.current_thread().name, clock.monotonic(), "end"))
                 if fail:
                     raise ValueError(name + " broke")
                 return name + " done"
             return run
-        for name in ("prereq", "verify", "extract", "fork", "tools"):
+        for name in ("prereq", "verify", "extract", "fork"):
             setattr(build, name, step(name, **steps.get(name, {})))
         return build, seen
 
-    @staticmethod
-    def at(seen, name, what="start"):
-        return next(t for n, _thread, t, kind in seen if n == name and kind == what)
-
-    def test_the_steps_are_listed_in_the_order_they_are_waited_for(self):
+    def test_the_disc_runs_on_its_own_thread_during_prereq(self):
         with tempfile.TemporaryDirectory() as temp:
-            build, _seen = self.build(temp)
-            build.log.close()
-            self.assertEqual(build.steps, ["prereq", "fork", "tools", "verify", "extract"])
-
-    def test_with_the_sysroot_on_this_pc_the_disc_starts_at_once(self):
-        with tempfile.TemporaryDirectory() as temp:
-            build, seen = self.build(temp, sysroot=True, prereq=dict(seconds=0.4), extract=dict(seconds=0.2))
+            build, seen = self.build(temp, prereq=dict(seconds=0.4))
             self.assertEqual(build.execute(), 0)
-            threads = {n: thread for n, thread, _t, _k in seen}
-            self.assertEqual((threads["verify"], threads["extract"]), ("disc", "disc"))
+            threads = {name: thread for name, thread, _t in seen}
+            self.assertEqual(threads["verify"], "disc")
+            self.assertEqual(threads["extract"], "disc")
             self.assertNotEqual(threads["prereq"], "disc")
-            self.assertLess(self.at(seen, "extract"), self.at(seen, "prereq", "end"))
+            start = {name: t for name, _thread, t in seen}
+            self.assertLess(start["extract"], start["prereq"] + 0.4)      # began before prereq was over
             text = (Path(temp) / "T4" / "logs" / "build_game.log").read_text(encoding="utf-8")
             self.assertIn("verify done", text)
             self.assertIn("extract done", text)
-
-    def test_while_microsofts_files_are_unpacked_the_disc_waits_then_runs_beside_tools(self):
-        with tempfile.TemporaryDirectory() as temp:
-            build, seen = self.build(temp, prereq=dict(seconds=0.2), tools=dict(seconds=0.4))
-            self.assertEqual(build.execute(), 0)
-            self.assertGreaterEqual(self.at(seen, "verify"), self.at(seen, "prereq", "end"))
-            self.assertLess(self.at(seen, "extract"), self.at(seen, "tools", "end"))      # beside tools
 
     def test_a_disc_error_stops_the_build_at_its_step(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -231,9 +212,9 @@ class DiscBesideCompiler(unittest.TestCase):
             self.assertEqual(build.execute(), 1)
             text = (Path(temp) / "T4" / "logs" / "build_game.log").read_text(encoding="utf-8")
             self.assertIn("FAILED at step 'verify': verify broke", text)
-            self.assertNotIn("extract", [n for n, _thread, _t, _k in seen])
+            self.assertNotIn("fork", [name for name, _thread, _t in seen])
 
-    def test_a_source_checkout_keeps_the_old_order(self):
+    def test_a_dry_run_or_a_source_checkout_keeps_the_old_order(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "T4"
             root.mkdir()
@@ -241,9 +222,8 @@ class DiscBesideCompiler(unittest.TestCase):
             iso.write_bytes(b"x")
             build = build_game.Build(build_game.parser().parse_args(["-Iso", str(iso)]), root)
             try:
-                self.assertEqual(build.steps, list(build_game.ALL_STEPS))
                 build._disc_start()
-                self.assertIsNone(build._disc)
+                self.assertIsNone(build._disc)                    # not portable
             finally:
                 build.log.close()
 
