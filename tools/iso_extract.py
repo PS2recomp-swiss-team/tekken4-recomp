@@ -174,9 +174,12 @@ def extract(iso, rel, outdir):
     done = 0
     nextpct = 10
     h = hashlib.sha1() if os.path.basename(rel).upper() == EXPECTED_BOOT else None
+    # SHA-256 while writing: build_game records it for the launcher's online identity (no second 2.7 GB read).
+    h256 = hashlib.sha256()
     with open(part, "wb") as out:
         for d in iso.read(lba, size):
             out.write(d)
+            h256.update(d)
             if h:
                 h.update(d)
             done += len(d)
@@ -189,6 +192,7 @@ def extract(iso, rel, outdir):
         raise DiscError("extracted %s has the wrong size" % rel, 4)
     os.replace(part, dest)
     say("EXTRACTED %s %d" % (rel, size))
+    say("SHA256 %s %s" % (rel.replace("\\", "/"), h256.hexdigest()))
 
 
 def main():

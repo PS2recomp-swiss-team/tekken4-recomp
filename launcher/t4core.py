@@ -303,7 +303,7 @@ def _which(name):
 
 
 def bundled_toolchain():
-    """True when this folder carries its own compiler (release zip: toolchain\\toolchain.json, docs/RELEASE_PLAN_T4.md)."""
+    """True when this folder carries its own compiler (release zip: toolchain/toolchain.json, docs/RELEASE_PLAN_T4.md)."""
     return os.path.isfile(os.path.join(ROOT, "toolchain", "toolchain.json"))
 
 
@@ -442,8 +442,31 @@ def player_python():
     return console if os.path.isfile(console) else sys.executable
 
 
+def sysroot_dir(env=None):
+    """Microsoft's headers/libraries for this release, the same rule as tools/fetch_msvc_sysroot.py sysroot_dir:
+    toolchain/ when an earlier 0.1.3 test build put them there, else the PC's shared cache
+    (T4_MSVC_CACHE, OPENRECOMP_HOME/cache or %LOCALAPPDATA%/OpenRecomp/cache)/msvc-<16 hex of the lock's SHA-256>."""
+    env = os.environ if env is None else env
+    local = os.path.join(ROOT, "toolchain")
+    lock = os.path.join(ROOT, "tools", "msvc_sysroot.lock.json")
+    if os.path.isfile(os.path.join(local, "sysroot.json")) or not os.path.isfile(lock):
+        return local
+    if env.get("T4_MSVC_CACHE"):
+        cache = env["T4_MSVC_CACHE"]
+    elif env.get("OPENRECOMP_HOME"):
+        cache = os.path.join(env["OPENRECOMP_HOME"], "cache")
+    elif env.get("LOCALAPPDATA"):
+        cache = os.path.join(env["LOCALAPPDATA"], "OpenRecomp", "cache")
+    else:
+        return local
+    h = hashlib.sha256()
+    with open(lock, "rb") as f:
+        h.update(f.read())
+    return os.path.join(cache, "msvc-" + h.hexdigest()[:16])
+
+
 def sysroot_ready():
-    tc = os.path.join(ROOT, "toolchain")
+    tc = sysroot_dir()
     return all(os.path.isfile(os.path.join(tc, p)) for p in (
         "sysroot.json", "msvc/include/vector", "msvc/lib/x64/libcmt.lib",
         "winsdk/include/um/Windows.h", "winsdk/include/ucrt/stdio.h",

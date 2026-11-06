@@ -31,10 +31,12 @@ TITLES = {
 GAME_FILES = ("SLUS_203.28", "TEKKEN/DATA.BIN", "IRX/IOPRP243.IMG")
 
 
-def write_game_files(disc, path):
+def write_game_files(disc, path, known=None):
     """game/t4-game-files.json: size, time and SHA-256 of each game file, so the launcher's first Online login does
-    not read 2.7 GB again (it trusts an entry only while size and time still match). Reuses entries that match."""
+    not read 2.7 GB again (it trusts an entry only while size and time still match). Reuses entries that match;
+    known = {name: sha256} from iso_extract.py, hashed while the file was written (no second 2.7 GB read)."""
     old = read_json(path, {}) or {}
+    known = known or {}
     files = {}
     for name in GAME_FILES:
         file = Path(disc) / name
@@ -44,7 +46,7 @@ def write_game_files(disc, path):
         entry = old.get("files", {}).get(name) if isinstance(old.get("files"), dict) else None
         if not (isinstance(entry, dict) and entry.get("size") == stat.st_size and entry.get("mtime_ns") == stat.st_mtime_ns
                 and isinstance(entry.get("sha256"), str)):
-            entry = dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns, sha256=digest(file, "sha256"))
+            entry = dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns, sha256=known.get(name) or digest(file, "sha256"))
         files[name] = entry
     write_json(path, dict(schema=1, files=files))
 
@@ -126,14 +128,35 @@ RELEASE_DROP = {
 }
 
 
+# What a release folder's build keeps of the PC's environment: Windows' own variables, the user's folders (temporary
+# files, the shared Microsoft cache) and the build's own switches. Everything else -- a developer shell's VS 2022/2026
+# variables (VSINSTALLDIR, VCToolsInstallDir, WindowsSdkDir, UCRTVersion, INCLUDE, LIB, LIBPATH, Platform, ...),
+# compiler/linker options (CL, _CL_, LINK, CFLAGS, CCC_OVERRIDE_OPTIONS, CPATH), CMAKE_*, PYTHON*, vcpkg, Git, ProgramFiles
+# (CMake's find_* would search it) -- never reaches a release build (0.1.3: one build id and one build for everyone).
+RELEASE_KEEP = {
+    "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "USERNAME", "USERDOMAIN",
+    "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "COMPUTERNAME", "OS", "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "PROCESSOR_IDENTIFIER", "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
+    "OPENRECOMP_HOME", "T4_MSVC_CACHE", "GIT_TERMINAL_PROMPT", "TEKKEN4_BUILD_DIR", "TEKKEN4_SIMD_BASELINE",
+}
+# The old list of what was dropped (kept for the tests and for readers): all of it is outside RELEASE_KEEP.
+RELEASE_DROP = {
+    "CL", "_CL_", "LINK", "_LINK_", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "RCFLAGS", "ASMFLAGS",
+    "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CC", "CXX", "VCINSTALLDIR", "VSINSTALLDIR", "VCTOOLSINSTALLDIR",
+    "VCTOOLSVERSION", "VCTOOLSREDISTDIR", "VCIDEINSTALLDIR", "WINDOWSSDKDIR", "WINDOWSSDKVERSION", "WINDOWSSDKBINPATH",
+    "WINDOWSSDKLIBVERSION", "WINDOWSSDKVERBINPATH", "UNIVERSALCRTSDKDIR", "UCRTVERSION", "DEVENVDIR",
+    "PLATFORM", "VSCMD_ARG_TGT_ARCH", "VSCMD_ARG_HOST_ARCH", "VSCMD_VER", "VISUALSTUDIOVERSION",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "TEKKEN4_SRC", "TEKKEN4_VULIFT", "TEKKEN4_VU1N", "TEKKEN4_FORK_URL",
+    "NINJA_STATUS", "SCCACHE_DIR", "CCACHE_DIR", "CCC_OVERRIDE_OPTIONS", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
+    "WINDOWSLIBPATH", "IFCPATH", "VCPKG_ROOT", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+}
+
+
 def release_environment(env):
-    """The environment a release folder builds with: the PC's PATH is replaced by Windows' own folders (the bundled
-    tools are put in front later), every CMAKE_* and the variables above are dropped. Nothing of an installed
-    Visual Studio 2022/2026, Git, CMake, Ninja or Python can reach the build."""
-    out = {key: value for key, value in env.items()
-           if key.upper() not in RELEASE_DROP and not key.upper().startswith(("CMAKE_", "VSCMD_", "__VSCMD", "__DOTNET"))}
-    for key in [k for k in out if k.upper() == "PATH"]:
-        out.pop(key)
+    """The environment a release folder builds with: only RELEASE_KEEP of the PC's variables, and a PATH of Windows'
+    own folders (the bundled tools are put in front later). Nothing of an installed Visual Studio 2022/2026, Git,
+    CMake, Ninja or Python can reach the build."""
+    out = {key: value for key, value in env.items() if key.upper() in RELEASE_KEEP}
     system = env.get("SYSTEMROOT") or env.get("SystemRoot") or os.path.join((env.get("SYSTEMDRIVE") or "C:") + os.sep, "Windows")
     out["PATH"] = os.pathsep.join([os.path.join(system, "System32"), system, os.path.join(system, "System32", "Wbem")])
     return out
@@ -259,6 +282,7 @@ class Build:
         if not Path(argv[0]).is_absolute():
             argv[0] = shutil.which(argv[0], path=self.env.get("PATH")) or argv[0]
         self.last_lines = []
+        started = time.monotonic()
         self.log.write(f"> {subprocess.list2cmdline(argv)}   (cwd {cwd or self.root})\n")
         p = subprocess.Popen(argv, cwd=cwd or self.root, env=self.env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
@@ -277,7 +301,8 @@ class Build:
             raise
         finally:
             p.stdout.close()
-        self.log.write(f"< exit code {code}\n")
+        self.last_seconds = time.monotonic() - started
+        self.log.write(f"< exit code {code} ({self.last_seconds:.1f}s)\n")
         if code and check:
             raise ValueError(next((line for line in self.last_lines if line.startswith("ERROR:")), f"{argv[0]} failed (exit {code})"))
         return code
@@ -303,15 +328,22 @@ class Build:
             return
         tc = self.root / "toolchain"
         if self.portable:
-            self.python("fetch_msvc_sysroot.py", "--check", "--root", self.root)
+            # Microsoft's headers/libraries: one verified copy per PC for every install and update (0.1.3), see
+            # fetch_msvc_sysroot.sysroot_dir. The include/lib folders are not part of the build id.
+            sysroot = self.sysroot()
+            self.python("fetch_msvc_sysroot.py", "--check", "--root", self.root, "--sysroot", sysroot)
+            self.say("    " + (self.last_lines[-1] if self.last_lines else "Microsoft sysroot checked") + f": {sysroot}")
             directories = [self.root / "python", tc / "llvm/bin", tc / "cmake/bin", tc / "ninja"]
             self.env["PATH"] = os.pathsep.join(map(str, directories)) + os.pathsep + release_environment(self.env)["PATH"]
-            includes = [tc / "msvc/include"] + [tc / "winsdk/include" / name for name in ("ucrt", "um", "shared")]
-            if (tc / "winsdk/include/winrt").is_dir():
-                includes.append(tc / "winsdk/include/winrt")
+            includes = [sysroot / "msvc/include"] + [sysroot / "winsdk/include" / name for name in ("ucrt", "um", "shared")]
+            if (sysroot / "winsdk/include/winrt").is_dir():
+                includes.append(sysroot / "winsdk/include/winrt")
             self.env["INCLUDE"] = ";".join(map(str, includes))
-            self.env["LIB"] = ";".join(map(str, [tc / "msvc/lib/x64", tc / "winsdk/lib/ucrt/x64", tc / "winsdk/lib/um/x64"]))
+            self.env["LIB"] = ";".join(map(str, [sysroot / "msvc/lib/x64", sysroot / "winsdk/lib/ucrt/x64", sysroot / "winsdk/lib/um/x64"]))
             self.env["CC"] = self.env["CXX"] = str(tc / "llvm/bin/clang-cl.exe")
+            # clang-cl and lld-link look for an installed Visual Studio (setup API, registry) unless told where the
+            # VC tools are: the fetched sysroot, never the PC's VS 2022/2026 (headers, libraries, _MSC_VER).
+            self.env["VCToolsInstallDir"] = str(sysroot / "msvc") + os.sep
         elif (self.root / "release.json").is_file():
             raise ValueError("This release folder is missing its bundled compiler (toolchain\\toolchain.json). "
                              "Unpack the whole release zip again or install Tekken 4 fresh from the launcher.")
@@ -340,12 +372,17 @@ class Build:
             self.env["PATH"] = os.pathsep.join(map(str, extra)) + os.pathsep + self.env.get("PATH", "")
         self.compiler_ready = True
 
+    def sysroot(self):
+        import fetch_msvc_sysroot                  # only release folders have and need it
+        return fetch_msvc_sysroot.sysroot_dir(self.root, env=self.env)
+
     def prereq(self):
         self.say(f"    Python {sys.version_info.major}.{sys.version_info.minor}: {sys.executable}")
         if self.portable:
             tc = self.root / "toolchain"
             if self.a.AcceptMicrosoftLicense and not self.a.WhatIf:
-                self.python("fetch_msvc_sysroot.py", "--accept-license", "--root", self.root)
+                self.python("fetch_msvc_sysroot.py", "--accept-license", "--root", self.root, "--sysroot", self.sysroot(),
+                            echo=r"^Microsoft ")
             parts = [self.root / "python/python.exe"] + [tc / f"llvm/bin/{name}.exe" for name in ("clang-cl", "lld-link", "llvm-lib", "llvm-rc", "llvm-mt")] + [tc / "cmake/bin/cmake.exe", tc / "ninja/ninja.exe"]
             missing = [str(p) for p in parts if not p.is_file()]
             for p in parts:
@@ -413,13 +450,14 @@ class Build:
             return self.plan("extract", f"extract 4 files ({round(sum(self.iso_files.values()) / (1 << 20))} MB) into {self.disc}")
         files = sorted(self.iso_files, key=lambda name: name.endswith("DATA.BIN"))
         self.python("iso_extract.py", self.iso, self.disc, "--files", *files, echo=r"^\s+\S+ \d+%")
+        known = {m[1]: m[2] for line in self.last_lines if (m := re.fullmatch(r"SHA256 (\S+) ([0-9a-f]{64})", line))}
         if digest(self.disc / "SLUS_203.28") != EXPECTED_ELF:
             raise ValueError("extracted SLUS_203.28 has the wrong SHA-1")
         for name, size in self.iso_files.items():
             if not (self.disc / name).is_file() or (self.disc / name).stat().st_size != size:
                 raise ValueError(f"{name} was not extracted completely")
         self.record("extract", fingerprint=self.iso_fp, adopted=False)
-        write_game_files(self.disc, self.root / "game/t4-game-files.json")
+        write_game_files(self.disc, self.root / "game/t4-game-files.json", known)
         self.changed.add("extract")
         return "extracted"
 
@@ -493,8 +531,12 @@ class Build:
                         self.run_command([*base, patch])
         if runtime and not self.paths("game/vu1/micro", "*.bin"):
             self.say("WARNING: no game\\vu1\\micro bin file - building the VU1 INTERPRETER only: the fight runs about 12 fps instead of 27. Restore the captured micro memory, see docs/status.md Native VU1 port.")
-        for command in cmake_plan(self.root, self.tree, self.build_dir, runtime, self.portable, self.env):
-            self.run_command(command)
+        configure, build = cmake_plan(self.root, self.tree, self.build_dir, runtime, self.portable, self.env)
+        self.run_command(configure)
+        took = self.last_seconds
+        self.run_command(build)
+        # Where the time goes (0.1.3): in the step's output and the log.
+        self.say(f"    CMake configure {took:.1f}s, compile and link {self.last_seconds:.1f}s")
 
     def tools(self):
         head, built = self.head(), self.get("tools", "head")

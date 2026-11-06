@@ -136,3 +136,23 @@ in the release). Findings, fixed in the script:
 Measured: about 240 MB download, 757 MB installed (msvc 217 MB, winsdk 540 MB), 40-90 s. `--check` verifies offline.
 The licence texts were taken from Microsoft's pages on 2026-11-06 (Build Tools: the VS 2022 Build Tools licence
 document; SDK: learn.microsoft.com/legal/windows-sdk/license) and still need the owner's review.
+
+## 0.1.3: one shared copy per PC, never the PC's Visual Studio (2026-11-06, day)
+
+- **Shared cache.** The sysroot is unpacked once per PC into `%LOCALAPPDATA%/OpenRecomp/cache/msvc-<16 hex of the lock's
+  SHA-256>/` (`OPENRECOMP_HOME/cache` when the launcher runs with its own home; `T4_MSVC_CACHE` for tests), not into the
+  install folder. Every install, reinstall and update with the same lock uses it: nothing is downloaded twice. The
+  downloaded payloads stay in `cache/msvc-downloads/` (a damaged extraction is unpacked again without the network).
+  "Uninstall OpenRecomp completely" removes it with the rest of `%LOCALAPPDATA%/OpenRecomp`. A sysroot an earlier test
+  build put into `toolchain/` stays in use (`sysroot_dir`).
+- **Verified once.** After unpacking, every file's SHA-256 is checked against the marker and `verified.json` keeps
+  each file's size and modification time; later checks hash only files whose size or time changed (no-change rebuild:
+  37 s of hashing -> under a second). The atomic rename of the finished folder makes two builds at once safe.
+- **Faster first download.** VSIX/MSI files, then the cabinets their Media tables name, are fetched six at a time;
+  progress lines `Microsoft download N% (x of y MB)` reach the launcher's Build card.
+- **_MSC_VER pinned.** clang-cl takes `_MSC_VER` from whatever Visual Studio it finds through Windows' setup API (not
+  PATH): 19.44 with VS 2022, 19.51 with VS 2026, 19.33 with none. That is not part of the build id, so two players could
+  get the same id with differently preprocessed STL/library code. `tools/t4_toolchain_clangcl.cmake` now passes
+  `-fms-compatibility-version=19.44.35229` (the fetched CRT/STL 14.44), and `build_game.py` sets `VCToolsInstallDir` to
+  the fetched sysroot so clang-cl and lld-link never look for an installed Visual Studio. The release build keeps only
+  an allowlist of the PC's environment (`RELEASE_KEEP`).

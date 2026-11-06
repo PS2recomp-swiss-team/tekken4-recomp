@@ -10,6 +10,13 @@ set(CMAKE_AR           "${T4_TC}/llvm/bin/llvm-lib.exe")
 set(CMAKE_RC_COMPILER  "${T4_TC}/llvm/bin/llvm-rc.exe")
 set(CMAKE_MT           "${T4_TC}/llvm/bin/llvm-mt.exe")
 set(CMAKE_MAKE_PROGRAM "${T4_TC}/ninja/ninja.exe" CACHE FILEPATH "")
+# clang-cl takes _MSC_VER from whatever Visual Studio it finds on the PC (Windows' setup API, not PATH): 19.44 with VS 2022,
+# 19.51 with VS 2026, 19.33 with none -- other preprocessor branches in the STL and the libraries, so other code under the
+# same build id. Pinned to the fetched CRT/STL 14.44 (tools/msvc_sysroot.lock.json); build_game.py also points
+# VCToolsInstallDir at the fetched sysroot so clang-cl never looks for an installed Visual Studio (0.1.3).
+set(T4_MSC_VERSION "19.44.35229")
+string(APPEND CMAKE_C_FLAGS_INIT " -fms-compatibility-version=${T4_MSC_VERSION}")
+string(APPEND CMAKE_CXX_FLAGS_INIT " -fms-compatibility-version=${T4_MSC_VERSION}")
 # A clean player PC has no VC redistributable. Link our C/C++ targets to the fetched static CRT/STL.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
 set(Python3_EXECUTABLE "${T4_ROOT}/python/python.exe" CACHE FILEPATH "" FORCE)

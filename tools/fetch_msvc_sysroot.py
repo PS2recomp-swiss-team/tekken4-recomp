@@ -16,6 +16,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import urllib.parse
 import urllib.request
 import uuid
@@ -33,6 +34,35 @@ REQUIRED = (
     "winsdk/include/um/Windows.h", "winsdk/include/shared/windef.h",
     "winsdk/lib/ucrt/x64/libucrt.lib", "winsdk/lib/um/x64/kernel32.lib",
 )
+
+
+def cache_root(env=None):
+    """The PC's one shared cache for every T4 install and update (0.1.3): OPENRECOMP_HOME/cache, else
+    %LOCALAPPDATA%/OpenRecomp/cache. T4_MSVC_CACHE overrides it (tests, a PC without LOCALAPPDATA). None = no cache."""
+    env = os.environ if env is None else env
+    if env.get("T4_MSVC_CACHE"):
+        return Path(env["T4_MSVC_CACHE"])
+    if env.get("OPENRECOMP_HOME"):
+        return Path(env["OPENRECOMP_HOME"]) / "cache"
+    if env.get("LOCALAPPDATA"):
+        return Path(env["LOCALAPPDATA"]) / "OpenRecomp" / "cache"
+    return None
+
+
+def sysroot_dir(root, lock_path=None, env=None):
+    """Where this release's Microsoft headers/libraries live. A sysroot already inside the folder
+    (toolchain/sysroot.json, the first 0.1.3 test builds) stays in use; otherwise the shared cache folder of this exact
+    lock: <cache>/msvc-<first 16 hex of the lock's SHA-256> (msvc/, winsdk/, sysroot.json). Every install and update
+    with the same lock uses the same verified files: nothing is downloaded twice."""
+    root = Path(root)
+    local = root / "toolchain"
+    if (local / "sysroot.json").is_file():
+        return local
+    lock_path = Path(lock_path) if lock_path else root / "tools" / "msvc_sysroot.lock.json"
+    cache = cache_root(env)
+    if cache is None or not lock_path.is_file():
+        return local
+    return cache / ("msvc-" + sha256(lock_path)[:16])
 
 
 def license_terms(root, lock):
@@ -187,7 +217,52 @@ def make_lock(destination, channel_url, crt_version=None, sdk_version=None):
     print("Metadata lock written. Review exact payloads/licences before shipping:", destination)
 
 
-def fetch(payload, cache):
+def advance(progress, count):
+    """Count downloaded bytes; every 5 % one line "Microsoft download N% (x of y MB)" (the launcher shows the build's
+    last line). progress is a dict(done, total, phase); downloads run on several threads, so it carries its own lock."""
+    if progress is None:
+        return
+    lock = progress.setdefault("_lock", threading.Lock())
+    with lock:
+        progress["done"] = progress.get("done", 0) + count
+        total = progress.get("total") or 0
+        if not total:
+            return
+        percent = min(99, progress["done"] * 100 // total)
+        if percent // 5 != progress.get("_shown"):
+            progress["_shown"] = percent // 5
+            print("Microsoft download %s%d%% (%d of %d MB)" % (progress.get("phase", ""), percent, progress["done"] >> 20,
+                                                              total >> 20), flush=True)
+
+
+def fetch_all(payloads, cache, progress, jobs=6):
+    """Download several payloads at once (Microsoft's CDN serves each file slower than the line allows)."""
+    payloads = list({p["sha256"]: p for p in payloads}.values())
+    if len(payloads) <= 1 or jobs <= 1:
+        return {p["sha256"]: fetch(p, cache, progress) for p in payloads}
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(jobs, len(payloads))) as pool:
+        futures = {p["sha256"]: pool.submit(fetch, p, cache, progress) for p in payloads}
+        return {key: future.result() for key, future in futures.items()}
+
+
+def cabinets_of(msi, payloads):
+    """The locked cabinet payloads an MSI's Media table names (read only; extract_sdk checks the same again)."""
+    database = MsiDatabase(msi)
+    try:
+        names = [row[0] for row in database.rows("Media", ("Cabinet",)) if row[0] and not row[0].startswith("#")]
+    finally:
+        database.close()
+    out = []
+    for cabinet in names:
+        name = Path(cabinet.replace("\\", "/")).name
+        matches = [p for p in payloads if p["kind"] == "sdk-cab" and Path(p["fileName"].replace("\\", "/")).name == name]
+        if len(matches) == 1:
+            out.append(matches[0])
+    return out
+
+
+def fetch(payload, cache, progress=None):
     validate_payload(payload)
     # Short names on purpose: Windows' MSI reader and expand.exe have no long-path support, and a player's install
     # folder can be 100+ characters deep (0.1.3: "Windows MSI database error 110" at 115 characters).
@@ -196,8 +271,10 @@ def fetch(payload, cache):
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
         if sha256(destination) == payload["sha256"].lower():
+            advance(progress, payload["size"])
             return destination
-        raise ValueError("cached payload is corrupt; preserve it and choose a fresh cache: " + str(destination))
+        # A damaged download (antivirus, disk) is kept aside for diagnosis and fetched again.
+        destination.rename(destination.with_name(destination.name + ".bad-" + uuid.uuid4().hex[:8]))
     partial = destination.with_name(destination.name + ".part" + uuid.uuid4().hex[:8])
     print("Download", payload["fileName"], payload["size"], "bytes", flush=True)
     digest = hashlib.sha256()
@@ -212,6 +289,9 @@ def fetch(payload, cache):
                 raise ValueError("payload exceeds locked size")
             digest.update(chunk)
             output.write(chunk)
+            if count <= payload["size"]:
+                advance(progress, len(chunk) - max(0, count - payload["size"]))
+    advance(progress, max(0, payload["size"] - count))      # served size != listed size: totals still add up
     if digest.hexdigest() != payload["sha256"].lower():
         raise ValueError("payload size/SHA-256 mismatch: " + payload["fileName"])
     partial.rename(destination)
@@ -358,7 +438,7 @@ def validate_cabinet(path):
             safe_parts(name.decode("utf-8", errors="strict"))
 
 
-def extract_sdk(msi, payloads, cache, work, staging, downloaded):
+def extract_sdk(msi, payloads, cache, work, staging, downloaded, progress=None):
     database = MsiDatabase(msi)
     try:
         directories = {row[0]: row[1:] for row in database.rows("Directory", ("Directory", "Directory_Parent", "DefaultDir"))}
@@ -389,7 +469,7 @@ def extract_sdk(msi, payloads, cache, work, staging, downloaded):
         if len(matches) != 1:
             raise ValueError("cabinet absent/ambiguous in lock: " + name)
         payload = matches[0]
-        archive = fetch(payload, cache)
+        archive = fetch(payload, cache, progress)
         downloaded[payload["sha256"]] = payload
         validate_cabinet(archive)
         expand = Path(os.environ["SystemRoot"]) / "System32" / "expand.exe"
@@ -406,24 +486,62 @@ def extract_sdk(msi, payloads, cache, work, staging, downloaded):
         copy_one(source, staging / target)
 
 
-def check(root, lock_path):
+STAMP = "verified.json"
+
+
+def _stamp_of(path):
+    stat = path.stat()
+    return [stat.st_size, stat.st_mtime_ns]
+
+
+def check(root, lock_path, sysroot=None):
+    """Offline check of the sysroot against its marker. Each file is hashed once: verified.json keeps its size and
+    modification time from the last good hash, and a file is hashed again only when they changed (a no-change rebuild
+    used to spend 37 s here re-hashing 757 MB)."""
     license_terms(root, read_json(lock_path))
-    toolchain = root / "toolchain"
+    toolchain = Path(sysroot) if sysroot else sysroot_dir(root, lock_path)
     marker = read_json(toolchain / "sysroot.json")
     if marker.get("schema") != 1 or marker.get("lock_sha256") != sha256(lock_path) or not marker.get("license_accepted"):
         raise ValueError("sysroot marker does not match this release's Microsoft lock/licence acceptance")
+    files = marker.get("files", {})
+    lower = {name.lower() for name in files}
     for relative in REQUIRED:
-        if relative.lower() not in {name.lower() for name in marker.get("files", {})} or not (toolchain / relative).is_file():
+        if relative.lower() not in lower or not (toolchain / relative).is_file():
             raise ValueError("incomplete Microsoft sysroot: " + relative)
-    for relative, digest in marker["files"].items():
+    marker_hash = sha256(toolchain / "sysroot.json")
+    try:
+        stamp = read_json(toolchain / STAMP)
+        stamp = stamp.get("files", {}) if isinstance(stamp, dict) and stamp.get("marker") == marker_hash else {}
+    except (OSError, ValueError):
+        stamp = {}
+    fresh, hashed = {}, 0
+    for relative, digest in files.items():
         safe_parts(relative)
         path = toolchain / relative
-        if not path.is_file() or sha256(path) != digest:
+        if not path.is_file():
             raise ValueError("Microsoft sysroot integrity check failed: " + relative)
+        now = _stamp_of(path)
+        if stamp.get(relative) != now:
+            hashed += 1
+            if sha256(path) != digest:
+                raise ValueError("Microsoft sysroot integrity check failed: " + relative)
+        fresh[relative] = now
+    if hashed or set(stamp) != set(fresh):
+        temporary = toolchain / (STAMP + ".tmp" + uuid.uuid4().hex[:8])
+        try:
+            temporary.write_text(json.dumps(dict(schema=1, marker=marker_hash, files=fresh)), encoding="utf-8")
+            os.replace(temporary, toolchain / STAMP)
+        except OSError:
+            # A read-only cache still builds; it only hashes again next time.
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+    marker["_hashed"] = hashed
     return marker
 
 
-def install(root, lock_path):
+def install(root, lock_path, sysroot=None):
     if os.name != "nt":
         raise ValueError("sysroot extraction requires Windows")
     lock = read_json(lock_path)
@@ -432,19 +550,44 @@ def install(root, lock_path):
     license_terms(root, lock)
     for payload in lock["payloads"]:
         validate_payload(payload)
-    toolchain = root / "toolchain"
-    if (toolchain / "sysroot.json").exists():
-        check(root, lock_path)
-        print("Microsoft sysroot is already verified")
-        return
-    if (toolchain / "msvc").exists() or (toolchain / "winsdk").exists():
-        raise ValueError("unmarked/partial sysroot exists; keep it and use a fresh release folder")
-    work = toolchain / "sysroot-work" / uuid.uuid4().hex[:8]
+    local = Path(root) / "toolchain"
+    target = Path(sysroot) if sysroot else sysroot_dir(root, lock_path)
+    if (target / "sysroot.json").exists():
+        try:
+            check(root, lock_path, target)
+            print("Microsoft sysroot is already verified:", target, flush=True)
+            return target
+        except ValueError as error:
+            if target == local:
+                raise
+            # The shared cache was damaged (antivirus, disk): move it aside and unpack it again (payloads are kept).
+            print("Microsoft sysroot in the cache failed its check (" + str(error) + "); unpacking it again", flush=True)
+            target.rename(target.with_name(target.name + ".bad-" + uuid.uuid4().hex[:8]))
+    if target == local:
+        if (target / "msvc").exists() or (target / "winsdk").exists():
+            raise ValueError("unmarked/partial sysroot exists; keep it and use a fresh release folder")
+        base, cache = target / "sysroot-work", target / "sysroot-cache"
+    else:
+        base, cache = target.parent, target.parent / "msvc-downloads"
+    # Short folder names: Windows' MSI reader and expand.exe have no long-path support.
+    work = base / ("w" + uuid.uuid4().hex[:8])
     work.mkdir(parents=True)
-    staging = work / "staging"
+    staging = work / "s"
     staging.mkdir()
-    cache = toolchain / "sysroot-cache"
     downloaded = {}
+    # 1. the package files (VSIX, MSI), several at once; 2. the cabinets their Media tables name, several at once;
+    # 3. unpack one after the other from the cache (fetch then only checks each file's SHA-256).
+    first = [p for p in lock["payloads"] if p["kind"] != "sdk-cab"]
+    progress = dict(done=0, total=sum(p["size"] for p in first), phase="(package lists) ")
+    paths = fetch_all(first, cache, progress)
+    cabinets = []
+    for payload in first:
+        if payload["kind"] == "sdk-msi":
+            cabinets += cabinets_of(paths[payload["sha256"]], lock["payloads"])
+    cabinets = list({p["sha256"]: p for p in cabinets}.values())
+    progress = dict(done=0, total=sum(p["size"] for p in cabinets))
+    fetch_all(cabinets, cache, progress)
+    print("Microsoft files: unpacking", flush=True)
     for payload in lock["payloads"]:
         if payload["kind"] == "sdk-cab":
             continue
@@ -459,16 +602,35 @@ def install(root, lock_path):
     for relative in REQUIRED:
         if not (staging / relative).is_file():
             raise ValueError("Microsoft sysroot extraction did not produce " + relative)
+    print("Microsoft files: checking what was unpacked", flush=True)
     inventory = {p.relative_to(staging).as_posix(): sha256(p) for p in staging.rglob("*") if p.is_file()}
-    (staging / "msvc").rename(toolchain / "msvc")
-    (staging / "winsdk").rename(toolchain / "winsdk")
-    write_json(toolchain / "sysroot.json", {
+    marker = {
         "schema": 1, "architecture": "x64", "lock_sha256": sha256(lock_path),
         "crt_version": lock["crt_version"], "sdk_version": lock["sdk_version"],
         "license_accepted": True, "licenses": LICENSES, "files": inventory,
         "downloads": list(downloaded.values()),
-    })
-    print("Microsoft sysroot verified. Payload cache retained on this PC; never redistribute it.")
+    }
+    if target == local:
+        (staging / "msvc").rename(target / "msvc")
+        (staging / "winsdk").rename(target / "winsdk")
+        write_json(target / "sysroot.json", marker)
+    else:
+        final = work / "r"
+        final.mkdir()
+        (staging / "msvc").rename(final / "msvc")
+        (staging / "winsdk").rename(final / "winsdk")
+        write_json(final / "sysroot.json", marker)
+        try:
+            final.rename(target)          # atomic: a second launcher building at the same time sees all or nothing
+        except OSError:
+            if not (target / "sysroot.json").is_file():
+                raise
+            print("Another build finished the same Microsoft sysroot first; using it", flush=True)
+    check(root, lock_path, target)          # writes verified.json: later builds only compare size and time
+    shutil.rmtree(work, ignore_errors=True)
+    print("Microsoft sysroot verified:", target, flush=True)
+    print("Payload cache retained on this PC; never redistribute it.")
+    return target
 
 
 def main():
@@ -478,6 +640,8 @@ def main():
     parser.add_argument("--accept-license", action="store_true", help="the player has read and accepted the linked Microsoft terms")
     parser.add_argument("--print-license", action="store_true")
     parser.add_argument("--check", action="store_true", help="verify an existing sysroot without network access")
+    parser.add_argument("--sysroot", type=Path, help="sysroot folder (default: sysroot_dir(), the shared cache)")
+    parser.add_argument("--print-sysroot", action="store_true", help="print the sysroot folder this release uses")
     parser.add_argument("--make-lock", type=Path, help="maintainer: resolve official metadata into a new release lock")
     parser.add_argument("--channel", default=CHANNEL)
     parser.add_argument("--crt-version")
@@ -489,6 +653,9 @@ def main():
         for name, url, text in license_terms(args.root, read_json(lock_path)):
             print(name + ": " + url + "\n" + text + "\n")
         return 0
+    if args.print_sysroot:
+        print(args.sysroot or sysroot_dir(args.root, args.lock))
+        return 0
     if args.make_lock:
         make_lock(args.make_lock, args.channel, args.crt_version, args.sdk_version)
         return 0
@@ -496,12 +663,12 @@ def main():
     if not lock.is_file():
         raise ValueError("release is missing its reviewed tools/msvc_sysroot.lock.json; contact the release owner")
     if args.check:
-        check(args.root, lock)
-        print("Microsoft sysroot integrity verified")
+        marker = check(args.root, lock, args.sysroot)
+        print("Microsoft sysroot integrity verified (%d file(s) hashed)" % marker.get("_hashed", 0))
     elif not args.accept_license:
         parser.error("read --print-license, then pass --accept-license only after accepting Microsoft's terms")
     else:
-        install(args.root, lock)
+        install(args.root, lock, args.sysroot)
     return 0
 
 

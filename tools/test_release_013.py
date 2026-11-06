@@ -111,17 +111,219 @@ class PortableTree(unittest.TestCase):
             self.assertIn("/GS-", text)
 
 
+class DeveloperShell(unittest.TestCase):
+    """A developer PC: an "x64 Native Tools" prompt of VS 2022 or a VS 2026 developer shell (vcvars64's variables)."""
+
+    VCVARS = {
+        "VSINSTALLDIR": r"C:\Program Files\Microsoft Visual Studio\18\Community" "\\",
+        "VCINSTALLDIR": r"C:\Program Files\Microsoft Visual Studio\18\Community\VC" "\\",
+        "VCToolsInstallDir": r"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36000" "\\",
+        "VCToolsVersion": "14.51.36000", "WindowsSdkDir": r"C:\Program Files (x86)\Windows Kits\10" "\\",
+        "UniversalCRTSdkDir": r"C:\Program Files (x86)\Windows Kits\10" "\\", "UCRTVersion": "10.0.26100.0",
+        "WindowsSDKVersion": "10.0.26100.0\\", "WindowsLibPath": r"C:\Program Files (x86)\Windows Kits\10\UnionMetadata",
+        "INCLUDE": r"C:\VS\include", "EXTERNAL_INCLUDE": r"C:\VS\include", "LIB": r"C:\VS\lib", "LIBPATH": r"C:\VS\lib",
+        "Platform": "x64", "CommandPromptType": "Native", "VSCMD_ARG_TGT_ARCH": "x64", "VSCMD_VER": "18.0.0",
+        "__VSCMD_PREINIT_PATH": r"C:\Windows", "DevEnvDir": r"C:\VS\Common7\IDE" "\\", "IFCPATH": r"C:\VS\ifc",
+        "VCPKG_ROOT": r"C:\VS\vcpkg", "VisualStudioVersion": "18.0", "FrameworkDir": r"C:\Windows\Microsoft.NET",
+        "CL": "/DFAKE", "_CL_": "/DFAKE2", "LINK": "/FAKE", "_LINK_": "/FAKE2", "CCC_OVERRIDE_OPTIONS": "#^-DFAKE",
+        "CPATH": r"C:\fake", "PYTHONPATH": r"C:\py", "PYTHONHOME": r"C:\py", "CMAKE_GENERATOR": "Visual Studio 18 2026",
+        "ProgramFiles": r"C:\Program Files", "ProgramFiles(x86)": r"C:\Program Files (x86)",
+        "PATH": r"C:\VS\VC\Tools\MSVC\14.51.36000\bin\Hostx64\x64;C:\Program Files\Git\cmd;C:\Python313",
+        "SystemRoot": r"C:\Windows", "TEMP": r"C:\t", "LOCALAPPDATA": r"C:\Users\x\AppData\Local",
+        "OPENRECOMP_HOME": r"C:\h", "NUMBER_OF_PROCESSORS": "8",
+    }
+
+    def test_only_windows_and_the_users_folders_are_kept(self):
+        env = build_game.release_environment(self.VCVARS)
+        self.assertEqual(set(env), {"PATH", "SystemRoot", "TEMP", "LOCALAPPDATA", "OPENRECOMP_HOME", "NUMBER_OF_PROCESSORS"})
+        self.assertEqual(env["PATH"].split(os.pathsep), [r"C:\Windows\System32", r"C:\Windows", r"C:\Windows\System32\Wbem"])
+        for key in build_game.RELEASE_DROP:
+            self.assertNotIn(key.upper(), {k.upper() for k in env}, key)
+
+    def test_the_build_points_clang_at_the_fetched_sysroot_and_pins_msc_ver(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "T4"
+            fake_release(root)
+            (root / "toolchain").mkdir()
+            (root / "toolchain" / "toolchain.json").write_text("{}", encoding="utf-8")
+            args = build_game.parser().parse_args(["-Steps", "prereq"])
+            with mock.patch.dict(os.environ, self.VCVARS, clear=True), mock.patch.dict(os.environ, T4_MSVC_CACHE=temp):
+                build = build_game.Build(args, root)
+            try:
+                with mock.patch.object(build, "python", return_value=0):
+                    build.compiler_environment()
+            finally:
+                build.log.close()
+            sysroot = fetch_msvc_sysroot.sysroot_dir(root, env=dict(T4_MSVC_CACHE=temp))
+            self.assertEqual(build.env["VCToolsInstallDir"], str(sysroot / "msvc") + os.sep)
+            self.assertNotIn("Microsoft Visual Studio", build.env["INCLUDE"] + build.env["LIB"] + build.env["PATH"])
+            self.assertNotIn("CL", build.env)
+        cmake = (Path(__file__).resolve().parent / "t4_toolchain_clangcl.cmake").read_text(encoding="utf-8")
+        self.assertIn('set(T4_MSC_VERSION "19.44.35229")', cmake)
+        for lang in ("C", "CXX"):
+            self.assertIn(f'string(APPEND CMAKE_{lang}_FLAGS_INIT " -fms-compatibility-version=${{T4_MSC_VERSION}}")', cmake)
+
+
 class SysrootPaths(unittest.TestCase):
-    def test_cache_names_stay_short_for_deep_install_folders(self):
-        payload = dict(url="https://download.visualstudio.microsoft.com/x/Windows%20SDK.msi", size=10, sha256="ab" * 32,
+    def test_cache_names_stay_short_and_a_damaged_download_is_fetched_again(self):
+        import hashlib
+        import io
+        from unittest import mock
+        data = b"the real payload"
+        payload = dict(url="https://download.visualstudio.microsoft.com/x/Windows%20SDK.msi", size=len(data),
+                       sha256=hashlib.sha256(data).hexdigest(),
                        fileName="Installers\\Windows SDK for Windows Store Apps Headers OnecoreUap-x86_en-us.msi")
+
+        class Response(io.BytesIO):
+            def geturl(self):
+                return payload["url"]
+
         with tempfile.TemporaryDirectory() as temp:
             cache = Path(temp)
-            target = cache / ("ab" * 10 + ".msi")
-            target.write_bytes(b"x")
-            with self.assertRaisesRegex(ValueError, "corrupt"):
-                fetch_msvc_sysroot.fetch(payload, cache)            # found under its short name (and checked)
-        self.assertLessEqual(len(target.name), 24)
+            target = cache / (payload["sha256"][:20] + ".msi")
+            target.write_bytes(b"x")                                 # damaged (antivirus, disk)
+            with mock.patch.object(fetch_msvc_sysroot.urllib.request, "urlopen", lambda *a, **k: Response(data)):
+                progress = dict(done=0, total=len(data))
+                self.assertEqual(fetch_msvc_sysroot.fetch(payload, cache, progress), target)
+            self.assertEqual(target.read_bytes(), data)
+            self.assertEqual(progress["done"], len(data))
+            self.assertEqual(len(list(cache.glob("*.bad-*"))), 1)    # kept aside, never deleted
+            self.assertLessEqual(len(target.name), 24)
+            # found under its short name and checked: no download
+            with mock.patch.object(fetch_msvc_sysroot.urllib.request, "urlopen", side_effect=AssertionError("network")):
+                self.assertEqual(fetch_msvc_sysroot.fetch(payload, cache), target)
+
+
+def fake_release(root):
+    """A release folder with an owner-reviewed lock and licence texts."""
+    import hashlib
+    import json
+    (root / "LICENSES").mkdir(parents=True)
+    (root / "tools").mkdir()
+    terms = {}
+    for name in ("microsoft-build-tools", "microsoft-windows-sdk"):
+        text = root / "LICENSES" / (name + ".txt")
+        text.write_text("terms " + name, encoding="utf-8")
+        terms[name] = dict(path="LICENSES/" + name + ".txt", sha256=hashlib.sha256(text.read_bytes()).hexdigest(),
+                           url="https://learn.microsoft.com/x")
+    lock = root / "tools" / "msvc_sysroot.lock.json"
+    lock.write_text(json.dumps(dict(schema=1, architecture="x64", licenses=fetch_msvc_sysroot.LICENSES,
+                                    license_reviewed=True, license_terms=terms, crt_version="14.44", sdk_version="10.0",
+                                    payloads=[])), encoding="utf-8")
+    return lock
+
+
+def fake_sysroot(folder, lock):
+    import hashlib
+    import json
+    inventory = {}
+    for relative in fetch_msvc_sysroot.REQUIRED + ("msvc/include/extra.h",):
+        path = folder / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(relative.encode())
+        inventory[relative] = hashlib.sha256(relative.encode()).hexdigest()
+    (folder / "sysroot.json").write_text(json.dumps(dict(schema=1, lock_sha256=fetch_msvc_sysroot.sha256(lock),
+                                                         license_accepted=True, files=inventory)), encoding="utf-8")
+
+
+class SharedSysroot(unittest.TestCase):
+    """0.1.3: Microsoft's files are downloaded and verified once per PC, for every install and update."""
+
+    def test_one_folder_per_lock_in_the_shared_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "T4"
+            lock = fake_release(root)
+            name = "msvc-" + fetch_msvc_sysroot.sha256(lock)[:16]
+            local = Path(r"C:\Users\x\AppData\Local")
+            self.assertEqual(fetch_msvc_sysroot.sysroot_dir(root, env=dict(LOCALAPPDATA=str(local))),
+                             local / "OpenRecomp" / "cache" / name)
+            self.assertEqual(fetch_msvc_sysroot.sysroot_dir(root, env=dict(LOCALAPPDATA=str(local), OPENRECOMP_HOME=r"E:\h")),
+                             Path(r"E:\h") / "cache" / name)
+            self.assertEqual(fetch_msvc_sysroot.sysroot_dir(root, env=dict(T4_MSVC_CACHE=r"E:\c", OPENRECOMP_HOME=r"E:\h")),
+                             Path(r"E:\c") / name)
+            self.assertEqual(fetch_msvc_sysroot.sysroot_dir(root, env={}), root / "toolchain")
+            # a sysroot an earlier 0.1.3 test build put into the folder stays in use
+            fake_sysroot(root / "toolchain", lock)
+            self.assertEqual(fetch_msvc_sysroot.sysroot_dir(root, env=dict(LOCALAPPDATA=str(local))), root / "toolchain")
+
+    def test_the_launchers_rule_is_the_same(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "launcher"))
+        try:
+            import t4core
+        finally:
+            sys.path.pop(0)
+        root = Path(t4core.ROOT)
+        for env in (dict(LOCALAPPDATA=r"C:\L"), dict(OPENRECOMP_HOME=r"E:\h", LOCALAPPDATA=r"C:\L"), dict(T4_MSVC_CACHE=r"E:\c")):
+            self.assertEqual(Path(t4core.sysroot_dir(env)), fetch_msvc_sysroot.sysroot_dir(root, env=env))
+
+    def test_each_file_is_hashed_once_and_again_only_when_it_changed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "T4"
+            lock = fake_release(root)
+            sysroot = Path(temp) / "cache" / "msvc-x"
+            fake_sysroot(sysroot, lock)
+            count = len(fetch_msvc_sysroot.REQUIRED) + 1
+            self.assertEqual(fetch_msvc_sysroot.check(root, lock, sysroot)["_hashed"], count)
+            self.assertEqual(fetch_msvc_sysroot.check(root, lock, sysroot)["_hashed"], 0)     # stamp: no hashing
+            header = sysroot / "msvc/include/extra.h"
+            os.utime(header, ns=(1, 1))
+            self.assertEqual(fetch_msvc_sysroot.check(root, lock, sysroot)["_hashed"], 1)
+            header.write_bytes(b"changed!!!!!!!!!!!!!!!!")
+            with self.assertRaisesRegex(ValueError, "integrity"):
+                fetch_msvc_sysroot.check(root, lock, sysroot)
+            header.unlink()
+            with self.assertRaisesRegex(ValueError, "integrity"):
+                fetch_msvc_sysroot.check(root, lock, sysroot)
+
+    def test_a_second_install_or_update_uses_the_cache_without_network(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            cache = Path(temp) / "cache"
+            first, second = Path(temp) / "a" / "T4", Path(temp) / "an update" / "T4"
+            lock = fake_release(first)
+            fake_release(second)
+            sysroot = fetch_msvc_sysroot.sysroot_dir(first, env=dict(T4_MSVC_CACHE=str(cache)))
+            self.assertEqual(sysroot, fetch_msvc_sysroot.sysroot_dir(second, env=dict(T4_MSVC_CACHE=str(cache))))
+            fake_sysroot(sysroot, lock)
+            with mock.patch.object(fetch_msvc_sysroot.urllib.request, "urlopen", side_effect=AssertionError("network")), \
+                    mock.patch.dict(os.environ, T4_MSVC_CACHE=str(cache)):
+                self.assertEqual(fetch_msvc_sysroot.install(second, second / "tools" / "msvc_sysroot.lock.json"), sysroot)
+            self.assertFalse((second / "toolchain").exists())          # nothing copied into the install
+
+    def test_build_game_compiles_against_the_shared_sysroot(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "T4"
+            lock = fake_release(root)
+            (root / "toolchain").mkdir()
+            (root / "toolchain" / "toolchain.json").write_text("{}", encoding="utf-8")
+            cache = Path(temp) / "cache"
+            args = build_game.parser().parse_args(["-Steps", "prereq"])
+            with mock.patch.dict(os.environ, T4_MSVC_CACHE=str(cache)):
+                build = build_game.Build(args, root)
+            try:
+                with mock.patch.object(build, "python", return_value=0):
+                    build.compiler_environment()
+            finally:
+                build.log.close()
+            sysroot = cache / ("msvc-" + fetch_msvc_sysroot.sha256(lock)[:16])
+            self.assertEqual(build.env["INCLUDE"].split(";")[0], str(sysroot / "msvc/include"))
+            self.assertIn(str(sysroot / "winsdk/lib/um/x64"), build.env["LIB"].split(";"))
+
+
+class ExtractHashesOnce(unittest.TestCase):
+    def test_the_sha256_from_the_extraction_is_used(self):
+        import json
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            disc = Path(temp) / "disc"
+            (disc / "TEKKEN").mkdir(parents=True)
+            (disc / "TEKKEN" / "DATA.BIN").write_bytes(b"data")
+            record = Path(temp) / "r.json"
+            with mock.patch.object(build_game, "digest", side_effect=AssertionError("read again")):
+                build_game.write_game_files(disc, record, {"TEKKEN/DATA.BIN": "a" * 64})
+            self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["files"]["TEKKEN/DATA.BIN"]["sha256"], "a" * 64)
 
 
 if __name__ == "__main__":
