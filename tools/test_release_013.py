@@ -70,6 +70,31 @@ class ReleaseEnvironment(unittest.TestCase):
         self.assertIn("-DPS2X_BUILD_ANALYZER=OFF", configure)
 
 
+class GameFilesRecord(unittest.TestCase):
+    def test_the_record_holds_each_files_sha256_and_reuses_matching_entries(self):
+        import hashlib
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            disc = Path(temp) / "disc"
+            (disc / "TEKKEN").mkdir(parents=True)
+            (disc / "IRX").mkdir()
+            for name, data in (("SLUS_203.28", b"elf"), ("TEKKEN/DATA.BIN", b"data"), ("IRX/IOPRP243.IMG", b"irx")):
+                (disc / name).write_bytes(data)
+            record = Path(temp) / "t4-game-files.json"
+            build_game.write_game_files(disc, record)
+            files = json.loads(record.read_text(encoding="utf-8"))["files"]
+            self.assertEqual(files["TEKKEN/DATA.BIN"]["sha256"], hashlib.sha256(b"data").hexdigest())
+            # a matching entry is reused (no read); a changed file gets a new hash
+            files["SLUS_203.28"]["sha256"] = "f" * 64
+            record.write_text(json.dumps(dict(schema=1, files=files)), encoding="utf-8")
+            build_game.write_game_files(disc, record)
+            self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["files"]["SLUS_203.28"]["sha256"], "f" * 64)
+            os.utime(disc / "SLUS_203.28", ns=(7, 7))
+            build_game.write_game_files(disc, record)
+            self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["files"]["SLUS_203.28"]["sha256"],
+                             hashlib.sha256(b"elf").hexdigest())
+
+
 class PortableTree(unittest.TestCase):
     def test_qspectre_off_switch_is_dropped_for_clang_cl(self):
         with tempfile.TemporaryDirectory() as temp:

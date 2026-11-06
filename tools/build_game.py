@@ -27,6 +27,28 @@ TITLES = {
 }
 
 
+# The files the game reads from the ISO and the launcher's online identity hashes (0.1.3: game files, not the ISO).
+GAME_FILES = ("SLUS_203.28", "TEKKEN/DATA.BIN", "IRX/IOPRP243.IMG")
+
+
+def write_game_files(disc, path):
+    """game/t4-game-files.json: size, time and SHA-256 of each game file, so the launcher's first Online login does
+    not read 2.7 GB again (it trusts an entry only while size and time still match). Reuses entries that match."""
+    old = read_json(path, {}) or {}
+    files = {}
+    for name in GAME_FILES:
+        file = Path(disc) / name
+        if not file.is_file():
+            continue
+        stat = file.stat()
+        entry = old.get("files", {}).get(name) if isinstance(old.get("files"), dict) else None
+        if not (isinstance(entry, dict) and entry.get("size") == stat.st_size and entry.get("mtime_ns") == stat.st_mtime_ns
+                and isinstance(entry.get("sha256"), str)):
+            entry = dict(size=stat.st_size, mtime_ns=stat.st_mtime_ns, sha256=digest(file, "sha256"))
+        files[name] = entry
+    write_json(path, dict(schema=1, files=files))
+
+
 def parse_steps(values):
     steps = [part.strip().lower() for value in (values or []) for part in value.split(",") if part.strip()]
     if not steps:
@@ -384,6 +406,8 @@ class Build:
         if not self.a.Force and have and (not recorded or recorded == self.iso_fp):
             if not recorded:
                 self.record("extract", fingerprint=self.iso_fp, adopted=True)
+            if not self.a.WhatIf:
+                write_game_files(self.disc, self.root / "game/t4-game-files.json")
             return "up to date"
         if self.a.WhatIf:
             return self.plan("extract", f"extract 4 files ({round(sum(self.iso_files.values()) / (1 << 20))} MB) into {self.disc}")
@@ -395,6 +419,7 @@ class Build:
             if not (self.disc / name).is_file() or (self.disc / name).stat().st_size != size:
                 raise ValueError(f"{name} was not extracted completely")
         self.record("extract", fingerprint=self.iso_fp, adopted=False)
+        write_game_files(self.disc, self.root / "game/t4-game-files.json")
         self.changed.add("extract")
         return "extracted"
 
