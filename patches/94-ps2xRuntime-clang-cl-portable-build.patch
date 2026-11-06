@@ -1,0 +1,29 @@
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 013bcc2..fe8e499 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -14,6 +14,11 @@ if(PS2X_SIMD_BASELINE AND MSVC)
+     add_compile_definitions(PS2X_SIMD_BASELINE)
+     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_simd_baseline.h>")
+ endif()
++# Tekken 4 port (0.1.3, bundled clang-cl): MSVC compiles the SSE4.1/SSSE3 intrinsics without an /arch switch, clang
++# needs the target feature. Never with PS2X_SIMD_BASELINE (SSE2-only PCs: those intrinsics are replaced there).
++if(NOT PS2X_SIMD_BASELINE AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
++    add_compile_options(-msse4.1)
++endif()
+ option(PS2X_ENABLE_RUNNER_PCH "Precompile the heavy runtime headers for ps2EntryRunner" ON)
+ option(PS2X_ENABLE_SCCACHE "Use sccache as compiler launcher when available" ON)
+ 
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_native.inl b/ps2xRuntime/src/lib/vu/ps2_vu1_native.inl
+index 940cb2e..87583ec 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_native.inl
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_native.inl
+@@ -666,7 +666,7 @@ void VU1NativeAccess::codeChanged(VU1Interpreter::NativeState &ns, const uint8_t
+ {
+     using NS = VU1Interpreter::NativeState;
+     constexpr uint32_t kPairs = sizeof(ns.code) / 8u;
+-    static_assert(kPairs == std::size(ns.slots));
++    static_assert(kPairs == std::extent_v<decltype(NS::slots)>);
+     ++ns.codeChanges;
+     if (!ns.codeValid)
+     {

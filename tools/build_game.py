@@ -19,7 +19,7 @@ EXPECTED_ELF = "a4b7dde20a2918c550badd127a245db155c36815"
 PINNED = "eb8688b2fd191129f103a39543002c005b33409c"
 ALL_STEPS = ("prereq", "verify", "extract", "fork", "tools", "recomp", "stage", "runtime")
 TITLES = {
-    "prereq": "Python 3, Git, VS 2022 Build Tools (C++), CMake, Ninja",
+    "prereq": "bundled compiler (clang-cl, lld-link, CMake, Ninja, Python) or, in a source checkout, Git + VS + CMake + Ninja",
     "extract": "SYSTEM.CNF, SLUS_203.28, IRX\\IOPRP243.IMG, TEKKEN\\DATA.BIN -> game\\disc",
     "tools": "PS2Recomp host tools (ps2_recomp.exe)",
     "recomp": "ps2_recomp.exe config\\ghidra_export.toml -> generated\\",
@@ -90,6 +90,33 @@ def visual_studio_environment(vcvars):
     return subprocess.run(command, capture_output=True, text=True, check=True, creationflags=NO_WINDOW).stdout
 
 
+# Variables of the PC that would change what a release folder compiles (and so its build id) or point the build at
+# the PC's own Visual Studio / Git / CMake: never passed on in a release folder (0.1.3: one build id for everyone).
+# CL/_CL_/LINK/_LINK_ add compiler/linker options (clang-cl reads them too); CFLAGS & co. become CMake's flags.
+RELEASE_DROP = {
+    "CL", "_CL_", "LINK", "_LINK_", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "RCFLAGS", "ASMFLAGS",
+    "INCLUDE", "LIB", "LIBPATH", "EXTERNAL_INCLUDE", "CC", "CXX", "VCINSTALLDIR", "VSINSTALLDIR", "VCTOOLSINSTALLDIR",
+    "VCTOOLSVERSION", "VCTOOLSREDISTDIR", "VCIDEINSTALLDIR", "WINDOWSSDKDIR", "WINDOWSSDKVERSION", "WINDOWSSDKBINPATH",
+    "WINDOWSSDKLIBVERSION", "WINDOWSSDKVERBINPATH", "UNIVERSALCRTSDKDIR", "UCRTVERSION", "DEVENVDIR",
+    "PLATFORM", "VSCMD_ARG_TGT_ARCH", "VSCMD_ARG_HOST_ARCH", "VSCMD_VER", "VISUALSTUDIOVERSION",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "TEKKEN4_SRC", "TEKKEN4_VULIFT", "TEKKEN4_VU1N", "TEKKEN4_FORK_URL",
+    "NINJA_STATUS", "SCCACHE_DIR", "CCACHE_DIR",
+}
+
+
+def release_environment(env):
+    """The environment a release folder builds with: the PC's PATH is replaced by Windows' own folders (the bundled
+    tools are put in front later), every CMAKE_* and the variables above are dropped. Nothing of an installed
+    Visual Studio 2022/2026, Git, CMake, Ninja or Python can reach the build."""
+    out = {key: value for key, value in env.items()
+           if key.upper() not in RELEASE_DROP and not key.upper().startswith(("CMAKE_", "VSCMD_", "__VSCMD", "__DOTNET"))}
+    for key in [k for k in out if k.upper() == "PATH"]:
+        out.pop(key)
+    system = env.get("SYSTEMROOT") or env.get("SystemRoot") or os.path.join((env.get("SYSTEMDRIVE") or "C:") + os.sep, "Windows")
+    out["PATH"] = os.pathsep.join([os.path.join(system, "System32"), system, os.path.join(system, "System32", "Wbem")])
+    return out
+
+
 def stage_generated(root, tree):
     gen, runtime = root / "generated", tree / "ps2xRuntime"
     if not (gen / "register_functions.cpp").is_file():
@@ -153,7 +180,9 @@ def cmake_plan(root, tree, build_dir, runtime, portable, env):
                       "-DPS2X_VU0_MICROCODE_DIR=" + (micro0.as_posix() if any(micro0.glob("*.bin")) else ""),
                       "-DPS2X_SIMD_BASELINE=" + ("ON" if simd_baseline(env) else "OFF")]
     else:
-        configure += ["-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_TEST=OFF", "-DPS2X_BUILD_STUDIO=OFF"]
+        # The analyzer is a maintainer tool and the only user of nlohmann_json (not vendored in the release).
+        configure += ["-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_TEST=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+                      "-DPS2X_BUILD_ANALYZER=OFF"]
     build = [cmake, "--build", str(out)]
     if runtime:
         build += ["--target", "ps2EntryRunner"]
@@ -165,8 +194,10 @@ class Build:
         self.a, self.root = args, Path(root).resolve()
         self.steps = parse_steps(args.Steps)
         self.env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
-        self.tree = build_tree(self.root, self.env)
         self.portable = (self.root / "toolchain/toolchain.json").is_file()
+        if self.portable:
+            self.env = release_environment(self.env)
+        self.tree = build_tree(self.root, self.env)
         self.vendored = (self.tree / ".t4-vendored.json").is_file()
         self.build_dir = self.env.get("TEKKEN4_BUILD_DIR") or "runtime"
         self.recomp = self.tree / "out/tools/ps2xRecomp/ps2_recomp.exe"
@@ -252,13 +283,16 @@ class Build:
         if self.portable:
             self.python("fetch_msvc_sysroot.py", "--check", "--root", self.root)
             directories = [self.root / "python", tc / "llvm/bin", tc / "cmake/bin", tc / "ninja"]
-            self.env["PATH"] = os.pathsep.join(map(str, directories)) + os.pathsep + self.env.get("PATH", "")
+            self.env["PATH"] = os.pathsep.join(map(str, directories)) + os.pathsep + release_environment(self.env)["PATH"]
             includes = [tc / "msvc/include"] + [tc / "winsdk/include" / name for name in ("ucrt", "um", "shared")]
             if (tc / "winsdk/include/winrt").is_dir():
                 includes.append(tc / "winsdk/include/winrt")
             self.env["INCLUDE"] = ";".join(map(str, includes))
             self.env["LIB"] = ";".join(map(str, [tc / "msvc/lib/x64", tc / "winsdk/lib/ucrt/x64", tc / "winsdk/lib/um/x64"]))
             self.env["CC"] = self.env["CXX"] = str(tc / "llvm/bin/clang-cl.exe")
+        elif (self.root / "release.json").is_file():
+            raise ValueError("This release folder is missing its bundled compiler (toolchain\\toolchain.json). "
+                             "Unpack the whole release zip again or install Tekken 4 fresh from the launcher.")
         else:
             drive = Path(self.env.get("SYSTEMDRIVE", "C:") + os.sep)
             vswhere = Path(self.env.get("PROGRAMFILES(X86)", str(drive / "Program Files (x86)"))) / "Microsoft Visual Studio/Installer/vswhere.exe"
@@ -304,6 +338,9 @@ class Build:
                 raise ValueError(f"{len(missing)} part(s) of the bundled toolchain missing, see above")
             self.compiler_environment()
             return "ok (bundled)"
+        if (self.root / "release.json").is_file():
+            raise ValueError("This release folder is missing its bundled compiler (toolchain\\toolchain.json). "
+                             "Unpack the whole release zip again or install Tekken 4 fresh from the launcher.")
         if not shutil.which("git"):
             raise ValueError("Git (clones PS2Recomp and builds fetch their libraries with it) is missing. Install Git and restart the launcher.")
         self.say(f"    Git: {shutil.which('git')}")
@@ -482,6 +519,11 @@ class Build:
             self.say("    NOTE: the netplay build id could not be written: online matches will refuse this build.")
 
     def runtime(self):
+        # The micro images are inputs of the fingerprint below: make them first, so a second Build with nothing
+        # changed says "up to date" (0.1.3; they used to appear only after the fingerprint was taken).
+        if not self.a.WhatIf and (not self.paths("game/vu1/micro", "*.bin") or not self.paths("game/vu0/micro", "*.bin")):
+            if self.python("vu1_micro_from_elf.py", self.disc / "SLUS_203.28", self.root / "game/vu1/micro", self.root / "game/vu0/micro", check=False):
+                self.say("    NOTE: the VU1 micro image could not be built: the runtime gets the VU1 interpreter only (about 12 fps in a fight).")
         # A resumed player build must also pick up changed compiler/CMake options.
         configuration = sha_text("\n".join(cmake_plan(self.root, self.tree, self.build_dir, True, self.portable, self.env)[0]))
         fp = sha_text(f"{self.get('stage', 'fingerprint') or ''}|{fingerprint(self.paths('patches', '*.patch'))}|{fingerprint(self.paths('game/vu1/micro', '*.bin'))}|{fingerprint(self.paths('game/vu0/micro', '*.bin'))}|{fingerprint(self.paths('tools/vu', '*.py'))}|{fingerprint(self.paths('runtime', '*.cpp', True))}|{self.head()}|{self.build_dir}|{self.env.get('TEKKEN4_VULIFT', '')}|{simd_baseline(self.env)}|{configuration}")
@@ -491,9 +533,6 @@ class Build:
             return "up to date"
         if self.a.WhatIf:
             return self.plan("runtime", "run tools\\build_runtime_portable.cmd (cmake + ninja, 10-40 minutes the first time)" if self.portable else "run tools\\build_runtime.cmd (cmake + ninja, 10-40 minutes the first time)")
-        if not self.paths("game/vu1/micro", "*.bin") or not self.paths("game/vu0/micro", "*.bin"):
-            if self.python("vu1_micro_from_elf.py", self.disc / "SLUS_203.28", self.root / "game/vu1/micro", self.root / "game/vu0/micro", check=False):
-                self.say("    NOTE: the VU1 micro image could not be built: the runtime gets the VU1 interpreter only (about 12 fps in a fight).")
         self.say("    this is the long step (several hundred C++ files); progress is in the log")
         self.compile(True)
         if not self.runner.is_file():

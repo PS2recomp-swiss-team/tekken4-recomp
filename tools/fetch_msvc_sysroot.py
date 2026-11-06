@@ -151,6 +151,13 @@ def make_lock(destination, channel_url, crt_version=None, sdk_version=None):
         "Windows SDK Desktop Headers x64-x86_en-us.msi",
         "Windows SDK Desktop Libs x64-x86_en-us.msi",
         "Windows SDK for Windows Store Apps Headers-x86_en-us.msi",
+        # SDK 10.0.26100 moved windef.h/minwindef.h & co. (include/shared) into this package.
+        "Windows SDK for Windows Store Apps Headers OnecoreUap-x86_en-us.msi",
+        # ... and kernel32.lib, user32.lib & co. (lib/um/x64) into this one.
+        "Windows SDK for Windows Store Apps Libs-x86_en-us.msi",
+        # windowsx.h (include/shared) and other OneCore desktop headers.
+        "Windows SDK OnecoreUap Headers x86-x86_en-us.msi",
+        "Windows SDK OnecoreUap Headers x64-x86_en-us.msi",
         "Universal CRT Headers Libraries and Sources-x86_en-us.msi",
     )
     for suffix in wanted:
@@ -182,13 +189,16 @@ def make_lock(destination, channel_url, crt_version=None, sdk_version=None):
 
 def fetch(payload, cache):
     validate_payload(payload)
-    destination = cache / payload["sha256"].lower() / Path(payload["fileName"].replace("\\", "/")).name
+    # Short names on purpose: Windows' MSI reader and expand.exe have no long-path support, and a player's install
+    # folder can be 100+ characters deep (0.1.3: "Windows MSI database error 110" at 115 characters).
+    suffix = Path(payload["fileName"].replace("\\", "/")).suffix.lower()
+    destination = cache / (payload["sha256"].lower()[:20] + suffix)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
-        if destination.stat().st_size == payload["size"] and sha256(destination) == payload["sha256"].lower():
+        if sha256(destination) == payload["sha256"].lower():
             return destination
         raise ValueError("cached payload is corrupt; preserve it and choose a fresh cache: " + str(destination))
-    partial = destination.with_name(destination.name + ".partial-" + uuid.uuid4().hex)
+    partial = destination.with_name(destination.name + ".part" + uuid.uuid4().hex[:8])
     print("Download", payload["fileName"], payload["size"], "bytes", flush=True)
     digest = hashlib.sha256()
     count = 0
@@ -196,11 +206,13 @@ def fetch(payload, cache):
         official_url(response.geturl())
         for chunk in iter(lambda: response.read(1024 * 1024), b""):
             count += len(chunk)
-            if count > payload["size"]:
+            # The manifest's "size" is not always the served byte count (VSIX: 2,128,977 listed,
+            # 2,116,223 served, same SHA-256): it only bounds the download; the SHA-256 decides.
+            if count > payload["size"] * 2 + (16 << 20):
                 raise ValueError("payload exceeds locked size")
             digest.update(chunk)
             output.write(chunk)
-    if count != payload["size"] or digest.hexdigest() != payload["sha256"].lower():
+    if digest.hexdigest() != payload["sha256"].lower():
         raise ValueError("payload size/SHA-256 mismatch: " + payload["fileName"])
     partial.rename(destination)
     return destination
@@ -367,7 +379,7 @@ def extract_sdk(msi, payloads, cache, work, staging, downloaded):
         if name not in (".", "SourceDir", "TARGETDIR", ""):
             result.extend(safe_parts(name))
         return result
-    expanded = work / (msi.stem + "-" + uuid.uuid4().hex)
+    expanded = work / ("x" + uuid.uuid4().hex[:8])
     expanded.mkdir(parents=True)
     for cabinet in cabinets:
         if cabinet.startswith("#"):
@@ -427,7 +439,7 @@ def install(root, lock_path):
         return
     if (toolchain / "msvc").exists() or (toolchain / "winsdk").exists():
         raise ValueError("unmarked/partial sysroot exists; keep it and use a fresh release folder")
-    work = toolchain / "sysroot-work" / uuid.uuid4().hex
+    work = toolchain / "sysroot-work" / uuid.uuid4().hex[:8]
     work.mkdir(parents=True)
     staging = work / "staging"
     staging.mkdir()

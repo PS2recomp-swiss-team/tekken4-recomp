@@ -51,7 +51,9 @@ def scan_name(name, size):
         "deps/ps2recomp/ps2xruntime/include/ps2_recompiled_functions.h",
         "deps/ps2recomp/ps2xruntime/include/ps2_recompiled_stubs.h",
     }
-    if any(part in BAD_PARTS for part in parts) or (parts[-1] in BAD_NAMES and not placeholder) or p.suffix.lower() in BAD_SUFFIXES:
+    # Rabbitizer's own sources keep enum tables in folders named "generated" (upstream, not game code).
+    checked_parts = [q for q in parts if q != "generated"] if parts[:3] == ["deps", "fetch", "rabbitizer"] else parts
+    if any(part in BAD_PARTS for part in checked_parts) or (parts[-1] in BAD_NAMES and not placeholder) or p.suffix.lower() in BAD_SUFFIXES:
         raise ValueError("forbidden release path: " + name)
     if re.search(r"(?:slus|sces|scus|sles)[_.-]?\d{3}[_.-]?\d{2}", parts[-1]):
         raise ValueError("disc executable name: " + name)
@@ -242,7 +244,8 @@ def package(a):
     for name in ("LICENSE", "README.md", "START_HIER.txt", "Tekken4.cmd"):
         shutil.copy2(ROOT / name, stage / name)
     for name in ("config", "runtime", "patches", "docs"):
-        copy_tree(ROOT / name, stage / name, {"__pycache__"})
+        # runtime/pal is the PAL cousin's reference source; the US build never stages it (0.1.2 zip had none).
+        copy_tree(ROOT / name, stage / name, {"__pycache__", "pal"} if name == "runtime" else {"__pycache__"})
     for name in ("t4core.py", "t4_launcher.pyw", "COPIED_FROM_T5DR.txt"):
         target = stage / "launcher" / name
         target.parent.mkdir(parents=True, exist_ok=True)

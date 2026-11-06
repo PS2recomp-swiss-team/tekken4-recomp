@@ -119,3 +119,20 @@ Set `license_reviewed` to true only after review, and populate these records in 
 Supply those exact UTF-8 texts as the matching licence inputs to the packager. The launcher displays both complete
 texts in a scrollable window before acceptance; `--print-license` prints them for command-line users. The installer
 and offline checker verify their hashes. Missing/unreviewed/changed terms stop the fetch before any payload request.
+
+## 0.1.3: first real run (2026-11-06)
+
+The fetcher ran for real for the first time (lock CRT 14.44.17.14, SDK 10.0.26100, `tools/msvc_sysroot.lock.json`
+in the release). Findings, fixed in the script:
+
+- The VS manifest's `size` is not always the served byte count (a VSIX listed 2,128,977 bytes was served as
+  2,116,223 with the listed SHA-256): the SHA-256 decides, the size only bounds the download.
+- SDK 10.0.26100 spreads what the build needs over more MSIs: `windef.h` and the other `include/shared` headers come
+  from "Windows SDK for Windows Store Apps Headers OnecoreUap", `kernel32.lib` & co. from "Windows SDK for Windows
+  Store Apps Libs", `windowsx.h` from "Windows SDK OnecoreUap Headers x86/x64". All four are in the lock now.
+- Windows' MSI reader and expand.exe have no long-path support: cache and work files use short names
+  (20 hex digits of the SHA-256), so install folders of 115 characters work.
+
+Measured: about 240 MB download, 757 MB installed (msvc 217 MB, winsdk 540 MB), 40-90 s. `--check` verifies offline.
+The licence texts were taken from Microsoft's pages on 2026-11-06 (Build Tools: the VS 2022 Build Tools licence
+document; SDK: learn.microsoft.com/legal/windows-sdk/license) and still need the owner's review.

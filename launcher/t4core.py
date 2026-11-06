@@ -190,7 +190,7 @@ def us_tree(root=None):
 
 def ps2recomp_tree():
     """Same rule as tools\\build_game.ps1: TEKKEN4_SRC, else a vendored deps\\ps2recomp (release), else us_tree()."""
-    if bundled_toolchain():
+    if bundled_toolchain() or IS_RELEASE:
         return os.path.join(ROOT, "deps", "ps2recomp")
     if os.environ.get("TEKKEN4_SRC"):
         return os.path.abspath(os.environ["TEKKEN4_SRC"])
@@ -216,9 +216,24 @@ def find_runtime(s=None):
     cands.append((os.path.join(ps2recomp_tree(), "out", build_dir, "ps2xRuntime", "ps2EntryRunner.exe"), "build tree"))
     cands.append((os.path.join(ROOT, "bin", "ps2EntryRunner.exe"), "bin folder"))
     for path, why in cands:
-        if path and os.path.isfile(path):
-            return os.path.abspath(path), why
+        if not path or not os.path.isfile(path):
+            continue
+        # A release folder only ever runs its own build. A settings.json / build state copied from another folder
+        # (old install, dev tree, Pictures	ekken4) names an exe there: never start that one (0.1.3).
+        if why != "T4_LAUNCHER_RUNTIME" and (IS_RELEASE or bundled_toolchain()) and not inside_root(path):
+            continue
+        return os.path.abspath(path), why
     return None, "the game is not built yet: use the Build game tab"
+
+
+def inside_root(path):
+    """True when `path` is in this T4 folder (case-insensitive, after resolving links and ..)."""
+    try:
+        here = os.path.normcase(os.path.realpath(ROOT))
+        there = os.path.normcase(os.path.realpath(path))
+        return os.path.commonpath((here, there)) == here
+    except ValueError:          # another drive
+        return False
 
 
 def find_isos():

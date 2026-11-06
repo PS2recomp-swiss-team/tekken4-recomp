@@ -21,3 +21,12 @@ def prepare(root, tree):
     if count != 1:
         raise ValueError("pinned FFmpeg CMake declaration changed; review before packaging")
     path.write_text(text, encoding="utf-8", newline="\n")
+    # The release compiles with the bundled clang-cl, which has /Qspectre but no "/Qspectre-" (off is its default):
+    # drop that one MSVC-only flag from the Release options (host tools only; the game runtime is RelWithDebInfo
+    # and never gets these options).
+    release_mode = tree / "ps2xRuntime" / "cmake" / "ReleaseMode.cmake"
+    text = release_mode.read_text(encoding="utf-8")
+    text, count = re.subn(r"^[ \t]*/Qspectre-[^\n]*\n", "", text, flags=re.M)
+    if count != 1:
+        raise ValueError("pinned ReleaseMode.cmake changed; review before packaging")
+    release_mode.write_text(text, encoding="utf-8", newline="\n")

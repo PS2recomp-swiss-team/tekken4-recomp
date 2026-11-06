@@ -1,6 +1,7 @@
 """Build identity comparison and the T4TEST1 two-way UDP player preflight."""
 import contextlib
 import datetime
+import hashlib
 import io
 import ipaddress
 import json
@@ -23,7 +24,7 @@ RULES = {
 REMEDIES = {
     "build_id": "Use the same test zip and build configuration, then rebuild both runtimes.",
     "compiler": "Install/select the same exact MSVC C++ toolset (or the same portable compiler), then rebuild both.",
-    "iso_sha256": "Use matching, verified US SLUS-20328 v1.00 disc images. Each player supplies their own ISO.",
+    "iso_sha256": "The game files from the ISO differ: each player needs a clean US SLUS-20328 v1.00 disc image.",
     "elf_sha1": "Re-extract and rebuild from the matching verified US ISO.",
     "net": "Use the same test zip and rebuild both runtimes.",
     "strict_hello": "Use the same TEKKEN4_NET_STRICT_HELLO setting on both PCs, or clear it on both.",
@@ -45,7 +46,7 @@ def identity(value):
     return safe
 
 
-def new_identity(stamp_path, iso_path, env=None):
+def new_identity(stamp_path, iso_path, env=None, root=None):
     env = os.environ if env is None else env
     if not Path(stamp_path).is_file():
         raise ValueError("invalid_identity: t4net_build.json is missing. Rebuild the same runtime on both PCs; do not reuse an old build stamp.")
@@ -63,11 +64,29 @@ def new_identity(stamp_path, iso_path, env=None):
         raise ValueError("invalid_identity: compiler version missing in t4net_build.json. Rebuild the runtime.")
     compiler = ids[0] + " " + versions[0]
     print(f"Compiler: {compiler}. Windows SDK and MSVC headers/library versions are not recorded in this build stamp.", flush=True)
-    print("Hashing your ISO (SHA-256); this can take a few minutes.", flush=True)
-    return identity(dict(build_id=stamp.get("id"), compiler=compiler, iso_sha256=digest(iso_path, "sha256"),
+    print("Hashing your game files (SHA-256); this can take a minute.", flush=True)
+    return identity(dict(build_id=stamp.get("id"), compiler=compiler, iso_sha256=game_files_sha256(root, env),
                          elf_sha1=stamp.get("elf"), net=stamp.get("net"),
                          strict_hello="1" if env.get("TEKKEN4_NET_STRICT_HELLO") == "1" else "0",
                          delay_match="1" if env.get("TEKKEN4_NET_DELAY_MATCH") == "1" else "0"))
+
+
+# 0.1.3: the identity's "iso_sha256" is the digest of the game files extracted from the ISO (game\disc), not of
+# the ISO file: two clean rips of SLUS-20328 hold the same files but are different ISO files. Same formula as the
+# launcher's openrecomp/adapters/t4_online.py game_files_sha256.
+GAME_FILES = ("SLUS_203.28", "TEKKEN/DATA.BIN", "IRX/IOPRP243.IMG")
+
+
+def game_files_sha256(root=None, env=None):
+    env = os.environ if env is None else env
+    disc = Path(root or Path(__file__).resolve().parent.parent) / "game" / "disc"
+    h = hashlib.sha256(b"t4-game-files-v1\n")
+    for name in GAME_FILES:
+        path = disc.joinpath(*name.split("/"))
+        if not path.is_file():
+            raise ValueError("invalid_identity: " + name + " is missing in game\\disc. Build the game from your ISO first.")
+        h.update(name.encode() + b"\0" + digest(path, "sha256").encode() + b"\n")
+    return h.hexdigest()
 
 
 def compare_identity(local, peer):

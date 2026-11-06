@@ -1,5 +1,6 @@
 """Player pipeline logic and dry-run checks. No game data, real builds or network."""
 from contextlib import redirect_stdout
+import hashlib
 import io
 import json
 import os
@@ -301,9 +302,43 @@ class IdentityTests(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 net.identity(dict(IDENTITY, **{key: value}))
 
+    @staticmethod
+    def game_files(root, data=b"synthetic DATA.BIN"):
+        disc = root / "game" / "disc"
+        (disc / "TEKKEN").mkdir(parents=True)
+        (disc / "IRX").mkdir()
+        (disc / "SLUS_203.28").write_bytes(b"synthetic ELF")
+        (disc / "TEKKEN" / "DATA.BIN").write_bytes(data)
+        (disc / "IRX" / "IOPRP243.IMG").write_bytes(b"synthetic IRX")
+        expected = hashlib.sha256(b"t4-game-files-v1\n")
+        for name, content in (("SLUS_203.28", b"synthetic ELF"), ("TEKKEN/DATA.BIN", data),
+                              ("IRX/IOPRP243.IMG", b"synthetic IRX")):
+            expected.update(name.encode() + b"\0" + hashlib.sha256(content).hexdigest().encode() + b"\n")
+        return expected.hexdigest()
+
+    def test_identity_hashes_the_game_files_not_the_iso(self):
+        """0.1.3: two clean rips (other ISO bytes, same extracted files) give the same identity; other files do not."""
+        with tempfile.TemporaryDirectory() as temp:
+            stamp = Path(temp) / "stamp.json"
+            player_common.write_json(stamp, dict(id=IDENTITY["build_id"], elf=IDENTITY["elf_sha1"], net=7,
+                                                 toolchain=["CXX_ID=Clang", "CXX_VERSION=21.1.0"]))
+            results = []
+            for name, iso_bytes, data in (("a", b"rip one", b"same"), ("b", b"rip two, other bytes", b"same"),
+                                          ("c", b"rip one", b"other DATA.BIN")):
+                root = Path(temp) / name
+                expected = self.game_files(root, data)
+                iso = root / "own.iso"
+                iso.write_bytes(iso_bytes)
+                with redirect_stdout(io.StringIO()):
+                    results.append(net.new_identity(stamp, iso, {}, root=root)["iso_sha256"])
+                self.assertEqual(results[-1], expected)
+            self.assertEqual(results[0], results[1])
+            self.assertNotEqual(results[0], results[2])
+
     def test_identity_hashes_local_iso_and_uses_exact_compiler(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            files = self.game_files(root)
             iso = root / "own.iso"
             iso.write_bytes(b"synthetic ISO test bytes")
             stamp = root / "stamp.json"
@@ -311,8 +346,8 @@ class IdentityTests(unittest.TestCase):
                         toolchain=["CXX_ID=Clang", "CXX_VERSION=21.1.0"])
             player_common.write_json(stamp, data)
             with redirect_stdout(io.StringIO()):
-                result = net.new_identity(stamp, iso, {"TEKKEN4_NET_STRICT_HELLO": "1"})
-            self.assertEqual(result["iso_sha256"], player_common.digest(iso, "sha256"))
+                result = net.new_identity(stamp, iso, {"TEKKEN4_NET_STRICT_HELLO": "1"}, root=root)
+            self.assertEqual(result["iso_sha256"], files)
             self.assertEqual(result["compiler"], IDENTITY["compiler"])
             self.assertEqual(result["strict_hello"], "1")
             data["toolchain"].append("CXX_VERSION=21.1.1")
