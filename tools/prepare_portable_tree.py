@@ -8,8 +8,8 @@ import re
 
 def prepare(root, tree):
     root, tree = Path(root).resolve(), Path(tree).resolve()
-    if tree != root / "deps" / "ps2recomp":
-        raise ValueError("only the staged deps/ps2recomp tree may be adapted")
+    if tree not in (root / "deps" / "ps2recomp", root / "source" / "ps2recomp"):
+        raise ValueError("only the staged source/ps2recomp (0.1.4) or deps/ps2recomp tree may be adapted")
     path = tree / "ps2xRuntime" / "CMakeLists.txt"
     text = path.read_text(encoding="utf-8")
     # The pinned upstream uses a plain set(), which overrides a -D cache argument.

@@ -1,0 +1,538 @@
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 56861a6..2f6c919 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -20,6 +20,12 @@ if(NOT PS2X_SIMD_BASELINE AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+     add_compile_options(-msse4.1)
+ endif()
+ option(PS2X_ENABLE_RUNNER_PCH "Precompile the heavy runtime headers for ps2EntryRunner" ON)
++# Tekken 4 port (0.1.4): ps2EntryRunner without the generated game code. It loads ps2_game.dll from its own folder at
++# start (src/lib/ps2_game_dll.cpp); that DLL is built on the player's PC from the code ps2_recomp generated from their
++# disc, with clang-cl + lld-link and no Visual Studio / Windows SDK (the game repo's tools/build_game_dll.py and
++# tools/gamedll, which compile with PS2X_GAME_DLL_VIEW). PS2X_GAME_DLL_DEF: the .def of what the runtime exports to it.
++option(PS2X_GAME_DLL "Runtime without generated code: load it from ps2_game.dll" OFF)
++set(PS2X_GAME_DLL_DEF "" CACHE FILEPATH "Exports of ps2EntryRunner for the game DLL (.def)")
+ option(PS2X_ENABLE_SCCACHE "Use sccache as compiler launcher when available" ON)
+ 
+ option(PS2X_ENABLE_RUNTIME_LOGS "Enable PS2 runtime logs" ON)
+@@ -461,6 +467,14 @@ target_sources(ps2_runtime PRIVATE
+ file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/*.cpp"
+ )
++if(PS2X_GAME_DLL)
++    # Only the game's hand-written modules: the generated code (and register_functions.cpp) is in ps2_game.dll.
++    list(FILTER RUNNER_SRC_FILES INCLUDE REGEX "(_overrides|_net[^/]*)\.cpp$")
++    list(APPEND RUNNER_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/ps2_game_dll.cpp")
++    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/lib/ps2_game_dll.cpp" PROPERTIES
++        SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
++    target_compile_definitions(ps2_runtime PUBLIC PS2X_GAME_DLL_HOST=1)
++endif()
+ 
+ set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
+ set(ROOT_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+@@ -566,7 +580,7 @@ target_link_libraries(ps2EntryRunner
+ set(PS2X_VU1_MICROCODE_DIR "" CACHE PATH "Captured VU1 micro memories (empty: interpreter only)")
+ get_filename_component(PS2X_VU1N_GEN_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/vu1/vu1n_gen.py" ABSOLUTE)
+ set(PS2X_VU1N_GEN "${PS2X_VU1N_GEN_DEFAULT}" CACHE FILEPATH "Native VU1 block generator (vu1n_gen.py)")
+-if(PS2X_VU1_MICROCODE_DIR AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA)
++if(PS2X_VU1_MICROCODE_DIR AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA AND NOT PS2X_GAME_DLL)
+     file(GLOB PS2X_VU1_IMAGES CONFIGURE_DEPENDS "${PS2X_VU1_MICROCODE_DIR}/*.bin")
+     find_package(Python3 COMPONENTS Interpreter)
+     if(PS2X_VU1_IMAGES AND Python3_FOUND AND EXISTS "${PS2X_VU1N_GEN}")
+@@ -603,7 +617,7 @@ endif()
+ # Without them every program runs in the exact engine (or the native blocks above).
+ set(PS2X_VULIFT_GEN "" CACHE FILEPATH "VU microprogram lifter (tools/vu/vu_lift.py)")
+ set(PS2X_VU0_MICROCODE_DIR "" CACHE PATH "VU0 micro memories (empty: VU0 in the exact engine)")
+-if(PS2X_VULIFT_GEN AND EXISTS "${PS2X_VULIFT_GEN}" AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA)
++if(PS2X_VULIFT_GEN AND EXISTS "${PS2X_VULIFT_GEN}" AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA AND NOT PS2X_GAME_DLL)
+     find_package(Python3 COMPONENTS Interpreter)
+     set(PS2X_VULIFT_IMAGES)
+     set(PS2X_VULIFT_ARGS)
+@@ -654,6 +668,21 @@ if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
+     target_compile_definitions(ps2EntryRunner PRIVATE PS2X_ENABLE_DEBUG_UI=1)
+ endif()
+ 
++if(WIN32 AND NOT PS2X_IS_ANDROID AND NOT PS2X_IS_VITA)
++    # Tekken 4 port (0.1.4): our manifest with the UTF-8 code page (non-ASCII install folders); none from the linker.
++    enable_language(RC)
++    target_sources(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/ps2EntryRunner.rc")
++    target_link_options(ps2EntryRunner PRIVATE /MANIFEST:NO)
++endif()
++
++if(PS2X_GAME_DLL AND WIN32)
++    if(NOT PS2X_GAME_DLL_DEF)
++        message(FATAL_ERROR "PS2X_GAME_DLL needs PS2X_GAME_DLL_DEF (the runtime's exports for the game DLL)")
++    endif()
++    target_link_options(ps2EntryRunner PRIVATE "/DEF:${PS2X_GAME_DLL_DEF}")
++    set_property(TARGET ps2EntryRunner APPEND PROPERTY LINK_DEPENDS "${PS2X_GAME_DLL_DEF}")
++endif()
++
+ ps2x_stage_ffmpeg_runtime_dlls(ps2EntryRunner)
+ 
+ if(PS2X_IS_VITA)
+diff --git a/ps2xRuntime/include/ps2_game_dll_abi.h b/ps2xRuntime/include/ps2_game_dll_abi.h
+new file mode 100644
+index 0000000..130aa6d
+--- /dev/null
++++ b/ps2xRuntime/include/ps2_game_dll_abi.h
+@@ -0,0 +1,24 @@
++// The contract between the prebuilt runtime (PS2X_GAME_DLL_HOST) and the game DLL built on the player's PC from the
++// generated code (PS2X_GAME_DLL_VIEW). Bump PS2_GAME_DLL_ABI whenever the DLL view (ps2_runtime.h, the VU lifter
++// headers) or this struct changes: an old DLL is then refused with a message instead of crashing.
++#ifndef PS2_GAME_DLL_ABI_H
++#define PS2_GAME_DLL_ABI_H
++
++#include <cstdint>
++
++#define PS2_GAME_DLL_ABI 1u
++
++struct R5900Context;
++class PS2Runtime;
++
++struct Ps2GameDllInfo
++{
++    uint32_t abi;
++    uint32_t simd;           // 1 = built with SSE4.1, 0 = SSE2 only
++    uint32_t tableBase;
++    uint32_t tableEnd;
++    uint32_t tableSlotCount;
++    void (**table)(uint8_t *, R5900Context *, PS2Runtime *);
++};
++
++#endif
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index b0a990c..931000f 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -3,10 +3,6 @@
+ 
+ #include <cstring>
+ #include <cstdint>
+-#include <vector>
+-#include <string>
+-#include <string_view>
+-#include <functional>
+ #if defined(_MSC_VER)
+ #include <intrin.h>
+ #elif defined(USE_SSE2NEON)
+@@ -15,6 +11,16 @@
+ #include <immintrin.h> // For SSE/AVX instructions
+ #include <smmintrin.h> // For SSE4.1 instructions
+ #endif
++#if defined(PS2X_GAME_DLL_VIEW)
++// The game DLL (Tekken 4 tools/gamedll, PS2X_GAME_DLL): the generated code is compiled on the player's PC with clang's
++// own headers only -- no C++ standard library, no Windows SDK. It sees the CPU context, the address helpers and the
++// runtime methods it calls (exported by the prebuilt runtime); everything else of this header is the runtime's.
++#include "runtime/ps2_address.h"
++#else
++#include <vector>
++#include <string>
++#include <string_view>
++#include <functional>
+ #include <atomic>
+ #include <array>
+ #include <mutex>
+@@ -34,7 +40,9 @@
+ #include "runtime/ps2_rom_device.h"
+ #include "runtime/ps2_vfs.h"
+ #include "ps2x/iop/iop_types.h"
++#endif // !PS2X_GAME_DLL_VIEW
+ 
++#if !defined(PS2X_GAME_DLL_VIEW)
+ namespace ps2x::iop
+ {
+     class IopSubsystem;
+@@ -44,6 +52,7 @@ class PS2IopHostAdapter;
+ class PS2IopTransport;
+ class EeScheduler;
+ struct EeEvent;
++#endif
+ 
+ enum PS2Exception
+ {
+@@ -163,6 +172,7 @@ struct alignas(16) R5900Context
+         branch_pc = 0;
+     }
+ 
++#if !defined(PS2X_GAME_DLL_VIEW)
+     void dump() const
+     {
+         std::ios_base::fmtflags flags = std::cout.flags();
+@@ -186,6 +196,7 @@ struct alignas(16) R5900Context
+         std::cout << "--- End Context Dump ---\n";
+         std::cout.flags(flags); // Restore format flags
+     }
++#endif
+ 
+     ~R5900Context() = default;
+ };
+@@ -269,6 +280,62 @@ inline void ps2TraceGuestRangeWrite(uint8_t *rdram,
+     // TODO we dont need this anymore so on next release it will be deleted
+ }
+ 
++#if defined(PS2X_GAME_DLL_VIEW)
++// What the generated code calls, declared exactly as in the full class below (same names, same access, so the same
++// symbols): the game DLL imports them from the runtime executable. A difference shows up as a link error.
++class PS2Runtime
++{
++public:
++    using RecompiledFunction = void (*)(uint8_t *, R5900Context *, PS2Runtime *);
++
++    enum class GuestBranchKind
++    {
++        DirectJump,
++        DirectCall,
++        IndirectJump,
++        IndirectCall,
++        Return,
++    };
++
++    bool dispatchGuestBranch(uint8_t *rdram,
++                             R5900Context *ctx,
++                             uint32_t targetPc,
++                             uint32_t sourcePc,
++                             uint32_t fallthroughPc,
++                             GuestBranchKind kind,
++                             const char *debugName);
++    void SignalException(R5900Context *ctx, PS2Exception exception);
++    void executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint32_t address);
++    void handleSyscall(uint8_t *rdram, R5900Context *ctx);
++    void handleSyscall(uint8_t *rdram, R5900Context *ctx, uint32_t encodedSyscallId);
++    void handleBreak(uint8_t *rdram, R5900Context *ctx);
++    void handleTrap(uint8_t *rdram, R5900Context *ctx);
++    void handleTLBR(uint8_t *rdram, R5900Context *ctx);
++    void handleTLBWI(uint8_t *rdram, R5900Context *ctx);
++    void handleTLBWR(uint8_t *rdram, R5900Context *ctx);
++    void handleTLBP(uint8_t *rdram, R5900Context *ctx);
++    void clearLLBit(R5900Context *ctx);
++    bool eeCheckpointDue(uint32_t cycles = 32u) noexcept;
++    [[noreturn]] void eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc);
++
++    uint8_t Load8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
++    uint16_t Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
++    uint32_t Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
++    uint64_t Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
++    __m128i Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr);
++
++    void Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value);
++    void Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint16_t value);
++    void Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value);
++    void Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value);
++    void Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m128i value);
++
++    static inline bool isSpecialAddress(uint32_t addr)
++    {
++        return Ps2IsSpecialAddress(addr);
++    }
++};
++#else
+ class PS2Runtime
+ {
+ public:
+@@ -546,10 +613,24 @@ private:
+     uint8_t *m_boundGSVram = nullptr;
+ };
+ 
++#endif // !PS2X_GAME_DLL_VIEW
++
++#if defined(PS2X_GAME_DLL_HOST)
++// The generated function table lives in the game DLL (PS2X_GAME_DLL): src/lib/ps2_game_dll.cpp points these at it
++// when it loads the DLL, before anything runs.
++extern uint32_t g_ps2RecompiledFunctionTableBase;
++extern uint32_t g_ps2RecompiledFunctionTableEnd;
++extern uint32_t g_ps2RecompiledFunctionTableSlotCount;
++extern PS2Runtime::RecompiledFunction *g_ps2RecompiledFunctionTable;
++bool ps2LoadGameDll();
++// The generated function at a guest address as the game DLL provides it (before any replaceFunction).
++PS2Runtime::RecompiledFunction ps2GameDllOriginal(uint32_t address);
++#else
+ // Generated by ps2xRecomp in ps2xRuntime/src/runner/register_functions.cpp.
+ extern const uint32_t g_ps2RecompiledFunctionTableBase;
+ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
+ extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
+ extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
++#endif
+ 
+ #endif // PS2_RUNTIME_H
+diff --git a/ps2xRuntime/include/ps2_syscalls.h b/ps2xRuntime/include/ps2_syscalls.h
+index e0c4f5b..cad113a 100644
+--- a/ps2xRuntime/include/ps2_syscalls.h
++++ b/ps2xRuntime/include/ps2_syscalls.h
+@@ -3,13 +3,15 @@
+ 
+ #include "ps2_runtime.h"
+ #include "ps2_call_list.h"
+-#include <mutex>
+-#include <atomic>
+ #include <cstdint>
+ #include <cstring>
++#if !defined(PS2X_GAME_DLL_VIEW)
++#include <mutex>
++#include <atomic>
+ #include <string>
+ 
+ std::string translatePs2Path(const char *ps2Path);
++#endif
+ 
+ namespace ps2_syscalls
+ {
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index f01a995..a840d0d 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -3,6 +3,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#if !defined(PS2X_GAME_DLL_VIEW) // the game DLL (tools/gamedll) sees only the address constants below
+ #include <array>
+ #include <functional>
+ #include <vector>
+@@ -12,6 +13,7 @@
+ #include <mutex>
+ 
+ #include "gs/ps2_gif_arbiter.h"
++#endif
+ #if defined(_MSC_VER)
+ #include <intrin.h>
+ #elif defined(USE_SSE2NEON)
+@@ -69,6 +71,7 @@ inline constexpr uint32_t PS2_FIO_S_IFREG = 0x2000;
+ 
+ static_assert((PS2_RAM_SIZE & (PS2_RAM_SIZE - 1u)) == 0u, "PS2_RAM_SIZE must be a power of two");
+ static_assert(PS2_RAM_MASK == (PS2_RAM_SIZE - 1u), "PS2_RAM_MASK must match PS2_RAM_SIZE");
++#if !defined(PS2X_GAME_DLL_VIEW)
+ 
+ inline std::atomic<uint8_t *> &ps2ScratchpadHostPtrStorage()
+ {
+@@ -534,4 +537,6 @@ public:
+     std::vector<uint8_t> m_mfifoPacket;
+ };
+ 
++#endif // !PS2X_GAME_DLL_VIEW
++
+ #endif // PS2_MEMORY_H
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
+index 3b45215..3e6ee82 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1.h
+@@ -1,12 +1,14 @@
+ #ifndef PS2_VU1_H
+ #define PS2_VU1_H
+ 
+-#include <array>
+ #include <cmath>
+ #include <cstring>
+ #include <limits>
+-#include <vector>
+ #include <cstdint>
++#if !defined(PS2X_GAME_DLL_VIEW)
++#include <array>
++#include <vector>
++#endif
+ 
+ // GOW-Port: las funciones en línea de VU1 usan el mismo modo de coma flotante que ps2_vu1_*.cpp (sin
+ // /fp:fast); MSVC no las expande en línea si los modos no coinciden.
+@@ -54,6 +56,9 @@ struct VU1State
+     uint32_t branchDelay;
+ };
+ 
++#if defined(PS2X_GAME_DLL_VIEW)
++class VU1Interpreter; // the game DLL's lifted VU programs only pass it on to the runtime (ps2_vu_lift.h)
++#else
+ class VU1Interpreter
+ {
+ public:
+@@ -490,6 +495,8 @@ private:
+     float broadcast(const float *vf, uint8_t bc);
+ };
+ 
++#endif // !PS2X_GAME_DLL_VIEW
++
+ #if defined(_MSC_VER)
+ #pragma float_control(pop)
+ #endif
+diff --git a/ps2xRuntime/include/runtime/ps2_vu_lift.h b/ps2xRuntime/include/runtime/ps2_vu_lift.h
+index 35e75a1..02e768c 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu_lift.h
++++ b/ps2xRuntime/include/runtime/ps2_vu_lift.h
+@@ -83,7 +83,9 @@ struct VuLiftCtx
+ 
+ // Run hook (ps2_vu1_core.cpp, VU1Interpreter::run): returns true when the lifted code ran; *ended tells whether the
+ // program ended (false: the exact engine continues from the handed-over state).
++#if !defined(PS2X_GAME_DLL_VIEW)
+ bool vuLiftRun(VU1Interpreter &vu, VU1Interpreter::StepContext &context, bool &ended);
++#endif
+ // tests: lifted code for an image that is not in a PS2Memory; silent XGKICK capture; verify counters (0 = runs
+ // checked, 1 = mismatches)
+ void vuLiftTestSetCode(uint32_t unit, const uint8_t *code, uint64_t generation);
+diff --git a/ps2xRuntime/src/lib/ps2_game_dll.cpp b/ps2xRuntime/src/lib/ps2_game_dll.cpp
+new file mode 100644
+index 0000000..cc45679
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_game_dll.cpp
+@@ -0,0 +1,113 @@
++// PS2X_GAME_DLL: the runtime without the generated game code. ps2EntryRunner loads ps2_game.dll from its own folder
++// (or the file PS2X_GAME_DLL names) before anything runs; that DLL holds the code ps2_recomp generated from the player's
++// disc and the lifted VU programs, built on the player's PC (Tekken 4: tools/build_game_dll.py). It imports what it calls
++// from this executable (the exports in PS2X_GAME_DLL_DEF) and hands back its function table here.
++#if defined(PS2X_GAME_DLL_HOST)
++#include "ps2_runtime.h"
++#include "ps2_game_dll_abi.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++#include <vector>
++
++#if defined(_WIN32)
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#include <intrin.h>
++#endif
++
++uint32_t g_ps2RecompiledFunctionTableBase = 0u;
++uint32_t g_ps2RecompiledFunctionTableEnd = 0u;
++uint32_t g_ps2RecompiledFunctionTableSlotCount = 0u;
++PS2Runtime::RecompiledFunction *g_ps2RecompiledFunctionTable = nullptr;
++
++namespace
++{
++    // The table as the DLL filled it, before any game module replaced an entry: ps2GameDllOriginal() hands out the
++    // generated function itself, so a module's wrapper can still call the game's own code.
++    std::vector<PS2Runtime::RecompiledFunction> g_original;
++
++    [[noreturn]] void fail(const std::wstring &message)
++    {
++        std::fwprintf(stderr, L"[game-dll] %ls\n", message.c_str());
++        std::fflush(stderr);
++#if defined(_WIN32)
++        if (!std::getenv("PS2X_NO_MESSAGE_BOX"))
++            MessageBoxW(nullptr, message.c_str(), L"Tekken 4", MB_OK | MB_ICONERROR);
++#endif
++        std::exit(3);
++    }
++
++    bool cpuHasSse41()
++    {
++#if defined(_WIN32)
++        int regs[4] = {};
++        __cpuid(regs, 1);
++        return (regs[2] & (1 << 19)) != 0 && (regs[2] & (1 << 9)) != 0; // SSE4.1 and SSSE3
++#else
++        return true;
++#endif
++    }
++}
++
++bool ps2LoadGameDll()
++{
++#if defined(_WIN32)
++    std::wstring path;
++    if (const wchar_t *env = _wgetenv(L"PS2X_GAME_DLL"); env && *env)
++    {
++        path = env;
++    }
++    else
++    {
++        std::vector<wchar_t> buffer(32768);
++        const DWORD n = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
++        path.assign(buffer.data(), n);
++        const size_t slash = path.find_last_of(L"\\/");
++        path = (slash == std::wstring::npos ? std::wstring() : path.substr(0, slash + 1)) + L"ps2_game.dll";
++    }
++    HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
++    if (!module)
++    {
++        const DWORD error = GetLastError();
++        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
++            fail(L"The game code is not built yet (" + path + L" is missing).\n\nOpen the launcher and press Build.");
++        fail(L"The game code could not be loaded (" + path + L", Windows error " + std::to_wstring(error) +
++             L").\n\nPress Build in the launcher again. If it keeps happening, your antivirus may be blocking the file.");
++    }
++    using InitFn = const Ps2GameDllInfo *(*)(uint32_t);
++    auto init = reinterpret_cast<InitFn>(GetProcAddress(module, "ps2_game_dll_init"));
++    const Ps2GameDllInfo *info = init ? init(PS2_GAME_DLL_ABI) : nullptr;
++    if (!info || info->abi != PS2_GAME_DLL_ABI || !info->table || info->tableSlotCount == 0u)
++        fail(L"The game code (" + path + L") was built for another version of the game program.\n\nPress Build in the launcher again.");
++    if (info->simd && !cpuHasSse41())
++        fail(L"The game code (" + path + L") was built for a processor with SSE4.1, this one does not have it.\n\n"
++             L"Press Build in the launcher again on this PC.");
++    g_ps2RecompiledFunctionTableBase = info->tableBase;
++    g_ps2RecompiledFunctionTableEnd = info->tableEnd;
++    g_ps2RecompiledFunctionTableSlotCount = info->tableSlotCount;
++    g_ps2RecompiledFunctionTable = info->table;
++    g_original.assign(info->table, info->table + info->tableSlotCount);
++    std::fprintf(stderr, "[game-dll] loaded %ls (%u functions slots, %s)\n", path.c_str(), info->tableSlotCount,
++                 info->simd ? "SSE4.1" : "SSE2");
++    return true;
++#else
++    return false;
++#endif
++}
++
++PS2Runtime::RecompiledFunction ps2GameDllOriginal(uint32_t address)
++{
++    const uint32_t slot = (address - g_ps2RecompiledFunctionTableBase) >> 2;
++    if ((address & 3u) == 0u && address >= g_ps2RecompiledFunctionTableBase && slot < g_original.size() && g_original[slot])
++        return g_original[slot];
++    std::fprintf(stderr, "[game-dll] no generated function at 0x%08x\n", address);
++    std::abort();
++}
++#endif
+diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
+index 563bcbd..699af0e 100644
+--- a/ps2xRuntime/src/main.cpp
++++ b/ps2xRuntime/src/main.cpp
+@@ -170,6 +170,11 @@ int main(int argc, char *argv[])
+     redirectStdioToLogcat();
+ #endif
+     setupTerminateLogger();
++#if defined(PS2X_GAME_DLL_HOST)
++    // The generated game code is in ps2_game.dll next to this program (PS2X_GAME_DLL): load it before anything runs.
++    if (!ps2LoadGameDll())
++        return 3;
++#endif
+ 
+     try
+     {
+diff --git a/ps2xRuntime/src/ps2EntryRunner.manifest b/ps2xRuntime/src/ps2EntryRunner.manifest
+new file mode 100644
+index 0000000..7c7e203
+--- /dev/null
++++ b/ps2xRuntime/src/ps2EntryRunner.manifest
+@@ -0,0 +1,22 @@
++<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
++<!-- Tekken 4 port (0.1.4): UTF-8 as the process code page (Windows 10 1903+), so file names from a folder like
++     "D:\Spieler Müller\Тест\T4" reach fopen / std::filesystem / the ELF loader intact through the narrow APIs. -->
++<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
++  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
++    <security>
++      <requestedPrivileges>
++        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
++      </requestedPrivileges>
++    </security>
++  </trustInfo>
++  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
++    <application>
++      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
++    </application>
++  </compatibility>
++  <application xmlns="urn:schemas-microsoft-com:asm.v3">
++    <windowsSettings>
++      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
++    </windowsSettings>
++  </application>
++</assembly>
+diff --git a/ps2xRuntime/src/ps2EntryRunner.rc b/ps2xRuntime/src/ps2EntryRunner.rc
+new file mode 100644
+index 0000000..4676a42
+--- /dev/null
++++ b/ps2xRuntime/src/ps2EntryRunner.rc
+@@ -0,0 +1,2 @@
++// Tekken 4 port (0.1.4): the program's manifest (UTF-8 process code page), see ps2EntryRunner.manifest.
++1 24 "ps2EntryRunner.manifest"

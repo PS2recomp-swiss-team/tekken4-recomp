@@ -42,6 +42,18 @@ STEPS = [  # (script step name, short label shown in the Build tab)
     ("stage", "Stage the translated code"),
     ("runtime", "Build the game (the long step)"),
 ]
+# 0.1.4 release folders: the game program and the recompiler come prebuilt (bin\runtime, bin\tools); the PC compiles
+# only the code made from the disc. Same step names (every launcher follows them), plainer labels.
+PREBUILT_STEPS = [
+    ("prereq", "Check the bundled tools"),
+    ("verify", "Check your Tekken 4 ISO"),
+    ("extract", "Unpack the game files from the ISO"),
+    ("fork", "Check the included source"),
+    ("tools", "Recompiler (included)"),
+    ("recomp", "Translate the game code"),
+    ("stage", "Translate the VU programs"),
+    ("runtime", "Compile the game (about a minute)"),
+]
 
 # ------------------------------------------------------------------ settings
 RESOLUTIONS = [  # key = TEKKEN4_INTERNAL_RES value (docs/GRAPHICS.md), label; the same steps as T5DR's launcher
@@ -307,6 +319,16 @@ def bundled_toolchain():
     return os.path.isfile(os.path.join(ROOT, "toolchain", "toolchain.json"))
 
 
+def prebuilt_release():
+    """0.1.4 release folder: prebuilt game program (bin\\runtime) + bundled clang-cl for the code made from the disc.
+    Nothing is downloaded and no Microsoft licence is involved (tools\\build_game_dll.py)."""
+    return bundled_toolchain() and os.path.isfile(os.path.join(ROOT, "bin", "runtime", "ps2EntryRunner.exe"))
+
+
+if prebuilt_release():
+    STEPS = PREBUILT_STEPS
+
+
 # ------------------------------------------------------------------ Wine / Proton (Linux, Steam Deck)
 # docs/LINUX_STEAM_DECK.md. The build (tools\build_game.ps1) and the online helper (tools\net_play.ps1) are PowerShell
 # scripts. Windows always has PowerShell; Wine and Proton ship only a stand-in powershell.exe that does not run
@@ -372,6 +394,17 @@ def check_prereqs():
         ps = powershell_problem()
         add("powershell", "PowerShell (Wine/Proton)", not ps, "answers" if not ps else "Wine's stand-in only",
             ps)
+
+    if prebuilt_release():
+        for id_, name, rel in (("python", "Python (included)", r"python\python.exe"),
+                               ("clang", "clang-cl (included)", r"toolchain\llvm\bin\clang-cl.exe"),
+                               ("lld", "lld-link (included)", r"toolchain\llvm\bin\lld-link.exe"),
+                               ("program", "Tekken 4 program (included)", r"bin\runtime\ps2EntryRunner.exe"),
+                               ("recompiler", "Recompiler (included)", r"bin\tools\ps2_recomp.exe")):
+            p = os.path.join(ROOT, rel)
+            add(id_, name, os.path.isfile(p), p if os.path.isfile(p) else "missing: " + p,
+                "Extract the whole release zip again, or install Tekken 4 fresh from the launcher.")
+        return items
 
     if bundled_toolchain():
         tc = os.path.join(ROOT, "toolchain")
@@ -466,6 +499,8 @@ def sysroot_dir(env=None):
 
 
 def sysroot_ready():
+    if prebuilt_release():
+        return True             # 0.1.4: no Microsoft files are needed on the player's PC
     tc = sysroot_dir()
     return all(os.path.isfile(os.path.join(tc, p)) for p in (
         "sysroot.json", "msvc/include/vector", "msvc/lib/x64/libcmt.lib",

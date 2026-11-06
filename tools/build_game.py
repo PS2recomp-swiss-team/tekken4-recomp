@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from player_common import ROOT, NO_WINDOW, PlayerParser, build_tree, configure_output, digest, git_output, option, read_json, write_json
+from player_common import ROOT, NO_WINDOW, PlayerParser, build_tree, configure_output, digest, git_output, option, prebuilt_release, read_json, write_json
 
 EXPECTED_ELF = "a4b7dde20a2918c550badd127a245db155c36815"
 PINNED = "eb8688b2fd191129f103a39543002c005b33409c"
@@ -24,6 +24,17 @@ TITLES = {
     "tools": "PS2Recomp host tools (ps2_recomp.exe)",
     "recomp": "ps2_recomp.exe config\\ghidra_export.toml -> generated\\",
     "stage": "tools\\stage_generated.cmd",
+}
+# 0.1.4 release folder (prebuilt game program, bin\\runtime): the same step names, so every launcher's progress display
+# keeps working; what each step does is said here.
+PREBUILT_TITLES = {
+    "prereq": "bundled compiler (clang-cl, lld-link), Python and the prebuilt game program (nothing is downloaded)",
+    "extract": TITLES["extract"],
+    "fork": "PS2Recomp source of this release (source\\ps2recomp)",
+    "tools": "PS2Recomp host tools (prebuilt: bin\\tools\\ps2_recomp.exe)",
+    "recomp": TITLES["recomp"],
+    "stage": "VU microprograms from the disc -> build\\gamedll\\vulift",
+    "runtime": "game code -> ps2_game.dll (bundled clang-cl + lld-link) and the prebuilt game program",
 }
 
 
@@ -242,11 +253,18 @@ class Build:
         self.portable = (self.root / "toolchain/toolchain.json").is_file()
         if self.portable:
             self.env = release_environment(self.env)
+        self.prebuilt = prebuilt_release(self.root)
         self.tree = build_tree(self.root, self.env)
         self.vendored = (self.tree / ".t4-vendored.json").is_file()
         self.build_dir = self.env.get("TEKKEN4_BUILD_DIR") or "runtime"
         self.recomp = self.tree / "out/tools/ps2xRecomp/ps2_recomp.exe"
         self.runner = self.tree / "out" / self.build_dir / "ps2xRuntime/ps2EntryRunner.exe"
+        if self.prebuilt:
+            # The game program and the recompiler come with the release; the game is put together where every launcher
+            # (0.1.2 included) starts it from: deps\\ps2recomp\\out\\runtime\\ps2xRuntime.
+            self.recomp = self.root / "bin/tools/ps2_recomp.exe"
+            self.runner = self.root / "deps/ps2recomp/out" / self.build_dir / "ps2xRuntime/ps2EntryRunner.exe"
+            self.vulift_dir = self.root / "build/gamedll/vulift"
         self.disc = self.root / "game/disc"
         self.iso = Path(args.Iso).resolve() if args.Iso else next(iter(sorted(self.root.glob("*.iso"))), None)
         self.log_dir = Path(args.LogDir or self.root / "logs").resolve()
@@ -327,7 +345,11 @@ class Build:
         if self.compiler_ready:
             return
         tc = self.root / "toolchain"
-        if self.portable:
+        if self.prebuilt:
+            # Only the bundled clang-cl / lld-link and Python: the game DLL needs no Microsoft headers or libraries.
+            directories = [self.root / "python", tc / "llvm/bin"]
+            self.env["PATH"] = os.pathsep.join(map(str, directories)) + os.pathsep + release_environment(self.env)["PATH"]
+        elif self.portable:
             # Microsoft's headers/libraries: one verified copy per PC for every install and update (0.1.3), see
             # fetch_msvc_sysroot.sysroot_dir. The include/lib folders are not part of the build id.
             sysroot = self.sysroot()
@@ -378,6 +400,8 @@ class Build:
 
     def prereq(self):
         self.say(f"    Python {sys.version_info.major}.{sys.version_info.minor}: {sys.executable}")
+        if self.prebuilt:
+            return self.prereq_prebuilt()
         if self.portable:
             tc = self.root / "toolchain"
             if self.a.AcceptMicrosoftLicense and not self.a.WhatIf:
@@ -410,6 +434,29 @@ class Build:
                 raise ValueError(f"Missing prerequisites: {name}. Install {name} and restart the launcher.")
             self.say(f"    {name}: {found}")
         return "ok"
+
+    def prereq_prebuilt(self):
+        tc = self.root / "toolchain"
+        parts = [self.root / "python/python.exe", tc / "llvm/bin/clang-cl.exe", tc / "llvm/bin/lld-link.exe",
+                 self.root / "bin/runtime/ps2EntryRunner.exe", self.root / "bin/runtime/ps2EntryRunner-sse2.exe",
+                 self.recomp, self.root / "tools/gamedll/ps2_runtime_exports.def", self.root / "tools/build_game_dll.py"]
+        headers = sorted(tc.glob("llvm/lib/clang/*/include/intrin.h"))
+        missing = [str(p) for p in parts if not p.is_file()]
+        if not headers:
+            missing.append(str(tc / "llvm/lib/clang/<version>/include") + " (clang's own headers)")
+        if not self.vendored:
+            missing.append("source\\ps2recomp (the PS2Recomp source is part of the release zip)")
+        for p in parts[:4] + parts[5:6]:
+            if p.is_file():
+                self.say(f"    {p.name}: {p}")
+        if missing:
+            self.say("Missing parts of this release folder:")
+            for i, item in enumerate(missing, 1):
+                self.say(f"  {i}. {item}")
+            raise ValueError(f"{len(missing)} part(s) of the release folder missing, see above. Unpack the whole "
+                             "release zip again or install Tekken 4 fresh from the launcher.")
+        self.compiler_environment()
+        return "ok (bundled, nothing to download)"
 
     def check_iso(self):
         code = self.python("iso_extract.py", self.iso, "--check", check=False)
@@ -539,6 +586,10 @@ class Build:
         self.say(f"    CMake configure {took:.1f}s, compile and link {self.last_seconds:.1f}s")
 
     def tools(self):
+        if self.prebuilt:
+            if not self.recomp.is_file():
+                raise ValueError(f"{self.recomp} is missing: unpack the whole release zip again")
+            return "prebuilt"
         head, built = self.head(), self.get("tools", "head")
         if not needs_step("tools", self.a.Force, self.changed, self.recomp.is_file(), built or head, head):
             if not built:
@@ -567,7 +618,42 @@ class Build:
         self.changed.add("recomp")
         return "recompiled"
 
+    def micro_images(self):
+        """The VU micro memories built from the disc's ELF (game\\vu1\\micro, game\\vu0\\micro)."""
+        if not self.a.WhatIf and (not self.paths("game/vu1/micro", "*.bin") or not self.paths("game/vu0/micro", "*.bin")):
+            if self.python("vu1_micro_from_elf.py", self.disc / "SLUS_203.28", self.root / "game/vu1/micro", self.root / "game/vu0/micro", check=False):
+                self.say("    NOTE: the VU micro images could not be built: the game gets the exact VU engine only (slower fights).")
+
+    def stage_prebuilt(self):
+        """0.1.4: lift the VU microprograms of the player's disc to C++ (tools\\vu\\vu_lift.py), the input of the game DLL
+        next to generated\\. Nothing is copied into the PS2Recomp source any more."""
+        self.micro_images()
+        micro1, micro0 = self.root / "game/vu1/micro", self.root / "game/vu0/micro"
+        fp = sha_text(f"{fingerprint(self.paths('game/vu1/micro', '*.bin'), True)}|{fingerprint(self.paths('game/vu0/micro', '*.bin'), True)}|{fingerprint(self.paths('tools/vu', '*.py'), True)}|{fingerprint([micro1.parent / 'vulift_heads.txt'], True)}|{self.env.get('TEKKEN4_VULIFT', '')}")
+        have = (self.vulift_dir / "vulift_part0.cpp").is_file() or not self.paths("game/vu1/micro", "*.bin")
+        if not needs_step("stage", self.a.Force, self.changed, have, self.get("stage", "fingerprint"), fp):
+            return "up to date"
+        if self.a.WhatIf:
+            return self.plan("stage", "lift the VU microprograms (tools\\vu\\vu_lift.py)")
+        args = [self.vulift_dir]
+        if self.paths("game/vu1/micro", "*.bin"):
+            args += ["--vu1", micro1]
+        if self.paths("game/vu0/micro", "*.bin"):
+            args += ["--vu0", micro0]
+        if len(args) > 1 and self.env.get("TEKKEN4_VULIFT") != "0":
+            self.vulift_dir.mkdir(parents=True, exist_ok=True)
+            self.python("vu/vu_lift.py", *args, "--parts", "4", "--heads", micro1.parent / "vulift_heads.txt",
+                        "--report", self.vulift_dir / "vulift_report.txt")
+        else:
+            for old in self.vulift_dir.glob("vulift_part*.cpp"):
+                old.unlink()
+        self.record("stage", fingerprint=fp)
+        self.changed.add("stage")
+        return "lifted"
+
     def stage(self):
+        if self.prebuilt:
+            return self.stage_prebuilt()
         gen = self.paths("generated", "*.cpp") + self.paths("generated", "*.h")
         fp = sha_text(f"{fingerprint(gen)}|{fingerprint(self.paths('runtime', '*.cpp', True))}|{fingerprint(self.paths('runtime', '*.h', True))}|{self.head()}")
         runner = self.tree / "ps2xRuntime/src/runner"
@@ -582,10 +668,55 @@ class Build:
         return "staged"
 
     def write_build_id(self):
-        if self.python("t4_buildid.py", "--src", self.tree, "--out", self.runner.parent, check=False):
+        extra = ["--prebuilt", self.root] if self.prebuilt else []
+        if self.python("t4_buildid.py", "--src", self.tree, "--out", self.runner.parent, *extra, check=False):
             self.say("    NOTE: the netplay build id could not be written: online matches will refuse this build.")
 
+    def install_program(self):
+        """bin\\runtime -> deps\\ps2recomp\\out\\runtime\\ps2xRuntime (only what changed); the SSE2 program on a processor
+        without SSE4.1/SSSE3. Returns the variant name."""
+        baseline = simd_baseline(self.env)
+        source = self.root / "bin/runtime"
+        out = self.runner.parent
+        out.mkdir(parents=True, exist_ok=True)
+        for path in source.iterdir():
+            if not path.is_file() or path.name.lower().startswith("ps2entryrunner"):
+                continue
+            copy_changed(path, out / path.name)
+        copy_changed(source / ("ps2EntryRunner-sse2.exe" if baseline else "ps2EntryRunner.exe"), self.runner)
+        return "sse2" if baseline else "sse41"
+
+    def runtime_prebuilt(self):
+        simd = "sse2" if simd_baseline(self.env) else "sse41"
+        gen = self.paths("generated", "*.cpp") + self.paths("generated", "*.h")
+        program = [self.root / "bin/runtime" / name for name in ("ps2EntryRunner.exe", "ps2EntryRunner-sse2.exe")]
+        fp = sha_text(f"{self.get('stage', 'fingerprint') or ''}|{self.get('recomp', 'fingerprint') or ''}|{fingerprint(gen)}|{fingerprint(self.paths('build/gamedll/vulift', '*.cpp'))}|{fingerprint(self.paths('tools/gamedll', '*', True), True)}|{fingerprint([self.root / 'tools/build_game_dll.py'], True)}|{fingerprint(program, True)}|{fingerprint(self.paths('toolchain/llvm/bin', '*.exe'))}|{simd}")
+        dll = self.runner.parent / "ps2_game.dll"
+        have = self.runner.is_file() and dll.is_file()
+        if not needs_step("runtime", self.a.Force, self.changed, have, self.get("runtime", "fingerprint"), fp):
+            if not self.a.WhatIf:
+                self.install_program()
+                self.write_build_id()
+            return "up to date"
+        if self.a.WhatIf:
+            return self.plan("runtime", "compile the game code into ps2_game.dll (tools\\build_game_dll.py, about a minute)")
+        variant = self.install_program()
+        self.say(f"    game program: bin\\runtime ({'SSE2' if variant == 'sse2' else 'SSE4.1'}) -> {self.runner.parent}")
+        args = ["--tree", self.tree, "--generated", self.root / "generated", "--out", dll, "--simd", simd,
+                "--obj", self.root / "build/gamedll" / simd, "--llvm", self.root / "toolchain/llvm/bin"]
+        if any(self.vulift_dir.glob("vulift_part*.cpp")):
+            args += ["--vulift", self.vulift_dir]
+        self.python("build_game_dll.py", *args, echo=r"^(game DLL|wrote|ERROR)")
+        if not dll.is_file():
+            raise ValueError(f"build finished but {dll} is missing")
+        self.write_build_id()
+        self.record("runtime", fingerprint=fp, exe=str(self.runner))
+        self.changed.add("runtime")
+        return "built"
+
     def runtime(self):
+        if self.prebuilt:
+            return self.runtime_prebuilt()
         # The micro images are inputs of the fingerprint below: make them first, so a second Build with nothing
         # changed says "up to date" (0.1.3; they used to appear only after the fingerprint was taken).
         if not self.a.WhatIf and (not self.paths("game/vu1/micro", "*.bin") or not self.paths("game/vu0/micro", "*.bin")):
@@ -620,7 +751,7 @@ class Build:
                     raise ValueError(f"ISO not found: {self.iso}")
                 self.iso_fp = f"{str(self.iso).lower()}|{self.iso.stat().st_size}|{ticks(self.iso)}"
             for n, step in enumerate(self.steps, 1):
-                title = TITLES.get(step) or (f"ISO is Tekken 4 US (SLUS-20328): {self.iso}" if step == "verify" else f"PS2Recomp tree at eb8688b + patches\\*.patch ({self.tree})" if step == "fork" else f"tools\\build_runtime{'_portable' if self.portable else ''}.cmd -> {self.runner}")
+                title = (PREBUILT_TITLES.get(step) if self.prebuilt else None) or TITLES.get(step) or (f"ISO is Tekken 4 US (SLUS-20328): {self.iso}" if step == "verify" else f"PS2Recomp tree at eb8688b + patches\\*.patch ({self.tree})" if step == "fork" else f"tools\\build_runtime{'_portable' if self.portable else ''}.cmd -> {self.runner}")
                 self.say("")
                 self.say(f"[{n}/{len(self.steps)}] {step} - {title}")
                 self.last_lines = []

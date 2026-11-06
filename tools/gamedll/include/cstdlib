@@ -1,0 +1,3 @@
+#pragma once
+#include "t4_crt.h"
+namespace std { using ::getenv; using ::atoi; using ::malloc; using ::free; using ::abort; using ::size_t; }

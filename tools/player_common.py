@@ -87,8 +87,18 @@ def resolve_us_tree(root=ROOT, env=None):
     return tree
 
 
+def prebuilt_release(root=ROOT):
+    r"""0.1.4 release folder: the game program comes prebuilt (bin\runtime), the player's PC compiles only the code made
+    from the disc into a game DLL; the PS2Recomp source is in source\ps2recomp (not deps\: a launcher 0.1.2 keeps a
+    top-level deps folder as the player's own and refuses a release that carries one)."""
+    root = Path(root)
+    return (root / "toolchain/toolchain.json").is_file() and (root / "bin/runtime/ps2EntryRunner.exe").is_file()
+
+
 def build_tree(root=ROOT, env=None):
     env = os.environ if env is None else env
+    if prebuilt_release(root):
+        return (Path(root) / "source/ps2recomp").resolve()
     vendored = Path(root) / "deps/ps2recomp"
     if (Path(root) / "toolchain/toolchain.json").is_file() or ((vendored / ".t4-vendored.json").is_file() and not env.get("TEKKEN4_SRC")):
         return vendored.resolve()

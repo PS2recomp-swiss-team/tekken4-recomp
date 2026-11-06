@@ -9,7 +9,7 @@
 #include "game_overrides.h"
 #include "ps2_log.h"
 #include "ps2_runtime.h"
-#include <ps2_recompiled_functions.h>
+#include "tekken4_generated_calls.h"
 
 #ifdef _WIN32
 #define NOMINMAX

@@ -1,0 +1,22 @@
+#pragma once
+#include <float.h>
+#include <limits.h>
+namespace std {
+template <class T> struct numeric_limits;
+template <> struct numeric_limits<float> {
+  static constexpr float max() noexcept { return FLT_MAX; } static constexpr float min() noexcept { return FLT_MIN; }
+  static constexpr float lowest() noexcept { return -FLT_MAX; } static constexpr float infinity() noexcept { return __builtin_huge_valf(); }
+  static constexpr float quiet_NaN() noexcept { return __builtin_nanf(""); } static constexpr float epsilon() noexcept { return FLT_EPSILON; } };
+template <> struct numeric_limits<double> {
+  static constexpr double max() noexcept { return DBL_MAX; } static constexpr double min() noexcept { return DBL_MIN; }
+  static constexpr double lowest() noexcept { return -DBL_MAX; } static constexpr double infinity() noexcept { return __builtin_huge_val(); }
+  static constexpr double quiet_NaN() noexcept { return __builtin_nan(""); } static constexpr double epsilon() noexcept { return DBL_EPSILON; } };
+#define T4_INT_LIMITS(T, LO, HI) template <> struct numeric_limits<T> { \
+  static constexpr T min() noexcept { return LO; } static constexpr T max() noexcept { return HI; } static constexpr T lowest() noexcept { return LO; } };
+T4_INT_LIMITS(signed char, SCHAR_MIN, SCHAR_MAX) T4_INT_LIMITS(unsigned char, 0, UCHAR_MAX)
+T4_INT_LIMITS(short, SHRT_MIN, SHRT_MAX) T4_INT_LIMITS(unsigned short, 0, USHRT_MAX)
+T4_INT_LIMITS(int, INT_MIN, INT_MAX) T4_INT_LIMITS(unsigned int, 0, UINT_MAX)
+T4_INT_LIMITS(long, LONG_MIN, LONG_MAX) T4_INT_LIMITS(unsigned long, 0, ULONG_MAX)
+T4_INT_LIMITS(long long, LLONG_MIN, LLONG_MAX) T4_INT_LIMITS(unsigned long long, 0, ULLONG_MAX)
+#undef T4_INT_LIMITS
+}

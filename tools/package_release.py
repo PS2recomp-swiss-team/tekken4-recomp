@@ -1,6 +1,13 @@
-"""Stage a source-only T4 path-B player zip from reviewed local inputs.
+"""Stage the T4 player zip from reviewed local inputs (0.1.4: prebuilt game program, nothing to download).
 
-This tool does not clone, build or install anything. Download helpers are separate.
+The zip's T4 folder carries the game program compiled here (bin\\runtime: ps2EntryRunner.exe and its SSE2 twin, no
+game code, tools/build_release_runtime.py), the recompiler (bin\\tools\\ps2_recomp.exe), the bundled clang-cl +
+lld-link with clang's own headers (toolchain\\llvm), Python, our sources and the PS2Recomp source (source\\). The
+player's PC compiles only the code made from their disc (tools/build_game_dll.py): no Visual Studio, no Windows SDK,
+no Microsoft download, no Git, no network.
+
+Top-level names a launcher 0.1.2 keeps as the player's own (deps, game, generated, out, logs, build, save,
+settings.json, openrecomp-release.json) never appear in the zip: such a launcher can then install and update it.
 See docs/RELEASE_DOWNLOADS.md for the input lock format and release gates.
 """
 import argparse
@@ -22,7 +29,10 @@ from release_payload import checked_input, digest, files, safe_name, tree_digest
 ROOT = Path(__file__).resolve().parent.parent
 PS2_HEAD = "eb8688b2fd191129f103a39543002c005b33409c"
 FETCH = ("raylib", "imgui", "rlimgui", "sse2neon", "elfio", "toml11", "fmt", "libdwarf", "rabbitizer")
+# Names a launcher 0.1.2 (and 0.1.3) protects as the player's own at the top of the T4 folder: never in the zip.
+PLAYER_NAMES = {"deps", "game", "generated", "out", "logs", "build", "save", "settings.json", "openrecomp-release.json"}
 TOOLS = (
+    "build_game_dll.py", "build_release_runtime.py",
     "build_game.py", "net_play.py", "net_preflight.py", "player_common.py", "player_python.ps1",
     "us_tree.py", "us_tree.ps1", "us_tree.cmd",
     "build_game.ps1", "build_game_portable.ps1", "build_runtime.cmd", "build_runtime_portable.cmd",
@@ -50,10 +60,15 @@ def scan_name(name, size):
         "deps/ps2recomp/ps2xruntime/src/runner/register_functions.cpp",
         "deps/ps2recomp/ps2xruntime/include/ps2_recompiled_functions.h",
         "deps/ps2recomp/ps2xruntime/include/ps2_recompiled_stubs.h",
+        "source/ps2recomp/ps2xruntime/src/runner/register_functions.cpp",
+        "source/ps2recomp/ps2xruntime/include/ps2_recompiled_functions.h",
+        "source/ps2recomp/ps2xruntime/include/ps2_recompiled_stubs.h",
     }
     # Rabbitizer's own sources keep enum tables in folders named "generated" (upstream, not game code).
-    checked_parts = [q for q in parts if q != "generated"] if parts[:3] == ["deps", "fetch", "rabbitizer"] else parts
-    if any(part in BAD_PARTS for part in checked_parts) or (parts[-1] in BAD_NAMES and not placeholder) or p.suffix.lower() in BAD_SUFFIXES:
+    checked_parts = [q for q in parts if q != "generated"] if parts[:3] in (["deps", "fetch", "rabbitizer"], ["source", "fetch", "rabbitizer"]) else parts
+    # The prebuilt game program (0.1.4) is the one ps2EntryRunner.exe allowed: bin/runtime, checked in prebuilt_check().
+    prebuilt_program = len(parts) == 3 and parts[:2] == ["bin", "runtime"] and parts[2] in ("ps2entryrunner.exe", "ps2entryrunner-sse2.exe")
+    if any(part in BAD_PARTS for part in checked_parts) or (parts[-1] in BAD_NAMES and not placeholder and not prebuilt_program) or p.suffix.lower() in BAD_SUFFIXES:
         raise ValueError("forbidden release path: " + name)
     if re.search(r"(?:slus|sces|scus|sles)[_.-]?\d{3}[_.-]?\d{2}", parts[-1]):
         raise ValueError("disc executable name: " + name)
@@ -65,7 +80,7 @@ def scan_name(name, size):
         raise ValueError("lifted game source filename: " + name)
     if any(parts[i:i + 2] in (["toolchain", "msvc"], ["toolchain", "winsdk"]) for i in range(len(parts) - 1)):
         raise ValueError("Microsoft sysroot must only be fetched on the player's PC: " + name)
-    approved_binary_prefix = "/".join(parts).startswith(("python/", "toolchain/llvm/", "toolchain/cmake/", "toolchain/ninja/", "deps/ffmpeg/"))
+    approved_binary_prefix = "/".join(parts).startswith(("python/", "toolchain/llvm/", "toolchain/cmake/", "toolchain/ninja/", "deps/ffmpeg/", "bin/runtime/", "bin/tools/"))
     if p.suffix.lower() in {".bin", ".rom", ".img"} and not approved_binary_prefix:
         raise ValueError("unapproved binary data: " + name)
     # All compiled files need a narrow tool/dependency location, regardless of size.
@@ -202,6 +217,30 @@ def python_self_test(stage):
     subprocess.run([str(stage / "python" / "python.exe"), "-I", "-B", "-c", code], cwd=stage, env=env, check=True)
 
 
+def prebuilt_check(bin_dir):
+    """The prebuilt program must be the game-DLL host (patch 99): it loads ps2_game.dll and carries no game code."""
+    for name in ("ps2EntryRunner.exe", "ps2EntryRunner-sse2.exe"):
+        data = (bin_dir / "runtime" / name).read_bytes()
+        if b"ps2_game_dll_init" not in data or b"ps2_game.dll" not in data.replace(b"\0", b""):
+            raise ValueError(f"bin/runtime/{name} is not a game-DLL runtime (PS2X_GAME_DLL)")
+        if len(data) > 20 * 1024 * 1024:
+            raise ValueError(f"bin/runtime/{name} is too large for a runtime without game code")
+    if not (bin_dir / "tools" / "ps2_recomp.exe").is_file():
+        raise ValueError("bin/tools/ps2_recomp.exe is missing")
+
+
+def llvm_subset(src, dst):
+    """What the player's PC needs of LLVM: clang-cl, lld-link and clang's own headers (no import librarian, no
+    resource compiler, no sanitizer runtimes)."""
+    for name in ("clang-cl.exe", "lld-link.exe"):
+        (dst / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src / "bin" / name, dst / "bin" / name)
+    headers = sorted((src / "lib" / "clang").glob("*/include"))
+    if len(headers) != 1:
+        raise ValueError("expected one clang resource include folder in the LLVM input")
+    copy_tree(headers[0], dst / headers[0].relative_to(src))
+
+
 def package(a):
     lock = json.loads(a.inputs.read_text(encoding="utf-8"))
     stage = a.stage.resolve()
@@ -220,17 +259,12 @@ def package(a):
     sysroot_data = json.loads(sysroot_lock.read_text(encoding="utf-8"))
     if sysroot_data.get("schema") != 1 or sysroot_data.get("architecture") != "x64" or not sysroot_data.get("payloads") or sysroot_data.get("license_reviewed") is not True:
         raise ValueError("reviewed x64 Microsoft payload lock is required")
-    from fetch_msvc_sysroot import validate_payload
-    for payload in sysroot_data["payloads"]:
-        validate_payload(payload)
     licenses = {name: checked_input(record) for name, record in lock["licenses"].items()}
-    required_licenses = {"project", "python", "llvm", "cmake", "ninja", "ps2recomp", "ffmpeg", "sdl2", "openexr", "vu1_generator", "microsoft-build-tools", "microsoft-windows-sdk", *FETCH}
+    # cmake/ninja build the program here and are not shipped; the program links Microsoft's static C/C++ runtime
+    # (their texts stay in LICENSES); LLVM's clang-cl/lld-link are shipped.
+    required_licenses = {"project", "python", "llvm", "ps2recomp", "ffmpeg", "sdl2", "openexr", "microsoft-build-tools", "microsoft-windows-sdk", *FETCH}
     if not required_licenses.issubset(licenses):
         raise ValueError("missing licence texts: " + ", ".join(sorted(required_licenses - licenses.keys())))
-    for name in ("microsoft-build-tools", "microsoft-windows-sdk"):
-        terms = sysroot_data.get("license_terms", {}).get(name, {})
-        if terms.get("path") != "LICENSES/" + name + ".txt" or terms.get("sha256") != digest(licenses[name]) or not terms.get("url", "").startswith("https://"):
-            raise ValueError("Microsoft lock does not match reviewed licence text: " + name)
     pins = json.loads((ROOT / "tools" / "release_toolchain.json").read_text(encoding="utf-8"))
     for name in ("llvm", "cmake", "ninja"):
         receipt = json.loads((dirs[name] / ".t4-payload.json").read_text(encoding="utf-8"))
@@ -240,8 +274,15 @@ def package(a):
     patches = [{"name": p.name, "sha256": digest(p)} for p in sorted((ROOT / "patches").glob("*.patch"))]
     if marker.get("head") != PS2_HEAD or marker.get("patches") != patches:
         raise ValueError("vendored PS2Recomp must attest the exact pinned head and all current patches")
+    if not a.sysroot or not (Path(a.sysroot) / "sysroot.json").is_file() or not a.work:
+        raise ValueError("--sysroot (Microsoft headers/libraries for the program build) and --work are required")
+    work = Path(a.work).resolve()
+    if work.exists() and any(work.iterdir()):
+        raise ValueError("--work must be a new or empty folder")
     stage.mkdir(parents=True)
-    for name in ("LICENSE", "README.md", "START_HIER.txt", "Tekken4.cmd"):
+    # 0.1.4: no Tekken4.cmd (the old standalone T4 launcher) at the top any more: players start OpenRecomp-FGC
+    # ("Tekken4.cmd or OpenRecomp-FGC?" confused them); launcher\t4core.py stays, every launcher uses it.
+    for name in ("LICENSE", "README.md", "START_HIER.txt"):
         shutil.copy2(ROOT / name, stage / name)
     for name in ("config", "runtime", "patches", "docs"):
         # runtime/pal is the PAL cousin's reference source; the US build never stages it (0.1.2 zip had none).
@@ -254,35 +295,49 @@ def package(a):
         target = stage / "tools" / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "tools" / name, target)
-    shutil.copy2(sysroot_lock, stage / "tools" / "msvc_sysroot.lock.json")
-    copy_tree(ROOT / "tools" / "vu1", stage / "tools" / "vu1", {"__pycache__"})
     copy_tree(ROOT / "tools" / "vu", stage / "tools" / "vu", {"__pycache__"})
+    copy_tree(ROOT / "tools" / "gamedll", stage / "tools" / "gamedll", {"__pycache__"})
     private_python(dirs["python"], stage / "python")
-    for name in ("llvm", "cmake", "ninja"):
-        copy_tree(dirs[name], stage / "toolchain" / name)
+    llvm_subset(dirs["llvm"], stage / "toolchain" / "llvm")
     # Omit checkout metadata/build directories without modifying the supplied tree.
     # A source tree contaminated with staged game code still fails the final scan.
-    copy_tree(dirs["ps2recomp"], stage / "deps" / "ps2recomp", {".git", "out", "generated", "__pycache__"})
+    copy_tree(dirs["ps2recomp"], stage / "source" / "ps2recomp", {".git", "out", "generated", "__pycache__"})
     for name, path in sources.items():
-        copy_tree(path, stage / "deps" / "fetch" / name, {".git", "out", "build", "__pycache__"})
-    (stage / "deps" / "ffmpeg").mkdir(parents=True)
-    shutil.copy2(ffmpeg, stage / "deps" / "ffmpeg" / "ffmpeg.zip")
+        copy_tree(path, stage / "source" / "fetch" / name, {".git", "out", "build", "__pycache__"})
     (stage / "LICENSES").mkdir()
     for name, path in licenses.items():
         if not re.fullmatch(r"[a-z0-9_-]+", name):
             raise ValueError("invalid licence component name: " + name)
+        if name in ("cmake", "ninja", "vu1_generator"):
+            continue                       # not shipped any more (0.1.4)
         shutil.copy2(path, stage / "LICENSES" / (name + ".txt"))
-    from fetch_msvc_sysroot import license_terms
-    license_terms(stage, sysroot_data)
     from prepare_portable_tree import prepare
-    prepare(stage, stage / "deps" / "ps2recomp")
-    (stage / "toolchain" / "toolchain.json").write_text(json.dumps(pins, indent=2) + "\n", encoding="utf-8")
+    prepare(stage, stage / "source" / "ps2recomp")
+    # The game program, compiled here from exactly that prepared source (tools/build_release_runtime.py).
+    import build_release_runtime
+    lic = work / "licenses"
+    lic.mkdir(parents=True)
+    for name in ("microsoft-build-tools", "microsoft-windows-sdk"):
+        shutil.copy2(licenses[name], lic / (name + ".txt"))
+    code = build_release_runtime.main(["--work", str(work / "build"), "--tree", str(stage / "source" / "ps2recomp"),
+                                       "--fetch", str(sources["raylib"].parent),
+                                       "--ffmpeg", str(ffmpeg), "--python", str(dirs["python"]), "--llvm", str(dirs["llvm"]),
+                                       "--cmake", str(dirs["cmake"]), "--ninja", str(dirs["ninja"]), "--sysroot", str(a.sysroot),
+                                       "--sysroot-lock", str(sysroot_lock), "--licenses", str(lic), "--out", str(stage / "bin")])
+    if code:
+        raise ValueError("building the game program failed")
+    prebuilt_check(stage / "bin")
+    (stage / "toolchain" / "toolchain.json").write_text(json.dumps({k: v for k, v in pins.items() if k in ("schema", "platform", "verified_metadata_date", "llvm")}, indent=2) + "\n", encoding="utf-8")
+    bad = sorted(p.name for p in stage.iterdir() if p.name.lower() in PLAYER_NAMES)
+    if bad:
+        raise ValueError("the T4 folder must not carry a player's name (launcher 0.1.2 refuses it): " + ", ".join(bad))
     # Strip maintainer paths from public provenance; retain exact digests, source and version.
     def public(value):
         if isinstance(value, dict):
             return {k: public(v) for k, v in value.items() if k != "path"}
         return value
-    (stage / "release.json").write_text(json.dumps({"version": a.version, "path": "B", "inputs": public(lock)}, indent=2) + "\n", encoding="utf-8")
+    (stage / "release.json").write_text(json.dumps({"version": a.version, "path": "C", "runtime": "prebuilt",
+                                                    "min_launcher": a.min_launcher, "inputs": public(lock)}, indent=2) + "\n", encoding="utf-8")
     python_self_test(stage)
     scan(stage)
     sums = "".join(digest(p) + "  " + p.relative_to(stage).as_posix() + "\n" for p in files(stage))
@@ -306,6 +361,9 @@ def main():
     p.add_argument("--stage", type=Path)
     p.add_argument("--zip", type=Path)
     p.add_argument("--version")
+    p.add_argument("--sysroot", help="Microsoft headers/libraries (msvc, winsdk, sysroot.json) for building the program here")
+    p.add_argument("--work", type=Path, help="new folder for building the program")
+    p.add_argument("--min-launcher", default="0.1.2", help="oldest OpenRecomp-FGC that can install and build this release")
     a = p.parse_args()
     try:
         if a.scan_only:
@@ -314,8 +372,8 @@ def main():
         elif a.hash_tree:
             print(tree_digest(a.hash_tree))
         else:
-            if not all((a.inputs, a.stage, a.zip, a.version)):
-                p.error("packaging requires --inputs, --stage, --zip and --version")
+            if not all((a.inputs, a.stage, a.zip, a.version, a.sysroot, a.work)):
+                p.error("packaging requires --inputs, --stage, --zip, --version, --sysroot and --work")
             package(a)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.CalledProcessError) as e:
         print("ERROR:", e, file=sys.stderr)

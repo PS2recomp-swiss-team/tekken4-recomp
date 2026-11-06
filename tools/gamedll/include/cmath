@@ -1,0 +1,20 @@
+#pragma once
+#include "math.h"
+namespace std {
+inline float sqrt(float x) { return __builtin_sqrtf(x); }
+inline double sqrt(double x) { return __builtin_sqrt(x); }
+inline float fabs(float x) { return __builtin_fabsf(x); }
+inline double fabs(double x) { return __builtin_fabs(x); }
+inline float abs(float x) { return __builtin_fabsf(x); }
+inline double abs(double x) { return __builtin_fabs(x); }
+inline bool signbit(float x) { return __builtin_signbit(x); }
+inline bool signbit(double x) { return __builtin_signbit(x); }
+inline bool isnan(float x) { return __builtin_isnan(x); }
+inline bool isnan(double x) { return __builtin_isnan(x); }
+inline bool isinf(float x) { return __builtin_isinf(x); }
+inline bool isinf(double x) { return __builtin_isinf(x); }
+inline bool isfinite(float x) { return __builtin_isfinite(x); }
+inline bool isfinite(double x) { return __builtin_isfinite(x); }
+inline float copysign(float x, float y) { return __builtin_copysignf(x, y); }
+inline double copysign(double x, double y) { return __builtin_copysign(x, y); }
+}

@@ -1,0 +1,27 @@
+#pragma once
+namespace std {
+template <class To, class From> constexpr To bit_cast(const From& from) noexcept { return __builtin_bit_cast(To, from); }
+template <class T> constexpr int countl_zero(T x) noexcept {
+  constexpr int n = sizeof(T) * 8;
+  if (x == 0) return n;
+  if constexpr (sizeof(T) <= 4) return __builtin_clz(static_cast<unsigned>(x)) - (32 - n);
+  else return __builtin_clzll(static_cast<unsigned long long>(x));
+}
+template <class T> constexpr int countl_one(T x) noexcept { return countl_zero(static_cast<T>(~x)); }
+template <class T> constexpr int countr_zero(T x) noexcept {
+  constexpr int n = sizeof(T) * 8;
+  if (x == 0) return n;
+  if constexpr (sizeof(T) <= 4) return __builtin_ctz(static_cast<unsigned>(x));
+  else return __builtin_ctzll(static_cast<unsigned long long>(x));
+}
+template <class T> constexpr int countr_one(T x) noexcept { return countr_zero(static_cast<T>(~x)); }
+template <class T> constexpr int popcount(T x) noexcept {
+  if constexpr (sizeof(T) <= 4) return __builtin_popcount(static_cast<unsigned>(x));
+  else return __builtin_popcountll(static_cast<unsigned long long>(x));
+}
+template <class T> constexpr T rotl(T x, int s) noexcept {
+  constexpr int n = sizeof(T) * 8; const int r = s % n;
+  return r == 0 ? x : r > 0 ? static_cast<T>((x << r) | (x >> (n - r))) : static_cast<T>((x >> -r) | (x << (n + r)));
+}
+template <class T> constexpr T rotr(T x, int s) noexcept { return rotl(x, -s); }
+}

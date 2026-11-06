@@ -12,7 +12,7 @@
 #include "runtime/gs/gs_frontend.h"
 #include "Stubs/CD.h"
 #include "Stubs/MPEG.h"
-#include <ps2_recompiled_functions.h>
+#include "tekken4_generated_calls.h"
 
 #ifdef _WIN32
 #define NOMINMAX
