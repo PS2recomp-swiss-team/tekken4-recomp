@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from player_common import ROOT, NO_WINDOW, PlayerParser, build_tree, configure_output, digest, git_output, option, read_json, write_json
@@ -257,36 +256,22 @@ class Build:
         if not isinstance(self.state, dict):
             self.state = {}
         self.log = self.log_path.open("a", encoding="utf-8", buffering=1)
-        self._tl, self._lock = threading.local(), threading.RLock()
         self.changed, self.last_lines, self.timings, self.iso_files = set(), [], [], {}
         self.iso_fp = ""
         self.compiler_ready = False
-        self._disc = None
-
-    # The disc's steps (verify, extract) can run on a second thread while the compiler is set up (0.1.3): each thread
-    # keeps its own command output; the log, the console and the state file take one writer at a time.
-    last_lines = property(lambda self: getattr(self._tl, "lines", []), lambda self, value: setattr(self._tl, "lines", value))
-    last_seconds = property(lambda self: getattr(self._tl, "seconds", 0.0),
-                            lambda self, value: setattr(self._tl, "seconds", value))
-
-    def write_log(self, text):
-        with self._lock:
-            self.log.write(text)
 
     def say(self, text):
-        with self._lock:
-            print(text, flush=True)
-            self.log.write(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S ") + text + "\n")
+        print(text, flush=True)
+        self.log.write(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S ") + text + "\n")
 
     def record(self, step, **values):
         if self.a.WhatIf:
             return
-        with self._lock:
-            if not isinstance(self.state.get(step), dict):
-                self.state[step] = {}
-            self.state[step].update(values)
-            self.state["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
-            write_json(self.state_path, self.state)
+        if not isinstance(self.state.get(step), dict):
+            self.state[step] = {}
+        self.state[step].update(values)
+        self.state["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
+        write_json(self.state_path, self.state)
 
     def get(self, step, key):
         value = self.state.get(step)
@@ -298,18 +283,17 @@ class Build:
             argv[0] = shutil.which(argv[0], path=self.env.get("PATH")) or argv[0]
         self.last_lines = []
         started = time.monotonic()
-        self.write_log(f"> {subprocess.list2cmdline(argv)}   (cwd {cwd or self.root})\n")
+        self.log.write(f"> {subprocess.list2cmdline(argv)}   (cwd {cwd or self.root})\n")
         p = subprocess.Popen(argv, cwd=cwd or self.root, env=self.env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
         try:
             for line in p.stdout:
                 line = line.rstrip()
                 if line:
-                    self.write_log(line + "\n")
+                    self.log.write(line + "\n")
                     self.last_lines = (self.last_lines + [line])[-40:]
                     if echo and re.search(echo, line):
-                        with self._lock:
-                            print("    " + line, flush=True)
+                        print("    " + line, flush=True)
             code = p.wait()
         except BaseException:
             p.terminate()
@@ -318,7 +302,7 @@ class Build:
         finally:
             p.stdout.close()
         self.last_seconds = time.monotonic() - started
-        self.write_log(f"< exit code {code} ({self.last_seconds:.1f}s)\n")
+        self.log.write(f"< exit code {code} ({self.last_seconds:.1f}s)\n")
         if code and check:
             raise ValueError(next((line for line in self.last_lines if line.startswith("ERROR:")), f"{argv[0]} failed (exit {code})"))
         return code
@@ -625,43 +609,6 @@ class Build:
         self.changed.add("runtime")
         return "built"
 
-    def _disc_start(self):
-        """0.1.3: in a full release build the disc's steps (verify, extract: reading 2.7 GB from the ISO, disk-bound)
-        run beside the compiler's (Microsoft's files, CMake, the recompiler tools: network and CPU); recomp needs both
-        and waits. Nothing of the result changes, only the order of the log lines."""
-        if self.a.WhatIf or not self.portable or "prereq" not in self.steps or not {"verify", "extract"} <= set(self.steps):
-            return
-        disc = dict(results={}, times={}, error=None)
-
-        def work():
-            step = "verify"
-            try:
-                for step in ("verify", "extract"):
-                    timer = time.monotonic()
-                    disc["results"][step] = getattr(self, step)()
-                    disc["times"][step] = time.monotonic() - timer
-            except BaseException as error:  # noqa: BLE001 -- raised again in the main thread at that step
-                disc["error"] = (step, error, list(self.last_lines))
-        disc["thread"] = threading.Thread(target=work, name="disc", daemon=True)
-        self._disc = disc
-        self.say("    (the disc is checked and its files unpacked meanwhile, beside the compiler set-up)")
-        disc["thread"].start()
-
-    def _disc_wait(self, step):
-        timer = time.monotonic()
-        disc = self._disc
-        while step not in disc["results"] and disc["error"] is None and disc["thread"].is_alive():
-            disc["thread"].join(0.5)
-        if disc["error"] is not None:
-            failed, error, lines = disc["error"]
-            self.last_lines = lines
-            if failed == step or step == "extract":
-                raise error
-        waited = time.monotonic() - timer
-        if waited > 0.5:
-            self.say(f"    waited {waited:.1f}s for the disc")
-        return disc["results"][step], disc["times"][step]
-
     def execute(self):
         started, step = time.monotonic(), "verify"
         try:
@@ -672,18 +619,14 @@ class Build:
                 if not self.iso.is_file():
                     raise ValueError(f"ISO not found: {self.iso}")
                 self.iso_fp = f"{str(self.iso).lower()}|{self.iso.stat().st_size}|{ticks(self.iso)}"
-            self._disc_start()
             for n, step in enumerate(self.steps, 1):
                 title = TITLES.get(step) or (f"ISO is Tekken 4 US (SLUS-20328): {self.iso}" if step == "verify" else f"PS2Recomp tree at eb8688b + patches\\*.patch ({self.tree})" if step == "fork" else f"tools\\build_runtime{'_portable' if self.portable else ''}.cmd -> {self.runner}")
                 self.say("")
                 self.say(f"[{n}/{len(self.steps)}] {step} - {title}")
                 self.last_lines = []
                 timer = time.monotonic()
-                if self._disc and step in ("verify", "extract"):
-                    result, elapsed = self._disc_wait(step)
-                else:
-                    result = (self.recompile if step == "recomp" else getattr(self, step))()
-                    elapsed = time.monotonic() - timer
+                result = (self.recompile if step == "recomp" else getattr(self, step))()
+                elapsed = time.monotonic() - timer
                 self.timings.append(f"{step:<8} {result:<12} {elapsed:.1f}s")
                 self.say(f"    {result} ({elapsed:.1f}s)")
             self.say("\n--- timings ---")
@@ -711,8 +654,6 @@ class Build:
             self.say(f"Full log: {self.log_path}")
             return 1
         finally:
-            if self._disc and self._disc["thread"].is_alive():
-                self._disc["thread"].join()       # an earlier step failed: let the unpack finish its file cleanly
             self.log.close()
 
 

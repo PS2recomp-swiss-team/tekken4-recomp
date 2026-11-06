@@ -165,69 +165,6 @@ class DeveloperShell(unittest.TestCase):
             self.assertIn(f'string(APPEND CMAKE_{lang}_FLAGS_INIT " -fms-compatibility-version=${{T4_MSC_VERSION}}")', cmake)
 
 
-class DiscBesideCompiler(unittest.TestCase):
-    """0.1.3: verify + extract (disk) run beside prereq/fork/tools (network, CPU); recomp waits for both."""
-
-    def build(self, temp, **steps):
-        import threading
-        import time as clock
-        root = Path(temp) / "T4"
-        (root / "toolchain").mkdir(parents=True)
-        (root / "toolchain" / "toolchain.json").write_text("{}", encoding="utf-8")
-        iso = Path(temp) / "t4.iso"
-        iso.write_bytes(b"x")
-        args = build_game.parser().parse_args(["-Iso", str(iso), "-Steps", "prereq,verify,extract,fork"])
-        build = build_game.Build(args, root)
-        seen = []
-
-        def step(name, seconds=0.0, fail=False):
-            def run():
-                seen.append((name, threading.current_thread().name, clock.monotonic()))
-                clock.sleep(seconds)
-                if fail:
-                    raise ValueError(name + " broke")
-                return name + " done"
-            return run
-        for name in ("prereq", "verify", "extract", "fork"):
-            setattr(build, name, step(name, **steps.get(name, {})))
-        return build, seen
-
-    def test_the_disc_runs_on_its_own_thread_during_prereq(self):
-        with tempfile.TemporaryDirectory() as temp:
-            build, seen = self.build(temp, prereq=dict(seconds=0.4))
-            self.assertEqual(build.execute(), 0)
-            threads = {name: thread for name, thread, _t in seen}
-            self.assertEqual(threads["verify"], "disc")
-            self.assertEqual(threads["extract"], "disc")
-            self.assertNotEqual(threads["prereq"], "disc")
-            start = {name: t for name, _thread, t in seen}
-            self.assertLess(start["extract"], start["prereq"] + 0.4)      # began before prereq was over
-            text = (Path(temp) / "T4" / "logs" / "build_game.log").read_text(encoding="utf-8")
-            self.assertIn("verify done", text)
-            self.assertIn("extract done", text)
-
-    def test_a_disc_error_stops_the_build_at_its_step(self):
-        with tempfile.TemporaryDirectory() as temp:
-            build, seen = self.build(temp, verify=dict(fail=True))
-            self.assertEqual(build.execute(), 1)
-            text = (Path(temp) / "T4" / "logs" / "build_game.log").read_text(encoding="utf-8")
-            self.assertIn("FAILED at step 'verify': verify broke", text)
-            self.assertNotIn("fork", [name for name, _thread, _t in seen])
-
-    def test_a_dry_run_or_a_source_checkout_keeps_the_old_order(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp) / "T4"
-            root.mkdir()
-            iso = Path(temp) / "t4.iso"
-            iso.write_bytes(b"x")
-            build = build_game.Build(build_game.parser().parse_args(["-Iso", str(iso)]), root)
-            try:
-                build._disc_start()
-                self.assertIsNone(build._disc)                    # not portable
-            finally:
-                build.log.close()
-
-
 class SysrootPaths(unittest.TestCase):
     def test_cache_names_stay_short_and_a_damaged_download_is_fetched_again(self):
         import hashlib
