@@ -15,10 +15,16 @@ One build for everyone. Everything in [RELEASE_NOTES_0.1.1.md](RELEASE_NOTES_0.1
   first Build, straight from Microsoft, with fixed checksums (`tools/msvc_sysroot.lock.json`): every player gets the
   same bytes. They cannot be part of our zip (Microsoft's licence). About 240 MB download, 760 MB on disk.
   Pressing Build accepts Microsoft's licence terms (`LICENSES/microsoft-*.txt`). After that the build needs no network.
-- Nothing of the PC reaches the build: its PATH, CL/_CL_/LINK, CFLAGS/CXXFLAGS, INCLUDE/LIB, Visual Studio and
-  CMAKE_* variables are dropped in a release folder.
+  They are kept once per PC (`%LOCALAPPDATA%\OpenRecomp\cache`) for every Tekken 4 folder and update: a second install
+  or an update does not download them again.
+- Nothing of the PC reaches the build: a release folder keeps only Windows' own variables (PATH, CL/_CL_/LINK,
+  CFLAGS/CXXFLAGS, INCLUDE/LIB, a developer prompt's Visual Studio variables, CMAKE_*, PYTHON* are dropped), and the
+  compiler never looks for an installed Visual Studio: it used to take `_MSC_VER` from it (19.44 with VS 2022, 19.51
+  with VS 2026, 19.33 with none) -- now fixed at 19.44 for everyone.
 - Install folders up to 115+ characters build (checked); spaces are fine.
-- A rebuild in the same folder only redoes what changed ("up to date" steps take seconds).
+- Faster build: the first build is about 3.5 minutes here incl. the Microsoft download (0.1.3 test builds: 4.5); the
+  disc is unpacked while the compiler is set up; Microsoft's files are fetched six at a time and checked once. A
+  rebuild with nothing changed takes about 2 seconds (was 40).
 - The online identity uses the game files from your ISO (SLUS_203.28, TEKKEN\DATA.BIN, IRX\IOPRP243.IMG) instead of
   the whole ISO file: two clean rips of the same disc play each other. Direct IP and the lobby use the same rule.
 
