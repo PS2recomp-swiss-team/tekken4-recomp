@@ -314,12 +314,17 @@ def package(a):
     from prepare_portable_tree import prepare
     prepare(stage, stage / "source" / "ps2recomp")
     # The game program, compiled here from exactly that prepared source (tools/build_release_runtime.py).
+    if a.bin:
+        # The program of an earlier package of the same runtime sources (its build is not byte-reproducible: PE time
+        # stamps), reused so a fix outside the program keeps every player's build id. Checked like a fresh one.
+        copy_tree(Path(a.bin), stage / "bin")
+        prebuilt_check(stage / "bin")
     import build_release_runtime
     lic = work / "licenses"
     lic.mkdir(parents=True)
     for name in ("microsoft-build-tools", "microsoft-windows-sdk"):
         shutil.copy2(licenses[name], lic / (name + ".txt"))
-    code = build_release_runtime.main(["--work", str(work / "build"), "--tree", str(stage / "source" / "ps2recomp"),
+    code = 0 if a.bin else build_release_runtime.main(["--work", str(work / "build"), "--tree", str(stage / "source" / "ps2recomp"),
                                        "--fetch", str(sources["raylib"].parent),
                                        "--ffmpeg", str(ffmpeg), "--python", str(dirs["python"]), "--llvm", str(dirs["llvm"]),
                                        "--cmake", str(dirs["cmake"]), "--ninja", str(dirs["ninja"]), "--sysroot", str(a.sysroot),
@@ -364,6 +369,7 @@ def main():
     p.add_argument("--sysroot", help="Microsoft headers/libraries (msvc, winsdk, sysroot.json) for building the program here")
     p.add_argument("--work", type=Path, help="new folder for building the program")
     p.add_argument("--min-launcher", default="0.1.2", help="oldest OpenRecomp-FGC that can install and build this release")
+    p.add_argument("--bin", type=Path, help="reuse this bin folder (an earlier package's, same runtime sources) instead of building it")
     a = p.parse_args()
     try:
         if a.scan_only:

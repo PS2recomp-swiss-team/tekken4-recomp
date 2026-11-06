@@ -455,8 +455,23 @@ class Build:
                 self.say(f"  {i}. {item}")
             raise ValueError(f"{len(missing)} part(s) of the release folder missing, see above. Unpack the whole "
                              "release zip again or install Tekken 4 fresh from the launcher.")
+        self.space_check()
         self.compiler_environment()
         return "ok (bundled, nothing to download)"
+
+    def space_check(self):
+        """0.1.4: say it before anything is written when the drive is too full (the disc's files ~2.6 GB, unless already
+        unpacked, plus ~0.8 GB for the translated code, objects and the game program). Test hook T4_TEST_FREE_MB."""
+        need = 800 * 1024 * 1024
+        if not (self.disc / "TEKKEN/DATA.BIN").is_file():
+            need += 2800 * 1024 * 1024
+        test = self.env.get("T4_TEST_FREE_MB") or os.environ.get("T4_TEST_FREE_MB")
+        free = int(test) * 1024 * 1024 if test and test.isdigit() else shutil.disk_usage(self.root).free
+        gb = lambda n: f"{n / 1024 ** 3:.1f}"
+        if free < need:
+            raise ValueError(f"Not enough free space on the drive of {self.root}: the build needs about {gb(need)} GB, "
+                             f"{gb(free)} GB are free. Free some space (or install Tekken 4 on another drive) and press Build again.")
+        self.say(f"    free space: {gb(free)} GB (the build needs about {gb(need)} GB)")
 
     def check_iso(self):
         code = self.python("iso_extract.py", self.iso, "--check", check=False)

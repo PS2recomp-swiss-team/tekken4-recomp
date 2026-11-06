@@ -72,6 +72,23 @@ class PrebuiltLayout(unittest.TestCase):
                 package_release.scan_name(bad, 1000)
 
 
+class SpaceCheck(unittest.TestCase):
+    def test_a_full_drive_is_said_before_the_build_with_the_gb_needed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = fake_release(Path(tmp) / "T4")
+            b = build_game.Build(build_game.parser().parse_args(["-LogDir", str(Path(tmp) / "logs")]), root)
+            try:
+                os.environ["T4_TEST_FREE_MB"] = "1000"
+                with self.assertRaises(ValueError) as caught:
+                    b.space_check()
+                self.assertIn("needs about 3.5 GB, 1.0 GB are free", str(caught.exception))
+                os.environ["T4_TEST_FREE_MB"] = "9000"
+                b.space_check()                                  # enough: no error
+            finally:
+                os.environ.pop("T4_TEST_FREE_MB", None)
+                b.log.close()
+
+
 class BuildId(unittest.TestCase):
     def ids(self, root):
         lines = t4_buildid.prebuilt_toolchain(str(root))
