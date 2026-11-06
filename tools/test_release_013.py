@@ -354,6 +354,13 @@ class SharedSysroot(unittest.TestCase):
                 self.assertEqual(fetch_msvc_sysroot.install(second, second / "tools" / "msvc_sysroot.lock.json"), sysroot)
             self.assertFalse((second / "toolchain").exists())          # nothing copied into the install
 
+    def test_an_old_launcher_hears_that_it_must_update_first(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "T4"
+            lock = fake_release(root)
+            with self.assertRaisesRegex(ValueError, "needs OpenRecomp-FGC 0.1.3 or newer"):
+                fetch_msvc_sysroot.check(root, lock, Path(temp) / "cache" / "msvc-x")
+
     def test_build_game_compiles_against_the_shared_sysroot(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as temp:

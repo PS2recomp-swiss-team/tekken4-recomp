@@ -500,6 +500,11 @@ def check(root, lock_path, sysroot=None):
     used to spend 37 s here re-hashing 757 MB)."""
     license_terms(root, read_json(lock_path))
     toolchain = Path(sysroot) if sysroot else sysroot_dir(root, lock_path)
+    if not (toolchain / "sysroot.json").is_file():
+        # Only a launcher from before 0.1.3 builds without having named Microsoft's licence (-AcceptMicrosoftLicense)
+        raise ValueError("Microsoft's C++ files are not on this PC yet. Tekken 4 0.1.3 needs OpenRecomp-FGC 0.1.3 or "
+                         "newer: update the launcher (Settings > Update), then press Build again -- it downloads them "
+                         "once, straight from Microsoft.")
     marker = read_json(toolchain / "sysroot.json")
     if marker.get("schema") != 1 or marker.get("lock_sha256") != sha256(lock_path) or not marker.get("license_accepted"):
         raise ValueError("sysroot marker does not match this release's Microsoft lock/licence acceptance")
