@@ -353,6 +353,43 @@ namespace
         CHECK(pb::keyName(0x0D) == "ENTER" && pb::keyName(0xDE) == "APOSTROPHE" && pb::keyName(0x1B) == "ESC");
     }
 
+    // The same text and expectations as the launcher's tests/test_t4_controls_ini.py (GOLDEN): both parsers agree.
+    void testGolden()
+    {
+        std::vector<std::string> warn;
+        const pb::Config c = pb::parse(R"INI(; a comment
+[player1]
+device = keyboard+xinput:2
+[player1.pad]
+1 = x lb
+CROSS = NONE
+L2 = RT
+UP = DUP, LUP RUP
+[player1.keys]
+SQUARE = left z
+RP = F5
+[player2]
+device = xinput:0
+[player2.keys]
+1 = NUM4
+)INI",
+                                       &warn);
+        CHECK(warn.empty());
+        CHECK(c.p[0].keyboard && c.p[0].pad && c.p[0].xslot == 2);
+        CHECK(!c.p[1].keyboard && c.p[1].pad && c.p[1].xslot == 0);
+        const pb::PadMap &pm = c.p[0].padMap;
+        CHECK(pm.src[pb::B_SQUARE].size() == 2 && pm.src[pb::B_SQUARE][0].arg == pb::X_X && pm.src[pb::B_SQUARE][1].arg == pb::X_LB);
+        CHECK(pm.set[pb::B_CROSS] && pm.src[pb::B_CROSS].empty());
+        CHECK(pm.src[pb::B_L2].size() == 1 && pm.src[pb::B_L2][0].kind == pb::SK_RT);
+        CHECK(pm.src[pb::B_UP].size() == 3);
+        CHECK(!pm.set[pb::B_TRIANGLE]);
+        CHECK(mapKeys(c.p[0].keyMap, 0, {0x25}) == kSquare && mapKeys(c.p[0].keyMap, 0, {0x60}) == 0);
+        CHECK(mapKeys(c.p[0].keyMap, 0, {0x74}) == kTriangle);
+        CHECK(mapKeys(c.p[0].keyMap, 0, {'Q'}) == kL1);
+        CHECK(mapKeys(c.p[1].keyMap, 1, {0x64}) == kSquare);
+        CHECK(mapKeys(c.p[1].keyMap, 1, {'Q'}) == 0);
+    }
+
     void writeFile(const std::string &path, const std::string &text)
     {
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
@@ -411,6 +448,7 @@ int main(int argc, char **argv)
 {
     const std::string dir = argc > 1 ? argv[1] : ".";
     testNames();
+    testGolden();
     testDefaultFiles();
     testDevices();
     testBindingLines();
