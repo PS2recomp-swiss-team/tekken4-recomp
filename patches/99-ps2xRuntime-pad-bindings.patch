@@ -1,0 +1,1379 @@
+From ca1a388aa69ff99195e84291846a5a9c4f009e90 Mon Sep 17 00:00:00 2001
+From: t5dr <t5dr@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 19:00:39 +0100
+Subject: [PATCH 99/99] Pad bindings: per-player device and button map from
+ controls.ini
+
+TEKKEN4_CONTROLS=<path> (else controls.ini in the working directory = the save folder) is read at start and
+re-read within ~1 s when it changes. Per player (player1 = port 1, player2 = port 2): device = auto | none |
+keyboard | xinput | xinput:0..3 (joined with +), [playerN.pad] XInput bindings and [playerN.keys] keyboard
+bindings, TARGET = SOURCE ... per PS2 button (SELECT L3 R3 START UP RIGHT DOWN LEFT L2 R2 L1 R1 TRIANGLE CIRCLE
+CROSS SQUARE or the Tekken names 1 2 3 4). A button not listed keeps its fixed default; `none` unbinds it.
+
+ps2_pad_bindings.h (header only) holds the parser, the maps and the live file. ps2_host_pad: readPlayer /
+playerPresent (a pinned XInput slot or the next free one, the player's PadMap; the 1 ms tap latch latches in the
+terms of the player who reads the slot). ps2_input_latency: sampleKeys (posted keys + GetAsyncKeyState for the
+bound virtual keys, left/right shift/ctrl/alt told apart). ps2_pad: readBound (port 0 once a file changes
+something, port 1 through Pad.cpp, the keyboard-only netplay device TEKKEN4_NET_PAD=-1). Netplay and rollback
+read the local pad through readState, so they send the mapped PS2 button bits as before; the pad packet, the
+netplay data format and the game state are untouched.
+
+No file, an empty file, or a file that only says `device = auto` and lists no binding = isDefault(): every
+caller keeps its old code (the fixed layout of patches 29/60/31, bit for bit; tools/pad_bindings_test.cpp checks
+the table path against a copy of the old code on 200000 random pad samples and 100000 key sets).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/include/runtime/ps2_host_pad.h    |   8 +
+ .../include/runtime/ps2_input_latency.h       |   6 +
+ ps2xRuntime/include/runtime/ps2_pad.h         |   6 +
+ .../include/runtime/ps2_pad_bindings.h        | 742 ++++++++++++++++++
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp      |  33 +-
+ ps2xRuntime/src/lib/ps2_host_pad.cpp          | 208 ++++-
+ ps2xRuntime/src/lib/ps2_input_latency.cpp     |  44 ++
+ ps2xRuntime/src/lib/ps2_pad.cpp               |  51 ++
+ 8 files changed, 1071 insertions(+), 27 deletions(-)
+ create mode 100644 ps2xRuntime/include/runtime/ps2_pad_bindings.h
+
+diff --git a/ps2xRuntime/include/runtime/ps2_host_pad.h b/ps2xRuntime/include/runtime/ps2_host_pad.h
+index 3f9ea45..f6df4f4 100644
+--- a/ps2xRuntime/include/runtime/ps2_host_pad.h
++++ b/ps2xRuntime/include/runtime/ps2_host_pad.h
+@@ -49,4 +49,12 @@ namespace ps2_host_pad
+     // Game thread (scePadRead, netplay frame sample). nth = 0-based host controller; false: none there.
+     bool read(int nth, State &out);
+     bool present(int nth);
++
++    // Pad bindings (ps2_pad_bindings.h, TEKKEN4_CONTROLS): player 0 / 1 = pad port 1 / 2.
++    // readPlayer: the pad this player's device choice names (a pinned XInput slot, or the next free one in order
++    // like read()), its buttons through the player's [playerN.pad] map; false: no pad there. Without a bindings
++    // file this is read(player).
++    // playerPresent: the player has something to read: a keyboard, or the pad above.
++    bool readPlayer(int player, State &out);
++    bool playerPresent(int player);
+ }
+diff --git a/ps2xRuntime/include/runtime/ps2_input_latency.h b/ps2xRuntime/include/runtime/ps2_input_latency.h
+index b689935..8dc62f9 100644
+--- a/ps2xRuntime/include/runtime/ps2_input_latency.h
++++ b/ps2xRuntime/include/runtime/ps2_input_latency.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <cstddef>
+ #include <cstdint>
+ 
+ // Host input-latency path. Instrumentation (QPC log, frame hash) runs only when
+@@ -28,6 +29,11 @@ namespace ps2_input_latency
+     // Game thread. Active-high pad bits. False: caller uses raylib IsKeyDown.
+     bool sampleKeyboard(uint16_t &padDownMask);
+ 
++    // Game thread. Pad bindings: the keys of a player's [playerN.keys] map. n pairs (virtual key, active-high PS2
++    // bit); padDownMask gets the bits of the pairs whose key is down (posted by the window thread, or physically
++    // down while the game window has the focus). False: no window yet / legacy mode, caller reads no keyboard.
++    bool sampleKeys(const uint16_t *vks, const uint16_t *bits, size_t n, uint16_t &padDownMask);
++
+     // Game thread, after scePadRead wrote the pad packet. pressedMask is active-high.
+     void notePad(uint16_t pressedMask, uint64_t vsyncTick);
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
+index cf85c88..d2885da 100644
+--- a/ps2xRuntime/include/runtime/ps2_pad.h
++++ b/ps2xRuntime/include/runtime/ps2_pad.h
+@@ -12,6 +12,12 @@ public:
+ 
+     bool readState(int port, int slot, uint8_t *data, size_t size);
+ 
++    // Pad bindings (ps2_pad_bindings.h): the 32-byte pad packet of `player` (0 / 1) from its configured devices.
++    // flags: 1 the pad part, 2 the keyboard part, 4 the keyboard even when the player's device choice leaves it out
++    // (TEKKEN4_NET_PAD=-1). readState() takes this path for port 0 once a bindings file changes anything.
++    enum : unsigned { kBoundPad = 1u, kBoundKeys = 2u, kBoundForceKeys = 4u };
++    bool readBound(int player, unsigned flags, uint8_t *data, size_t size);
++
+     // Window thread, right after raylib polled input: hands raylib's gamepads to ps2_host_pad.
+     void publishHostPads();
+ };
+diff --git a/ps2xRuntime/include/runtime/ps2_pad_bindings.h b/ps2xRuntime/include/runtime/ps2_pad_bindings.h
+new file mode 100644
+index 0000000..16f82f1
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_pad_bindings.h
+@@ -0,0 +1,742 @@
++#pragma once
++
++// Pad bindings: which physical input is which PS2 button, per player (docs/INPUT.md of the Tekken 4 port,
++// "Pad bindings"). Header only, no windows.h, no raylib: ps2_host_pad.cpp (XInput), ps2_input_latency.cpp
++// (keyboard) and ps2_pad.cpp include it, and tools/pad_bindings_test.cpp compiles it on its own.
++//
++// The file (TEKKEN4_CONTROLS=<path>, else controls.ini in the working directory = the save folder; re-read
++// within ~1 s when it changes). No file, an empty file, or a file that only says `device = auto` and has no
++// binding lines = the fixed layout of patches 29/60 exactly (isDefault(): every caller keeps its old code).
++//
++//   [player1]                 ; player1 = pad port 1, player2 = port 2
++//   device = auto             ; auto | none | keyboard | xinput | xinput:0..3, joined with +  (keyboard+xinput:1)
++//   [player1.pad]             ; XInput bindings; a button not listed keeps its default
++//   SQUARE = X                ; TARGET = SOURCE SOURCE ... ; `none` = unbound
++//   UP = DUP LUP
++//   [player1.keys]            ; keyboard bindings, same rules (player 2 has no default keys)
++//   SQUARE = LEFT Z NUM0
++//
++// TARGET: SELECT L3 R3 START UP RIGHT DOWN LEFT L2 R2 L1 R1 TRIANGLE CIRCLE CROSS SQUARE, or the Tekken names
++// 1 2 3 4 (= SQUARE TRIANGLE CROSS CIRCLE; LP RP LK RK).
++// Pad SOURCE: A B X Y LB RB LT RT BACK START LS RS DUP DDOWN DLEFT DRIGHT LUP LDOWN LLEFT LRIGHT RUP RDOWN
++// RLEFT RRIGHT. Key SOURCE: A..Z 0..9 F1..F12 UP DOWN LEFT RIGHT ENTER TAB SPACE ESC BACKSPACE LSHIFT RSHIFT
++// LCTRL RCTRL LALT RALT NUM0..NUM9 NUMADD NUMSUB NUMMUL NUMDIV NUMDEC SEMICOLON COMMA PERIOD SLASH MINUS
++// EQUALS GRAVE LBRACKET RBRACKET BACKSLASH APOSTROPHE INSERT DELETE HOME END PGUP PGDN CAPSLOCK.
++//
++// Bindings only choose which input presses which PS2 button. The sticks' analog bytes, the game state and
++// netplay's input format (PS2 button bits, active-low like the pad packet) are untouched.
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <memory>
++#include <mutex>
++#include <sstream>
++#include <string>
++#include <utility>
++#include <vector>
++
++namespace ps2_pad_bindings
++{
++    constexpr int kButtons = 16;
++    constexpr int kPlayers = 2;
++
++    // Index == bit position of the PS2 pad word (active-high here): SELECT = 0x0001 ... SQUARE = 0x8000.
++    inline const char *const kButtonNames[kButtons] = {"SELECT", "L3", "R3", "START", "UP", "RIGHT", "DOWN", "LEFT",
++                                                       "L2", "R2", "L1", "R1", "TRIANGLE", "CIRCLE", "CROSS", "SQUARE"};
++    enum : int
++    {
++        B_SELECT = 0, B_L3, B_R3, B_START, B_UP, B_RIGHT, B_DOWN, B_LEFT, B_L2, B_R2, B_L1, B_R1,
++        B_TRIANGLE, B_CIRCLE, B_CROSS, B_SQUARE
++    };
++
++    inline std::string upper(std::string s)
++    {
++        for (char &c : s)
++            if (c >= 'a' && c <= 'z')
++                c = static_cast<char>(c - 'a' + 'A');
++        return s;
++    }
++
++    inline std::string trim(const std::string &s)
++    {
++        size_t a = 0, b = s.size();
++        while (a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r' || s[a] == '\n'))
++            ++a;
++        while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r' || s[b - 1] == '\n'))
++            --b;
++        return s.substr(a, b - a);
++    }
++
++    // PS2 button index of a target name, or -1.
++    inline int buttonIndex(const std::string &name)
++    {
++        const std::string n = upper(name);
++        for (int i = 0; i < kButtons; ++i)
++            if (n == kButtonNames[i])
++                return i;
++        if (n == "1" || n == "LP")
++            return B_SQUARE;
++        if (n == "2" || n == "RP")
++            return B_TRIANGLE;
++        if (n == "3" || n == "LK")
++            return B_CROSS;
++        if (n == "4" || n == "RK")
++            return B_CIRCLE;
++        return -1;
++    }
++
++    // ------------------------------------------------------------------------------------ XInput sources
++    enum SrcKind : uint8_t
++    {
++        SK_BUTTON = 1, // arg = XINPUT_GAMEPAD_* wButtons mask
++        SK_LT = 2,
++        SK_RT = 3,
++        SK_AXIS = 4 // arg 0..7 = LUP LDOWN LLEFT LRIGHT RUP RDOWN RLEFT RRIGHT
++    };
++    struct Src
++    {
++        uint8_t kind = 0;
++        uint16_t arg = 0;
++        bool operator==(const Src &o) const { return kind == o.kind && arg == o.arg; }
++    };
++
++    constexpr uint16_t X_DUP = 0x0001, X_DDOWN = 0x0002, X_DLEFT = 0x0004, X_DRIGHT = 0x0008, X_START = 0x0010,
++                       X_BACK = 0x0020, X_LS = 0x0040, X_RS = 0x0080, X_LB = 0x0100, X_RB = 0x0200, X_A = 0x1000,
++                       X_B = 0x2000, X_X = 0x4000, X_Y = 0x8000;
++    constexpr int kTriggerThreshold = 30; // XINPUT_GAMEPAD_TRIGGER_THRESHOLD
++    constexpr float kDirOn = 0.5f;        // stick direction: on past half way ...
++    constexpr float kDirOff = 0.4f;       // ... off again only back inside 40 %
++
++    inline const char *const kAxisNames[8] = {"LUP", "LDOWN", "LLEFT", "LRIGHT", "RUP", "RDOWN", "RLEFT", "RRIGHT"};
++    struct NamedButton
++    {
++        const char *name;
++        uint16_t mask;
++    };
++    inline const NamedButton kXButtons[] = {{"A", X_A},     {"B", X_B},       {"X", X_X},         {"Y", X_Y},
++                                            {"LB", X_LB},   {"RB", X_RB},     {"BACK", X_BACK},   {"START", X_START},
++                                            {"LS", X_LS},   {"RS", X_RS},     {"DUP", X_DUP},     {"DDOWN", X_DDOWN},
++                                            {"DLEFT", X_DLEFT}, {"DRIGHT", X_DRIGHT}};
++
++    inline bool parsePadSource(const std::string &name, Src &out)
++    {
++        const std::string n = upper(name);
++        for (const NamedButton &b : kXButtons)
++            if (n == b.name)
++            {
++                out = Src{SK_BUTTON, b.mask};
++                return true;
++            }
++        if (n == "LT")
++        {
++            out = Src{SK_LT, 0};
++            return true;
++        }
++        if (n == "RT")
++        {
++            out = Src{SK_RT, 0};
++            return true;
++        }
++        for (int i = 0; i < 8; ++i)
++            if (n == kAxisNames[i])
++            {
++                out = Src{SK_AXIS, static_cast<uint16_t>(i)};
++                return true;
++            }
++        return false;
++    }
++
++    inline std::string padSourceName(const Src &s)
++    {
++        if (s.kind == SK_BUTTON)
++            for (const NamedButton &b : kXButtons)
++                if (b.mask == s.arg)
++                    return b.name;
++        if (s.kind == SK_LT)
++            return "LT";
++        if (s.kind == SK_RT)
++            return "RT";
++        if (s.kind == SK_AXIS && s.arg < 8)
++            return kAxisNames[s.arg];
++        return "?";
++    }
++
++    // One XInput sample in XInput's own units (y up).
++    struct RawPad
++    {
++        uint16_t buttons = 0;
++        uint8_t lt = 0, rt = 0;
++        int16_t lx = 0, ly = 0, rx = 0, ry = 0;
++    };
++
++    inline float axisNorm(int16_t v)
++    {
++        const float f = static_cast<float>(v) / 32767.0f;
++        return (std::min)(1.0f, (std::max)(-1.0f, f));
++    }
++
++    // The 8 stick directions held (bit i = kAxisNames[i]), with hysteresis against `prev` (the previous result of
++    // the same reader). Same thresholds and axes as the fixed layout's stick -> d-pad.
++    inline uint32_t axisBits(const RawPad &r, uint32_t prev)
++    {
++        const float lx = axisNorm(r.lx), ly = -axisNorm(r.ly), rx = axisNorm(r.rx), ry = -axisNorm(r.ry);
++        const float v[8] = {-ly, ly, -lx, lx, -ry, ry, -rx, rx};
++        uint32_t out = 0;
++        for (int i = 0; i < 8; ++i)
++            if (v[i] > kDirOn || (((prev >> i) & 1u) != 0 && v[i] > kDirOff))
++                out |= 1u << i;
++        return out;
++    }
++
++    // ------------------------------------------------------------------------------------ keys
++    struct NamedKey
++    {
++        const char *name;
++        uint16_t vk;
++    };
++    // The first name of a key is the one written back.
++    inline const NamedKey kKeyNames[] = {
++        {"UP", 0x26}, {"DOWN", 0x28}, {"LEFT", 0x25}, {"RIGHT", 0x27}, {"SPACE", 0x20}, {"ENTER", 0x0D},
++        {"RETURN", 0x0D}, {"TAB", 0x09}, {"ESC", 0x1B}, {"ESCAPE", 0x1B}, {"BACKSPACE", 0x08}, {"LSHIFT", 0xA0},
++        {"RSHIFT", 0xA1}, {"LCTRL", 0xA2}, {"RCTRL", 0xA3}, {"LALT", 0xA4}, {"RALT", 0xA5}, {"CAPSLOCK", 0x14},
++        {"INSERT", 0x2D}, {"DELETE", 0x2E}, {"HOME", 0x24}, {"END", 0x23}, {"PGUP", 0x21}, {"PGDN", 0x22},
++        {"NUM0", 0x60}, {"NUM1", 0x61}, {"NUM2", 0x62}, {"NUM3", 0x63}, {"NUM4", 0x64}, {"NUM5", 0x65},
++        {"NUM6", 0x66}, {"NUM7", 0x67}, {"NUM8", 0x68}, {"NUM9", 0x69}, {"NUMADD", 0x6B}, {"NUMSUB", 0x6D},
++        {"NUMMUL", 0x6A}, {"NUMDIV", 0x6F}, {"NUMDEC", 0x6E}, {"SEMICOLON", 0xBA}, {"EQUALS", 0xBB},
++        {"COMMA", 0xBC}, {"MINUS", 0xBD}, {"PERIOD", 0xBE}, {"SLASH", 0xBF}, {"GRAVE", 0xC0}, {"LBRACKET", 0xDB},
++        {"BACKSLASH", 0xDC}, {"RBRACKET", 0xDD}, {"APOSTROPHE", 0xDE}, {"QUOTE", 0xDE},
++        {"F1", 0x70}, {"F2", 0x71}, {"F3", 0x72}, {"F4", 0x73}, {"F5", 0x74}, {"F6", 0x75}, {"F7", 0x76},
++        {"F8", 0x77}, {"F9", 0x78}, {"F10", 0x79}, {"F11", 0x7A}, {"F12", 0x7B}};
++
++    inline uint16_t parseKey(const std::string &name)
++    {
++        const std::string n = upper(name);
++        if (n.size() == 1 && ((n[0] >= 'A' && n[0] <= 'Z') || (n[0] >= '0' && n[0] <= '9')))
++            return static_cast<uint16_t>(n[0]); // VK_A..VK_Z and VK_0..VK_9 are the ASCII codes
++        for (const NamedKey &k : kKeyNames)
++            if (n == k.name)
++                return k.vk;
++        return 0;
++    }
++
++    inline std::string keyName(uint16_t vk)
++    {
++        if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9'))
++            return std::string(1, static_cast<char>(vk));
++        for (const NamedKey &k : kKeyNames)
++            if (k.vk == vk)
++                return k.name;
++        return "?";
++    }
++
++    // ------------------------------------------------------------------------------------ maps
++    // A button's sources; `set[b]` says the file listed that button (an empty list = unbound), otherwise the
++    // built-in default stays.
++    struct PadMap
++    {
++        std::vector<Src> src[kButtons];
++        bool set[kButtons] = {};
++        bool any() const { return std::any_of(std::begin(set), std::end(set), [](bool b) { return b; }); }
++    };
++    struct KeyMap
++    {
++        std::vector<uint16_t> vk[kButtons];
++        bool set[kButtons] = {};
++        bool any() const { return std::any_of(std::begin(set), std::end(set), [](bool b) { return b; }); }
++    };
++
++    // The fixed layout (patch 60): positional face buttons, bumpers, triggers, Back = Select, sticks click, the
++    // d-pad and the left stick (the stick part only while stickDpad is on).
++    inline std::vector<Src> defaultPadSources(int b)
++    {
++        switch (b)
++        {
++        case B_UP: return {{SK_BUTTON, X_DUP}, {SK_AXIS, 0}};
++        case B_DOWN: return {{SK_BUTTON, X_DDOWN}, {SK_AXIS, 1}};
++        case B_LEFT: return {{SK_BUTTON, X_DLEFT}, {SK_AXIS, 2}};
++        case B_RIGHT: return {{SK_BUTTON, X_DRIGHT}, {SK_AXIS, 3}};
++        case B_START: return {{SK_BUTTON, X_START}};
++        case B_SELECT: return {{SK_BUTTON, X_BACK}};
++        case B_L3: return {{SK_BUTTON, X_LS}};
++        case B_R3: return {{SK_BUTTON, X_RS}};
++        case B_L1: return {{SK_BUTTON, X_LB}};
++        case B_R1: return {{SK_BUTTON, X_RB}};
++        case B_L2: return {{SK_LT, 0}};
++        case B_R2: return {{SK_RT, 0}};
++        case B_CROSS: return {{SK_BUTTON, X_A}};
++        case B_CIRCLE: return {{SK_BUTTON, X_B}};
++        case B_SQUARE: return {{SK_BUTTON, X_X}};
++        case B_TRIANGLE: return {{SK_BUTTON, X_Y}};
++        default: return {};
++        }
++    }
++
++    // Player 1's fixed keyboard (patch 29/31, ps2_input_latency.cpp asyncPadMask); player 2 has none.
++    inline std::vector<uint16_t> defaultKeys(int player, int b)
++    {
++        if (player != 0)
++            return {};
++        switch (b)
++        {
++        case B_UP: return {'W'};
++        case B_DOWN: return {'S'};
++        case B_LEFT: return {'A'};
++        case B_RIGHT: return {'D'};
++        case B_CROSS: return {0x28, 'X', 0x20};
++        case B_CIRCLE: return {0x27, 'C', 0x1B};
++        case B_SQUARE: return {0x25, 'Z', 0x60};
++        case B_TRIANGLE: return {0x26, 'V', 0x61};
++        case B_L1: return {'Q'};
++        case B_R1: return {'E'};
++        case B_L2: return {0xA0};
++        case B_R2: return {0xA1};
++        case B_START: return {0x0D};
++        case B_SELECT: return {0x09};
++        default: return {};
++        }
++    }
++
++    inline const std::vector<Src> &padSources(const PadMap &m, int b, std::vector<Src> &scratch)
++    {
++        if (m.set[b])
++            return m.src[b];
++        scratch = defaultPadSources(b);
++        return scratch;
++    }
++
++    // PS2 buttons (active-high word) held on a pad. `axis` in = the previous axisBits, out = the new ones.
++    // stickDpad: whether the default d-pad sources include the left stick (TEKKEN4_PAD_STICK_DPAD).
++    inline uint16_t evalPad(const PadMap &m, const RawPad &r, bool stickDpad, uint32_t &axis)
++    {
++        axis = axisBits(r, axis);
++        uint16_t out = 0;
++        std::vector<Src> scratch;
++        for (int b = 0; b < kButtons; ++b)
++        {
++            const bool fixed = !m.set[b];
++            for (const Src &s : padSources(m, b, scratch))
++            {
++                bool on = false;
++                switch (s.kind)
++                {
++                case SK_BUTTON: on = (r.buttons & s.arg) != 0; break;
++                case SK_LT: on = r.lt > kTriggerThreshold; break;
++                case SK_RT: on = r.rt > kTriggerThreshold; break;
++                case SK_AXIS: on = ((axis >> s.arg) & 1u) != 0 && (!fixed || stickDpad); break;
++                default: break;
++                }
++                if (on)
++                {
++                    out = static_cast<uint16_t>(out | (1u << b));
++                    break;
++                }
++            }
++        }
++        return out;
++    }
++
++    // (virtual key, PS2 bit) pairs of a player's keyboard; the list the key readers poll.
++    inline std::vector<std::pair<uint16_t, uint16_t>> flatKeys(const KeyMap &m, int player)
++    {
++        std::vector<std::pair<uint16_t, uint16_t>> out;
++        for (int b = 0; b < kButtons; ++b)
++        {
++            const std::vector<uint16_t> keys = m.set[b] ? m.vk[b] : defaultKeys(player, b);
++            for (uint16_t vk : keys)
++                out.emplace_back(vk, static_cast<uint16_t>(1u << b));
++        }
++        return out;
++    }
++
++    // ------------------------------------------------------------------------------------ the config
++    struct PlayerCfg
++    {
++        bool autoDevice = true; // device = auto: today's order (player 1: keyboard + first pad; player 2: second pad)
++        bool keyboard = false;  // reads the keyboard
++        bool pad = false;       // reads an XInput pad (and, for `auto`, the DirectInput ones raylib sees)
++        int xslot = -1;         // pinned XInput slot, -1 = the next free one in order
++        PadMap padMap;
++        KeyMap keyMap;
++    };
++
++    struct Config
++    {
++        PlayerCfg p[kPlayers];
++        Config()
++        {
++            p[0].keyboard = true;
++            p[0].pad = true;
++            p[1].pad = true;
++        }
++        bool isDefault() const
++        {
++            for (const PlayerCfg &c : p)
++                if (!c.autoDevice || c.padMap.any() || c.keyMap.any())
++                    return false;
++            return true;
++        }
++        // Slots pinned by a player (bit mask over XInput slots 0..3).
++        unsigned pinnedMask() const
++        {
++            unsigned m = 0;
++            for (const PlayerCfg &c : p)
++                if (c.pad && c.xslot >= 0)
++                    m |= 1u << c.xslot;
++            return m;
++        }
++    };
++
++    inline std::vector<std::string> splitWords(const std::string &s)
++    {
++        std::vector<std::string> out;
++        std::string cur;
++        for (char c : s)
++        {
++            if (c == ' ' || c == '\t' || c == ',' || c == '\r' || c == '\n')
++            {
++                if (!cur.empty())
++                    out.push_back(cur), cur.clear();
++            }
++            else
++                cur.push_back(c);
++        }
++        if (!cur.empty())
++            out.push_back(cur);
++        return out;
++    }
++
++    inline void parseDevice(const std::string &value, int player, PlayerCfg &c, std::vector<std::string> *warn, int line)
++    {
++        std::string v = value;
++        for (char &ch : v)
++            if (ch == '+')
++                ch = ' ';
++        const std::vector<std::string> tokens = splitWords(v);
++        PlayerCfg fresh;
++        fresh.keyboard = false;
++        fresh.pad = false;
++        fresh.autoDevice = false;
++        bool understood = !tokens.empty();
++        for (const std::string &t : tokens)
++        {
++            const std::string u = upper(t);
++            if (u == "AUTO")
++            {
++                fresh.autoDevice = true;
++                fresh.keyboard = player == 0;
++                fresh.pad = true;
++            }
++            else if (u == "NONE")
++            {
++            }
++            else if (u == "KEYBOARD")
++                fresh.keyboard = true;
++            else if (u == "XINPUT")
++                fresh.pad = true;
++            else if (u.size() == 8 && u.compare(0, 7, "XINPUT:") == 0 && u[7] >= '0' && u[7] <= '3')
++            {
++                fresh.pad = true;
++                fresh.xslot = u[7] - '0';
++            }
++            else
++            {
++                understood = false;
++                if (warn)
++                    warn->push_back("line " + std::to_string(line) + ": unknown device '" + t + "'");
++            }
++        }
++        if (!understood)
++            return; // keep auto
++        if (fresh.autoDevice)
++        {
++            // `auto` is exactly the default order; anything joined to it is ignored.
++            c.autoDevice = true;
++            c.keyboard = player == 0;
++            c.pad = true;
++            c.xslot = -1;
++            return;
++        }
++        c.autoDevice = false;
++        c.keyboard = fresh.keyboard;
++        c.pad = fresh.pad;
++        c.xslot = fresh.xslot;
++    }
++
++    // Parses a file's text. Unknown lines and sources are skipped with a warning; the rest still applies.
++    inline Config parse(const std::string &text, std::vector<std::string> *warn = nullptr)
++    {
++        Config cfg;
++        std::istringstream in(text);
++        std::string raw;
++        int line = 0;
++        int player = -1;
++        enum Part { NONE, DEVICE, PAD, KEYS } part = NONE;
++        bool first = true;
++        while (std::getline(in, raw))
++        {
++            ++line;
++            if (first)
++            {
++                first = false;
++                if (raw.size() >= 3 && static_cast<unsigned char>(raw[0]) == 0xEF && static_cast<unsigned char>(raw[1]) == 0xBB &&
++                    static_cast<unsigned char>(raw[2]) == 0xBF)
++                    raw.erase(0, 3);
++            }
++            const size_t cut = raw.find_first_of(";#");
++            if (cut != std::string::npos)
++                raw.erase(cut);
++            const std::string s = trim(raw);
++            if (s.empty())
++                continue;
++            if (s.front() == '[')
++            {
++                const size_t end = s.find(']');
++                std::string name = end == std::string::npos ? "" : upper(trim(s.substr(1, end - 1)));
++                player = -1;
++                part = NONE;
++                if (name.size() >= 7 && name.compare(0, 6, "PLAYER") == 0 && (name[6] == '1' || name[6] == '2'))
++                {
++                    player = name[6] - '1';
++                    const std::string rest = name.substr(7);
++                    if (rest.empty())
++                        part = DEVICE;
++                    else if (rest == ".PAD")
++                        part = PAD;
++                    else if (rest == ".KEYS")
++                        part = KEYS;
++                    else
++                        player = -1;
++                }
++                if (part == NONE && name != "GENERAL" && warn)
++                    warn->push_back("line " + std::to_string(line) + ": unknown section '" + s + "'");
++                continue;
++            }
++            const size_t eq = s.find('=');
++            if (eq == std::string::npos || part == NONE)
++            {
++                if (part != NONE && warn)
++                    warn->push_back("line " + std::to_string(line) + ": not 'name = value'");
++                continue;
++            }
++            const std::string key = trim(s.substr(0, eq)), value = trim(s.substr(eq + 1));
++            PlayerCfg &c = cfg.p[player];
++            if (part == DEVICE)
++            {
++                if (upper(key) == "DEVICE")
++                    parseDevice(value, player, c, warn, line);
++                continue;
++            }
++            const int b = buttonIndex(key);
++            if (b < 0)
++            {
++                if (warn)
++                    warn->push_back("line " + std::to_string(line) + ": unknown button '" + key + "'");
++                continue;
++            }
++            if (part == PAD)
++            {
++                c.padMap.set[b] = true;
++                c.padMap.src[b].clear();
++                for (const std::string &w : splitWords(value))
++                {
++                    if (upper(w) == "NONE")
++                        continue;
++                    Src src;
++                    if (parsePadSource(w, src))
++                    {
++                        if (std::find(c.padMap.src[b].begin(), c.padMap.src[b].end(), src) == c.padMap.src[b].end())
++                            c.padMap.src[b].push_back(src);
++                    }
++                    else if (warn)
++                        warn->push_back("line " + std::to_string(line) + ": unknown pad button '" + w + "'");
++                }
++            }
++            else
++            {
++                c.keyMap.set[b] = true;
++                c.keyMap.vk[b].clear();
++                for (const std::string &w : splitWords(value))
++                {
++                    if (upper(w) == "NONE")
++                        continue;
++                    const uint16_t vk = parseKey(w);
++                    if (vk != 0)
++                    {
++                        if (std::find(c.keyMap.vk[b].begin(), c.keyMap.vk[b].end(), vk) == c.keyMap.vk[b].end())
++                            c.keyMap.vk[b].push_back(vk);
++                    }
++                    else if (warn)
++                        warn->push_back("line " + std::to_string(line) + ": unknown key '" + w + "'");
++                }
++            }
++        }
++        return cfg;
++    }
++
++    inline std::string describe(const Config &cfg)
++    {
++        std::string out;
++        for (int i = 0; i < kPlayers; ++i)
++        {
++            const PlayerCfg &c = cfg.p[i];
++            out += "P" + std::to_string(i + 1) + ": ";
++            if (c.autoDevice)
++                out += "auto";
++            else if (!c.keyboard && !c.pad)
++                out += "none";
++            else
++            {
++                if (c.keyboard)
++                    out += "keyboard";
++                if (c.keyboard && c.pad)
++                    out += "+";
++                if (c.pad)
++                    out += c.xslot >= 0 ? "xinput:" + std::to_string(c.xslot) : std::string("xinput");
++            }
++            int padLines = 0, keyLines = 0;
++            for (int b = 0; b < kButtons; ++b)
++                padLines += c.padMap.set[b], keyLines += c.keyMap.set[b];
++            out += " (" + std::to_string(padLines) + " pad, " + std::to_string(keyLines) + " key bindings)";
++            out += i + 1 < kPlayers ? "; " : "";
++        }
++        return out;
++    }
++
++    // ------------------------------------------------------------------------------------ the live file
++    // current() is cheap enough for a 1 kHz poll thread: a thread-local copy, refreshed when the generation moves.
++    // The file is looked at most once a second (size + time stamp; no read while it is unchanged).
++    struct Live
++    {
++        std::mutex mu;
++        std::shared_ptr<const Config> cfg = std::make_shared<const Config>();
++        std::atomic<uint64_t> gen{1};
++        std::atomic<int64_t> nextCheckMs{0};
++        std::string path;
++        bool pathKnown = false;
++        bool havePath = false;
++        bool loadedOnce = false;
++        uintmax_t size = 0;
++        long long stamp = 0;
++        bool existed = false;
++        int periodMs = 1000;
++    };
++
++    inline Live &live()
++    {
++        static Live l;
++        return l;
++    }
++
++    inline int64_t nowMs()
++    {
++        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++    }
++
++    // Under live().mu.
++    inline void reloadLocked(Live &l, bool log)
++    {
++        std::error_code ec;
++        const bool exists = l.havePath && std::filesystem::is_regular_file(l.path, ec);
++        uintmax_t size = 0;
++        long long stamp = 0;
++        if (exists)
++        {
++            size = std::filesystem::file_size(l.path, ec);
++            stamp = static_cast<long long>(std::filesystem::last_write_time(l.path, ec).time_since_epoch().count());
++        }
++        if (l.loadedOnce && exists == l.existed && size == l.size && stamp == l.stamp)
++            return;
++        std::shared_ptr<const Config> next;
++        std::vector<std::string> warn;
++        if (exists)
++        {
++            std::ifstream f(l.path, std::ios::binary);
++            std::stringstream ss;
++            ss << f.rdbuf();
++            next = std::make_shared<const Config>(parse(ss.str(), &warn));
++        }
++        else
++            next = std::make_shared<const Config>();
++        l.loadedOnce = true;
++        l.existed = exists;
++        l.size = size;
++        l.stamp = stamp;
++        l.cfg = next;
++        l.gen.fetch_add(1, std::memory_order_acq_rel);
++        if (log && (exists || l.gen.load() > 2))
++        {
++            std::fprintf(stderr, "[pad] controls: %s %s -- %s\n", exists ? "loaded" : "removed, fixed layout again",
++                         l.path.c_str(), next->isDefault() ? "default layout" : describe(*next).c_str());
++            for (const std::string &w : warn)
++                std::fprintf(stderr, "[pad] controls: %s\n", w.c_str());
++            std::fflush(stderr);
++        }
++    }
++
++    inline void initPathLocked(Live &l)
++    {
++        if (l.pathKnown)
++            return;
++        l.pathKnown = true;
++        const char *env = std::getenv("TEKKEN4_CONTROLS");
++        std::string p = env ? env : "controls.ini";
++        if (p == "0" || p == "off")
++            l.havePath = false;
++        else
++        {
++            l.path = p;
++            l.havePath = true;
++        }
++        if (const char *per = std::getenv("TEKKEN4_CONTROLS_POLL_MS"))
++            l.periodMs = (std::max)(10, std::atoi(per));
++    }
++
++    inline std::shared_ptr<const Config> current()
++    {
++        Live &l = live();
++        thread_local std::shared_ptr<const Config> mine;
++        thread_local uint64_t mineGen = 0;
++        const int64_t now = nowMs();
++        if (now >= l.nextCheckMs.load(std::memory_order_relaxed) || mineGen == 0)
++        {
++            std::unique_lock<std::mutex> lock(l.mu, std::defer_lock);
++            if (mineGen == 0)
++                lock.lock(); // first use on this thread: wait for the loader
++            else
++                (void)lock.try_lock();
++            if (lock.owns_lock() && (now >= l.nextCheckMs.load(std::memory_order_relaxed) || !l.loadedOnce))
++            {
++                initPathLocked(l);
++                l.nextCheckMs.store(now + l.periodMs, std::memory_order_relaxed);
++                reloadLocked(l, true);
++            }
++        }
++        const uint64_t g = l.gen.load(std::memory_order_acquire);
++        if (g != mineGen || !mine)
++        {
++            std::lock_guard<std::mutex> lock(l.mu);
++            mine = l.cfg;
++            mineGen = l.gen.load(std::memory_order_acquire);
++        }
++        return mine;
++    }
++
++    // Tests: read this file now (and again on every call), without the one-second rate limit.
++    inline void useFileForTest(const std::string &path, int periodMs = 10)
++    {
++        Live &l = live();
++        std::lock_guard<std::mutex> lock(l.mu);
++        l.pathKnown = true;
++        l.path = path;
++        l.havePath = !path.empty();
++        l.periodMs = periodMs;
++        l.nextCheckMs.store(0);
++        l.loadedOnce = false;
++    }
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index a628552..4d35fdb 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -2,6 +2,7 @@
+ #include "Pad.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "runtime/ps2_host_pad.h"
++#include "runtime/ps2_pad_bindings.h"
+ 
+ namespace ps2_stubs
+ {
+@@ -102,6 +103,8 @@ namespace ps2_stubs
+         // pads only raylib sees (DirectInput). None exists until the window does.
+         bool hostPadPresent(int nth)
+         {
++            if (nth >= 0 && !ps2_pad_bindings::current()->isDefault())
++                return IsWindowReady() && ps2_host_pad::playerPresent(nth); // pad bindings: the player's own device
+             return nth >= 0 && IsWindowReady() && ps2_host_pad::present(nth);
+         }
+ 
+@@ -340,6 +343,20 @@ namespace ps2_stubs
+                         applyKeyboardState(state, portState.analogMode);
+                     }
+                 }
++                else if (port == 1 && runtime && !ps2_pad_bindings::current()->isDefault())
++                {
++                    // Pad bindings: player 2 reads its own device (a pad, or a keyboard the file gives it).
++                    uint8_t boundData[32]{};
++                    if (runtime->padBackend().readBound(1, PSPadBackend::kBoundPad | PSPadBackend::kBoundKeys, boundData,
++                                                        sizeof(boundData)))
++                    {
++                        state.buttons = static_cast<uint16_t>(boundData[2] | (boundData[3] << 8));
++                        state.rx = boundData[4];
++                        state.ry = boundData[5];
++                        state.lx = boundData[6];
++                        state.ly = boundData[7];
++                    }
++                }
+                 else
+                 {
+                     // The shared backend ignores the port and always samples pad 1.
+@@ -929,8 +946,20 @@ namespace ps2_stubs
+         }
+         else if (device < 0)
+         {
+-            applyKeyboardState(state, false);
+-            read = IsWindowReady();
++            uint8_t boundData[32]{};
++            if (runtime && !ps2_pad_bindings::current()->isDefault() &&
++                runtime->padBackend().readBound(0, PSPadBackend::kBoundKeys | PSPadBackend::kBoundForceKeys, boundData,
++                                                sizeof(boundData)))
++            {
++                // Pad bindings: the keyboard-only netplay device uses player 1's [player1.keys] too.
++                state.buttons = static_cast<uint16_t>(boundData[2] | (boundData[3] << 8));
++                read = IsWindowReady();
++            }
++            else
++            {
++                applyKeyboardState(state, false);
++                read = IsWindowReady();
++            }
+         }
+         else
+         {
+diff --git a/ps2xRuntime/src/lib/ps2_host_pad.cpp b/ps2xRuntime/src/lib/ps2_host_pad.cpp
+index 649e207..1c78754 100644
+--- a/ps2xRuntime/src/lib/ps2_host_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_host_pad.cpp
+@@ -1,6 +1,7 @@
+ // Host game controllers: see runtime/ps2_host_pad.h. No raylib here (windows.h and raylib.h clash);
+ // ps2_pad.cpp reads raylib's gamepads on the window thread and hands them over with publishRaylib.
+ #include "runtime/ps2_host_pad.h"
++#include "runtime/ps2_pad_bindings.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "runtime/ps2_runahead.h"
+ 
+@@ -80,9 +81,12 @@ namespace
+         // poll thread only
+         uint16_t pollPrev = 0;
+         uint16_t pollDirs = 0;
++        uint32_t pollAxis = 0;   // pad bindings: stick directions held (ps2_pad_bindings::axisBits)
++        uint64_t pollGen = 0;    // the bindings generation pollPrev was computed under
+         uint64_t lastProbe = 0;
+         // pad-read side only (under g_readMu)
+         uint16_t gameDirs = 0;
++        uint32_t gameAxis = 0;
+         uint16_t lastReported = 0;
+     };
+     XSlot g_x[kXSlots];
+@@ -239,6 +243,81 @@ namespace
+         return s;
+     }
+ 
++    namespace pb = ps2_pad_bindings;
++
++    pb::RawPad toRaw(const XINPUT_GAMEPAD &g)
++    {
++        pb::RawPad r;
++        r.buttons = g.wButtons;
++        r.lt = g.bLeftTrigger;
++        r.rt = g.bRightTrigger;
++        r.lx = g.sThumbLX;
++        r.ly = g.sThumbLY;
++        r.rx = g.sThumbRX;
++        r.ry = g.sThumbRY;
++        return r;
++    }
++
++    // fromXInput with the player's [playerN.pad] bindings (map != nullptr). The analog bytes are the same either way.
++    ps2_host_pad::State fromXInputMapped(const XINPUT_GAMEPAD &g, const pb::PadMap *map, uint16_t &dirs, uint32_t &axis)
++    {
++        ps2_host_pad::State s = fromXInput(g, dirs);
++        if (map)
++            s.buttons = pb::evalPad(*map, toRaw(g), g_stickDpad, axis);
++        return s;
++    }
++
++    // Which pad the player reads: a pinned XInput slot, or the next free one in order (slots nobody pinned, the
++    // auto players taking them in player order), then the DirectInput pads raylib sees (`raylib` = its index among
++    // them). Same order as read(nth) when no slot is pinned.
++    struct Resolved
++    {
++        int slot = -1;
++        int raylib = -1;
++    };
++
++    Resolved resolvePlayer(const pb::Config &cfg, int player)
++    {
++        Resolved r;
++        const pb::PlayerCfg &c = cfg.p[player];
++        if (!c.pad)
++            return r;
++        if (c.xslot >= 0)
++        {
++            if (g_x[c.xslot].connected.load(std::memory_order_acquire))
++                r.slot = c.xslot;
++            return r;
++        }
++        int rank = 0;
++        for (int q = 0; q < player; ++q)
++            if (cfg.p[q].pad && cfg.p[q].xslot < 0)
++                ++rank;
++        const unsigned pinned = cfg.pinnedMask();
++        int seen = 0;
++        for (int i = 0; i < kXSlots; ++i)
++        {
++            if ((pinned >> i) & 1u || !g_x[i].connected.load(std::memory_order_acquire))
++                continue;
++            if (seen == rank)
++            {
++                r.slot = i;
++                return r;
++            }
++            ++seen;
++        }
++        r.raylib = rank - seen;
++        return r;
++    }
++
++    // The player whose pad is XInput slot `slot` (-1: nobody reads it).
++    int playerOfSlot(const pb::Config &cfg, int slot)
++    {
++        for (int p = 0; p < pb::kPlayers; ++p)
++            if (resolvePlayer(cfg, p).slot == slot)
++                return p;
++        return -1;
++    }
++
+     ps2_host_pad::State fromRaylib(const ps2_host_pad::RaylibPad &p, uint16_t &dirs)
+     {
+         ps2_host_pad::State s;
+@@ -297,16 +376,31 @@ namespace
+             {
+             }
+             bool any = false;
++            const std::shared_ptr<const pb::Config> cfg = pb::current();
++            const uint64_t cfgGen = pb::live().gen.load(std::memory_order_acquire);
+             for (int i = 0; i < kXSlots; ++i)
+             {
+                 XSlot &x = g_x[i];
+                 XINPUT_STATE xs{};
++                // Pad bindings: presses are latched in the terms of the player who reads this slot.
++                const pb::PadMap *map = nullptr;
++                if (!cfg->isDefault())
++                {
++                    const int player = playerOfSlot(*cfg, i);
++                    if (player >= 0 && cfg->p[player].padMap.any())
++                        map = &cfg->p[player].padMap;
++                }
+                 if (x.connected.load(std::memory_order_acquire))
+                 {
+                     if (g_getState(static_cast<DWORD>(i), &xs) == ERROR_SUCCESS)
+                     {
+                         any = true;
+-                        const uint16_t b = fromXInput(xs.Gamepad, x.pollDirs).buttons;
++                        const uint16_t b = fromXInputMapped(xs.Gamepad, map, x.pollDirs, x.pollAxis).buttons;
++                        if (x.pollGen != cfgGen)
++                        {
++                            x.pollGen = cfgGen; // other bindings: no press out of the change itself
++                            x.pollPrev = b;
++                        }
+                         const uint16_t rise = static_cast<uint16_t>(b & ~x.pollPrev);
+                         if (rise)
+                             x.rises.fetch_or(rise, std::memory_order_acq_rel);
+@@ -325,7 +419,8 @@ namespace
+                     x.lastProbe = now;
+                     if (g_getState(static_cast<DWORD>(i), &xs) == ERROR_SUCCESS)
+                     {
+-                        x.pollPrev = fromXInput(xs.Gamepad, x.pollDirs).buttons;
++                        x.pollPrev = fromXInputMapped(xs.Gamepad, map, x.pollDirs, x.pollAxis).buttons;
++                        x.pollGen = cfgGen;
+                         x.connected.store(true, std::memory_order_release);
+                         any = true;
+                         std::fprintf(stderr, "[pad] XInput slot %d connected\n", i);
+@@ -466,6 +561,8 @@ namespace
+         }
+         if (g_getState && !g_raw)
+         {
++            pb::current(); // loads the bindings file now, so the poll thread starts on the right generation
++            const uint64_t gen0 = pb::live().gen.load(std::memory_order_acquire);
+             const uint64_t now = qpc();
+             for (int i = 0; i < kXSlots; ++i)
+             {
+@@ -474,6 +571,7 @@ namespace
+                 if (g_getState(static_cast<DWORD>(i), &xs) == ERROR_SUCCESS)
+                 {
+                     g_x[i].pollPrev = fromXInput(xs.Gamepad, g_x[i].pollDirs).buttons;
++                    g_x[i].pollGen = gen0;
+                     g_x[i].connected.store(true, std::memory_order_release);
+                     std::fprintf(stderr, "[pad] XInput slot %d connected\n", i);
+                 }
+@@ -520,7 +618,7 @@ namespace
+     }
+ 
+     // Under g_readMu.
+-    bool readXInput(int slot, ps2_host_pad::State &out, uint64_t now)
++    bool readXInput(int slot, ps2_host_pad::State &out, uint64_t now, const pb::PadMap *map = nullptr)
+     {
+         XSlot &x = g_x[slot];
+         // Always fresh: XInputGetState costs ~10 us (TEKKEN4_PAD_STATS), and a cached sample could be one
+@@ -538,7 +636,7 @@ namespace
+             x.connected.store(false, std::memory_order_release);
+             return false;
+         }
+-        ps2_host_pad::State st = fromXInput(xs.Gamepad, x.gameDirs);
++        ps2_host_pad::State st = fromXInputMapped(xs.Gamepad, map, x.gameDirs, x.gameAxis);
+         // A press that started and ended between two reads: held for exactly this one read.
+         // A speculative run-ahead frame only looks: the real frame after it consumes the taps.
+         const bool spec = ps2_runahead::speculative();
+@@ -670,6 +768,40 @@ namespace ps2_host_pad
+         }
+     }
+ 
++    namespace
++    {
++        // Under g_readMu: the k-th raylib pad (the DirectInput ones, XInput pads read directly are skipped).
++        bool readRaylib(int k, State &out, uint64_t now)
++        {
++            std::lock_guard<std::mutex> snap(g_snapMu);
++            RPad *p = nthRaylib(k);
++            if (!p)
++                return false;
++            State st = p->st;
++            if (!g_raw)
++            {
++                const uint16_t taps = static_cast<uint16_t>(p->rises & ~st.buttons & ~p->lastReported);
++                if (taps)
++                {
++                    ++g_st.taps;
++                    st.buttons |= taps;
++                }
++                if (!ps2_runahead::speculative())
++                {
++                    p->rises = 0;
++                    p->lastReported = st.buttons;
++                }
++            }
++            const double age = usSince(p->qpc, now);
++            ++g_st.reads;
++            ++g_st.snapReads;
++            g_st.ageUsSum += age;
++            g_st.ageUsMax = std::max(g_st.ageUsMax, age);
++            out = st;
++            return true;
++        }
++    }
++
+     bool read(int nth, State &out)
+     {
+         ensureInit();
+@@ -694,32 +826,56 @@ namespace ps2_host_pad
+             }
+             k = nth - before;
+         }
+-        std::lock_guard<std::mutex> snap(g_snapMu);
+-        RPad *p = nthRaylib(k);
+-        if (!p)
++        return readRaylib(k, out, now);
++    }
++
++    bool readPlayer(int player, State &out)
++    {
++        ensureInit();
++        if (player < 0 || player >= pb::kPlayers)
+             return false;
+-        State st = p->st;
+-        if (!g_raw)
++        const std::shared_ptr<const pb::Config> cfg = pb::current();
++        if (cfg->isDefault())
++            return read(player, out);
++        if (!cfg->p[player].pad)
++            return false;
++        std::lock_guard<std::mutex> lock(g_readMu);
++        const uint64_t now = qpc();
++        maybePrintStats(now);
++        const Resolved r = resolvePlayer(*cfg, player);
++        if (r.slot >= 0)
+         {
+-            const uint16_t taps = static_cast<uint16_t>(p->rises & ~st.buttons & ~p->lastReported);
+-            if (taps)
+-            {
+-                ++g_st.taps;
+-                st.buttons |= taps;
+-            }
+-            if (!ps2_runahead::speculative())
++            const pb::PadMap *map = cfg->p[player].padMap.any() ? &cfg->p[player].padMap : nullptr;
++            if (readXInput(r.slot, out, now, map))
+             {
+-                p->rises = 0;
+-                p->lastReported = st.buttons;
++                ++g_st.reads;
++                return true;
+             }
++            return false;
+         }
+-        const double age = usSince(p->qpc, now);
+-        ++g_st.reads;
+-        ++g_st.snapReads;
+-        g_st.ageUsSum += age;
+-        g_st.ageUsMax = std::max(g_st.ageUsMax, age);
+-        out = st;
+-        return true;
++        return r.raylib >= 0 && readRaylib(r.raylib, out, now);
++    }
++
++    bool playerPresent(int player)
++    {
++        ensureInit();
++        if (player < 0 || player >= pb::kPlayers)
++            return false;
++        const std::shared_ptr<const pb::Config> cfg = pb::current();
++        if (cfg->isDefault())
++            return present(player);
++        const pb::PlayerCfg &c = cfg->p[player];
++        if (c.keyboard)
++            return true;
++        if (!c.pad)
++            return false;
++        const Resolved r = resolvePlayer(*cfg, player);
++        if (r.slot >= 0)
++            return true;
++        if (r.raylib < 0)
++            return false;
++        std::lock_guard<std::mutex> snap(g_snapMu);
++        return nthRaylib(r.raylib) != nullptr;
+     }
+ 
+     bool present(int nth)
+@@ -781,6 +937,8 @@ namespace ps2_host_pad
+         std::lock_guard<std::mutex> lock(g_mu);
+         return nth >= 0 && nth < g_count;
+     }
++    bool readPlayer(int player, State &out) { return read(player, out); }
++    bool playerPresent(int player) { return present(player); }
+ }
+ 
+ #endif
+diff --git a/ps2xRuntime/src/lib/ps2_input_latency.cpp b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+index bf1b443..3fc9cdd 100644
+--- a/ps2xRuntime/src/lib/ps2_input_latency.cpp
++++ b/ps2xRuntime/src/lib/ps2_input_latency.cpp
+@@ -53,6 +53,7 @@ namespace
+     };
+ 
+     std::atomic<uint16_t> g_posted{0};
++    std::atomic<uint64_t> g_postedVk[4]{}; // pad bindings: every virtual key the window thread saw go down (L/R split)
+     std::atomic<uintptr_t> g_hwnd{0};
+     std::atomic<uint16_t> g_asyncCache{0};
+     std::atomic<uint64_t> g_asyncCacheQpc{0};
+@@ -216,12 +217,32 @@ namespace
+         slot->stage = 1;
+     }
+ 
++    // The window gets VK_SHIFT / VK_CONTROL / VK_MENU for either side; the scan code and the extended bit tell which.
++    uint32_t sideVk(WPARAM wp, LPARAM lp)
++    {
++        if (wp == VK_SHIFT)
++            return ((lp >> 16) & 0xFF) == 0x36 ? VK_RSHIFT : VK_LSHIFT;
++        if (wp == VK_CONTROL)
++            return (lp & (static_cast<LPARAM>(1) << 24)) ? VK_RCONTROL : VK_LCONTROL;
++        if (wp == VK_MENU)
++            return (lp & (static_cast<LPARAM>(1) << 24)) ? VK_RMENU : VK_LMENU;
++        return static_cast<uint32_t>(wp);
++    }
++
+     LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+     {
+         if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)
+         {
+             const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+             const bool repeat = down && ((lp & (static_cast<LPARAM>(1) << 30)) != 0);
++            const uint32_t sideKey = sideVk(wp, lp);
++            if (sideKey < 256)
++            {
++                if (down)
++                    g_postedVk[sideKey >> 6].fetch_or(uint64_t{1} << (sideKey & 63), std::memory_order_release);
++                else
++                    g_postedVk[sideKey >> 6].fetch_and(~(uint64_t{1} << (sideKey & 63)), std::memory_order_release);
++            }
+             const uint16_t bit = vkToPad(wp);
+             if (bit != 0)
+             {
+@@ -404,6 +425,28 @@ namespace ps2_input_latency
+         return true;
+     }
+ 
++    bool sampleKeys(const uint16_t *vks, const uint16_t *bits, size_t n, uint16_t &padDownMask)
++    {
++        if (legacy())
++            return false;
++        const uintptr_t raw = g_hwnd.load(std::memory_order_acquire);
++        if (raw == 0)
++            return false;
++        const bool focused = GetForegroundWindow() == reinterpret_cast<HWND>(raw);
++        uint16_t mask = 0;
++        for (size_t i = 0; i < n; ++i)
++        {
++            const uint32_t vk = vks[i];
++            if (vk >= 256)
++                continue;
++            const bool posted = ((g_postedVk[vk >> 6].load(std::memory_order_acquire) >> (vk & 63)) & 1u) != 0;
++            if (posted || (focused && (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0))
++                mask = static_cast<uint16_t>(mask | bits[i]);
++        }
++        padDownMask = mask;
++        return true;
++    }
++
+     void notePad(uint16_t pressedMask, uint64_t vsyncTick)
+     {
+         if (vblankHash())
+@@ -576,6 +619,7 @@ namespace ps2_input_latency
+     void waitMessage(unsigned) {}
+     void notifyTick() {}
+     bool sampleKeyboard(uint16_t &) { return false; }
++    bool sampleKeys(const uint16_t *, const uint16_t *, size_t, uint16_t &) { return false; }
+     void notePad(uint16_t, uint64_t) {}
+     void openTestPress(uint32_t, uint16_t) {}
+     bool presentLog() { return false; }
+diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
+index 8a9e987..9e95dbd 100644
+--- a/ps2xRuntime/src/lib/ps2_pad.cpp
++++ b/ps2xRuntime/src/lib/ps2_pad.cpp
+@@ -1,9 +1,12 @@
+ #include "runtime/ps2_pad.h"
+ #include "runtime/ps2_input_latency.h"
+ #include "runtime/ps2_host_pad.h"
++#include "runtime/ps2_pad_bindings.h"
+ #include "ps2_host_backend.h"
+ #include <cstdio>
+ #include <cstring>
++#include <memory>
++#include <vector>
+ 
+ namespace
+ {
+@@ -28,11 +31,59 @@ namespace
+     constexpr uint16_t PAD_L2 = 0x0100u;
+ }
+ 
++bool PSPadBackend::readBound(int player, unsigned flags, uint8_t *data, size_t size)
++{
++    if (!data || size < 32 || player < 0 || player >= ps2_pad_bindings::kPlayers)
++        return false;
++    std::memset(data, 0, 32);
++    data[0] = 0x01;
++    data[1] = kPadAnalogMarker;
++    data[2] = 0xFF;
++    data[3] = 0xFF;
++    data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
++
++    const std::shared_ptr<const ps2_pad_bindings::Config> cfg = ps2_pad_bindings::current();
++    const ps2_pad_bindings::PlayerCfg &c = cfg->p[player];
++    uint16_t btns = 0xFFFFu;
++    if ((flags & kBoundPad) != 0 && c.pad)
++    {
++        ps2_host_pad::State pad;
++        if (ps2_host_pad::readPlayer(player, pad))
++        {
++            btns &= static_cast<uint16_t>(~pad.buttons);
++            data[4] = pad.rx;
++            data[5] = pad.ry;
++            data[6] = pad.lx;
++            data[7] = pad.ly;
++        }
++    }
++    if ((flags & kBoundKeys) != 0 && (c.keyboard || (flags & kBoundForceKeys) != 0))
++    {
++        // Posted keys from the window thread and the physical keyboard, at pad-read time (patch 31).
++        std::vector<uint16_t> vks, bits;
++        for (const auto &kb : ps2_pad_bindings::flatKeys(c.keyMap, player))
++        {
++            vks.push_back(kb.first);
++            bits.push_back(kb.second);
++        }
++        uint16_t held = 0;
++        if (ps2_input_latency::sampleKeys(vks.data(), bits.data(), vks.size(), held))
++            btns &= static_cast<uint16_t>(~held);
++    }
++    data[2] = static_cast<uint8_t>(btns & 0xFF);
++    data[3] = static_cast<uint8_t>(btns >> 8);
++    return true;
++}
++
+ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
+ {
+     if (!data || size < 32)
+         return false;
+ 
++    // A bindings file that changes something: this player's devices and buttons as the file says.
++    if (!ps2_pad_bindings::current()->isDefault())
++        return readBound(0, kBoundPad | kBoundKeys, data, size);
++
+     std::memset(data, 0, 32);
+     data[0] = 0x01;
+     data[1] = kPadAnalogMarker;

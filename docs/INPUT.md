@@ -227,3 +227,60 @@ New tools in `D:\tekken4-us\tools` (left uncommitted as agreed): `input_build.cm
   the gamepad change, `logs\input\p2c_final` with everything).
 - Before/after summary at the top: `pad_lag.ps1 -Source both -Backend raylib -Env "TEKKEN4_PRESENT_PHASE_MS=-1"`
   (before_both) vs `-Backend direct` with the defaults (final_both), same build.
+
+## 4. Pad bindings (patch 99-ps2xRuntime-pad-bindings, `controls.ini`)
+
+"Keybinds like T5DR": every PS2 button can be given other keys / XInput buttons, per player, and each player can be
+given another device. Only *which physical input is which PS2 button* changes. The pad packet, the game state and
+netplay's data (PS2 button bits per frame) are the same as before, so a bindings file never touches a match.
+
+**Where.** `TEKKEN4_CONTROLS=<path>`, else `controls.ini` in the game's working directory (the launcher starts the game
+in `<T4 folder>\save`, so `<T4 folder>\save\controls.ini`; OpenRecomp sets `TEKKEN4_CONTROLS` to it explicitly).
+`TEKKEN4_CONTROLS=off` ignores any file. The file is read at start and looked at once a second (size + time stamp),
+so an edit applies within about a second, also while a match runs; the log says `[pad] controls: loaded <path> -- P1:
+...` (and one line per mistake: unknown button / key / device, with its line number). The launcher writes it through a
+temporary file and a rename, so the game never reads half a file.
+
+**No file = today's layout.** A missing or empty file, or one that only says `device = auto` and lists no binding, is
+`isDefault()`: every reader keeps its old code (patch 29/31/60 layout bit for bit; the tests compare the table path with
+a copy of the old code on 200,000 random pad samples and 100,000 key sets). Netplay and rollback sample the local pad
+through the same `PSPadBackend::readState`, so they send the mapped buttons; `TEKKEN4_NET_PAD=-1` (keyboard only) uses
+`[player1.keys]` too.
+
+**Format** (`;` or `#` starts a comment; names are case-insensitive):
+
+```
+[player1]                    ; player1 = pad port 1, player2 = port 2
+device = auto                ; auto | none | keyboard | xinput | xinput:0..3, joined with + (keyboard+xinput:1)
+[player1.pad]                ; XInput bindings; a button that is not listed keeps its default
+SQUARE = X                   ; TARGET = SOURCE SOURCE ...   (`none` or nothing = unbound)
+UP = DUP LUP
+[player1.keys]               ; keyboard bindings, same rules; player 2 has no default keys
+1 = LEFT Z NUM0
+```
+
+- **device**: `auto` is the old order (player 1: keyboard + the first pad, player 2: the second pad, XInput slots first,
+  then the DirectInput pads raylib sees). `keyboard` = the keyboard of that player. `xinput:N` pins a slot (the other
+  player's `auto` then takes the first free slot); `xinput` = the next free pad. `none` = nothing (port 2 disconnected).
+  DirectInput pads stay on the fixed layout (no `.pad` map applies to them).
+- **TARGET**: `SELECT L3 R3 START UP RIGHT DOWN LEFT L2 R2 L1 R1 TRIANGLE CIRCLE CROSS SQUARE`, or Tekken's `1 2 3 4`
+  (= SQUARE TRIANGLE CROSS CIRCLE, also `LP RP LK RK`).
+- **Pad SOURCE**: `A B X Y LB RB LT RT BACK START LS RS DUP DDOWN DLEFT DRIGHT` and the stick directions `LUP LDOWN LLEFT
+  LRIGHT RUP RDOWN RLEFT RRIGHT` (on past 50 %, off below 40 %; triggers past 30/255). The analog sticks themselves
+  still go to the game as before. `TEKKEN4_PAD_STICK_DPAD=0` only takes the left stick out of the *default* d-pad.
+- **Key SOURCE**: `A..Z 0..9 F1..F12 UP DOWN LEFT RIGHT ENTER TAB SPACE ESC BACKSPACE LSHIFT RSHIFT LCTRL RCTRL LALT
+  RALT NUM0..NUM9 NUMADD NUMSUB NUMMUL NUMDIV NUMDEC SEMICOLON COMMA PERIOD SLASH MINUS EQUALS GRAVE LBRACKET RBRACKET
+  BACKSLASH APOSTROPHE INSERT DELETE HOME END PGUP PGDN CAPSLOCK` (T5DR's names). Keys count while the game window has
+  the focus, or when the window thread was posted them (the capture scripts).
+- A listed button *replaces* its defaults (`SQUARE = U` no longer answers to Left/Z/Num0); an unlisted one keeps them.
+  The defaults: pad = X Y A B for 1 2 3 4, LB RB LT RT, Back / Start, stick clicks, d-pad + left stick; keyboard
+  (player 1) = WASD, Left Z Num0 / Up V Num1 / Down X Space / Right C Esc for 1 2 3 4, Q E, LShift RShift, Enter, Tab.
+
+**Code.** `ps2_pad_bindings.h` (header only: parser, `PadMap`/`KeyMap`, `evalPad`, the live file with a thread-local
+copy, safe for the 1 kHz tap-latch thread), `ps2_host_pad` `readPlayer` / `playerPresent` (a pinned slot or the next free
+one, the 1 ms tap latch latches in the terms of the player who reads that slot, re-baselined when the file changes),
+`ps2_input_latency` `sampleKeys` (posted keys + `GetAsyncKeyState` for the bound virtual keys, L/R shift/ctrl/alt told
+apart), `PSPadBackend::readBound`, and `Pad.cpp` for port 2 / the netplay keyboard device.
+Tests: `py -3 tools\test_pad_bindings.py` (builds `tools\pad_bindings_test.cpp` against the header taken out of the
+patch). Not tested on real hardware: a real pad pinned by slot, keys with the game window in front, two keyboards.
+The launcher's Pad bindings page (OpenRecomp-FGC) edits this file; the game should be closed while editing.
