@@ -527,18 +527,24 @@ def check(root, lock_path, sysroot=None):
                 raise ValueError("Microsoft sysroot integrity check failed: " + relative)
         fresh[relative] = now
     if hashed or set(stamp) != set(fresh):
-        temporary = toolchain / (STAMP + ".tmp" + uuid.uuid4().hex[:8])
-        try:
-            temporary.write_text(json.dumps(dict(schema=1, marker=marker_hash, files=fresh)), encoding="utf-8")
-            os.replace(temporary, toolchain / STAMP)
-        except OSError:
-            # A read-only cache still builds; it only hashes again next time.
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
+        write_stamp(toolchain, fresh)
     marker["_hashed"] = hashed
     return marker
+
+
+def write_stamp(toolchain, files):
+    """verified.json: {relative: [size, mtime_ns]} of files whose SHA-256 matched the marker."""
+    temporary = toolchain / (STAMP + ".tmp" + uuid.uuid4().hex[:8])
+    try:
+        data = dict(schema=1, marker=sha256(toolchain / "sysroot.json"), files=files)
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(temporary, toolchain / STAMP)
+    except OSError:
+        # A read-only cache still builds; it only hashes again next time.
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
 
 
 def install(root, lock_path, sysroot=None):
@@ -577,6 +583,8 @@ def install(root, lock_path, sysroot=None):
     downloaded = {}
     # 1. the package files (VSIX, MSI), several at once; 2. the cabinets their Media tables name, several at once;
     # 3. unpack one after the other from the cache (fetch then only checks each file's SHA-256).
+    import time
+    started = time.monotonic()
     first = [p for p in lock["payloads"] if p["kind"] != "sdk-cab"]
     progress = dict(done=0, total=sum(p["size"] for p in first), phase="(package lists) ")
     paths = fetch_all(first, cache, progress)
@@ -587,7 +595,8 @@ def install(root, lock_path, sysroot=None):
     cabinets = list({p["sha256"]: p for p in cabinets}.values())
     progress = dict(done=0, total=sum(p["size"] for p in cabinets))
     fetch_all(cabinets, cache, progress)
-    print("Microsoft files: unpacking", flush=True)
+    print("Microsoft files: downloaded in %.0f s, unpacking" % (time.monotonic() - started), flush=True)
+    started = time.monotonic()
     for payload in lock["payloads"]:
         if payload["kind"] == "sdk-cab":
             continue
@@ -602,7 +611,8 @@ def install(root, lock_path, sysroot=None):
     for relative in REQUIRED:
         if not (staging / relative).is_file():
             raise ValueError("Microsoft sysroot extraction did not produce " + relative)
-    print("Microsoft files: checking what was unpacked", flush=True)
+    print("Microsoft files: unpacked in %.0f s, checking them" % (time.monotonic() - started), flush=True)
+    started = time.monotonic()
     inventory = {p.relative_to(staging).as_posix(): sha256(p) for p in staging.rglob("*") if p.is_file()}
     marker = {
         "schema": 1, "architecture": "x64", "lock_sha256": sha256(lock_path),
@@ -626,7 +636,11 @@ def install(root, lock_path, sysroot=None):
             if not (target / "sysroot.json").is_file():
                 raise
             print("Another build finished the same Microsoft sysroot first; using it", flush=True)
-    check(root, lock_path, target)          # writes verified.json: later builds only compare size and time
+    # The inventory above hashed every unpacked file; the rename kept their sizes and times: stamp them so the check
+    # below (and every later build) only compares size and time.
+    write_stamp(target, {relative: _stamp_of(target / relative) for relative in inventory})
+    check(root, lock_path, target)
+    print("Microsoft files: checked in %.0f s" % (time.monotonic() - started), flush=True)
     shutil.rmtree(work, ignore_errors=True)
     print("Microsoft sysroot verified:", target, flush=True)
     print("Payload cache retained on this PC; never redistribute it.")
