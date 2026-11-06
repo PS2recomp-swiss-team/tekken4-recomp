@@ -22,9 +22,9 @@ One build for everyone. Everything in [RELEASE_NOTES_0.1.1.md](RELEASE_NOTES_0.1
   compiler never looks for an installed Visual Studio: it used to take `_MSC_VER` from it (19.44 with VS 2022, 19.51
   with VS 2026, 19.33 with none) -- now fixed at 19.44 for everyone.
 - Install folders up to 115+ characters build (checked); spaces are fine.
-- Faster build: the first build is about 3.5 minutes here incl. the Microsoft download (0.1.3 test builds: 4.5); the
-  disc is unpacked while the compiler is set up; Microsoft's files are fetched six at a time and checked once. A
-  rebuild with nothing changed takes about 2 seconds (was 40).
+- Faster build: Microsoft's files are fetched six at a time (16 s here instead of about 40) and checked once; a
+  second Tekken 4 folder or an update reuses them (no download); a rebuild with nothing changed takes about 2 seconds
+  (was 40). The first build was about 3.5-4 minutes here (0.1.3 test builds: 4.5).
 - The online identity uses the game files from your ISO (SLUS_203.28, TEKKEN\DATA.BIN, IRX\IOPRP243.IMG) instead of
   the whole ISO file: two clean rips of the same disc play each other. Direct IP and the lobby use the same rule.
 
