@@ -1,0 +1,204 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: t5dr <t5dr@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 20:50:00 +0100
+Subject: [PATCH 100/100] Online presenter: even swap times, GS-ready lead
+
+TEKKEN4_NET_PRESENT=legacy turns it off. In netplay (TEKKEN4_NET / TEKKEN4_RB_MODE=net) the guest vblank times are
+set by the netplay loop (early boundaries, time-sync pauses, re-simulation), so the paced present (patch 64/65: a
+fixed phase after each guest VBlankStart) inherited that wobble, and the wait for the GS worker's picture sat inside
+the present, so the swap time also followed the GS: two pictures a few ms apart, then a long hold, which a 60 Hz
+capture of a display without vsync shows as two-frame holds.
+
+The online presenter starts the present at the new live tick (latch + wait for the GS), then holds the picture and
+swaps at a time of its own: not before <lead> ms after the vblank (TEKKEN4_NET_PRESENT_LEAD_MS floor 3, rising to the
+90th percentile of the last 64 pictures' vblank -> picture-ready time plus draw + swap, at most
+TEKKEN4_NET_PRESENT_LEAD_MAX_MS 10; TEKKEN4_NET_PRESENT_PCT), and one frame (16.567 ms) after the previous swap, but
+never more than TEKKEN4_NET_PRESENT_CAP_MS (6) after the first. One present per new live picture; re-simulated
+frames are never shown (as before). Offline runs and TEKKEN4_NET_PRESENT=legacy take the old branch unchanged. The
+presenter only reads the tick and the clock: game state is untouched.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 143 +++++++++++++++++++++++++++-
+ 1 file changed, 142 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 98addbd..f3f7096 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -387,6 +387,57 @@ namespace
+ 
+ // The guest vsync tick of the picture the last present latched (perf counters: repeated / skipped frames).
+ static uint64_t s_presentedTick = 0, s_requestedTick = 0;
++
++// Tekken 4 port, online presentation (TEKKEN4_NET_PRESENT, docs/NETPLAY_PRESENT.md): in netplay the guest vblank times
++// are set by the netplay loop (early boundaries, time-sync pauses, re-simulation), so a present that follows each
++// vblank by a fixed phase inherits all of that wobble. The online presenter instead gives every new live picture a swap
++// time of its own: not before <lead> ms after the picture's vblank, and not sooner than one frame period after the
++// previous swap, so the swaps stay evenly spaced while the pictures arrive within the lead + cap window.
++// Presentation thread only; offline runs never touch any of it.
++namespace
++{
++    using NetClock = std::chrono::steady_clock;
++    NetClock::time_point s_netSwapAt{};   // set by the run loop: the swap this present should land on (zero = now)
++    NetClock::time_point s_netLastSwap{}; // the previous present's return from the swap
++    NetClock::time_point s_netTickAt{};   // set by the run loop: the vblank time of the picture being presented
++    double s_netReadyMs = 0.0;            // last present: vblank -> picture ready (latch, wait for the GS, readback)
++    double s_netDrawMs = 0.0;             // last present: draw + swap
++    double s_netDrawHoldMs = 1.0;         // run loop's estimate of draw + swap (recent maximum, 0.5..3 ms)
++
++    // Message-wait until shortly before t, then yield-spin; returns at t or later.
++    void netWaitUntil(NetClock::time_point t)
++    {
++        for (;;)
++        {
++            const auto left = std::chrono::duration_cast<std::chrono::microseconds>(t - NetClock::now()).count();
++            if (left <= 0)
++                return;
++            if (left > 2200)
++                ps2_input_latency::waitMessage(1);
++            else
++                std::this_thread::yield();
++        }
++    }
++
++    double netEnvMs(const char *name, double fallback, double lo, double hi)
++    {
++        const char *v = std::getenv(name);
++        if (!v || !*v)
++            return fallback;
++        return std::min(hi, std::max(lo, std::atof(v)));
++    }
++
++    // An online (netplay / rollback) run, unless TEKKEN4_NET_PRESENT=legacy (or off / 0).
++    bool netPresentEnabled()
++    {
++        const char *off = std::getenv("TEKKEN4_NET_PRESENT");
++        if (off && (std::strcmp(off, "legacy") == 0 || std::strcmp(off, "off") == 0 || std::strcmp(off, "0") == 0))
++            return false;
++        const char *net = std::getenv("TEKKEN4_NET");
++        const char *rb = std::getenv("TEKKEN4_RB_MODE");
++        return (net && *net) || (rb && std::strcmp(rb, "net") == 0);
++    }
++}
+ static uint64_t s_sharedWaitNs = 0, s_sharedFrameSequence = 0, s_sharedFresh = 0, s_sharedTick = 0, s_sharedRenderSequence = 0; // presentation thread only; opt-in trace
+ // Tekken 4 port (PC graphics options, docs/GRAPHICS.md): how the presented picture is scaled to the window.
+ // TEKKEN4_WINDOW_FILTER=area (default: area average when the picture is larger than the window, i.e. supersampling at
+@@ -2744,6 +2795,12 @@ void PS2Runtime::run()
+             padBackend().publishHostPads();
+         }
+ 
++        // Online presenter: the picture is ready; hold it until the swap time the run loop chose (less draw + swap).
++        if (s_netTickAt != NetClock::time_point{})
++            s_netReadyMs = std::chrono::duration<double, std::milli>(NetClock::now() - s_netTickAt).count();
++        if (s_netSwapAt != NetClock::time_point{})
++            netWaitUntil(s_netSwapAt - std::chrono::microseconds(static_cast<int64_t>(s_netDrawHoldMs * 1000.0)));
++        const auto netDrawStart = NetClock::now();
+         BeginDrawing();
+         ClearBackground(BLACK);
+         const float srcWidth = static_cast<float>(std::max<uint32_t>(1u, presentWidth));
+@@ -2814,8 +2871,28 @@ void PS2Runtime::run()
+         padBackend().publishHostPads();
+         ps2_input_latency::onSwapReturned();
+         ps2_perf_stats::notePresent(s_presentedTick, work);
++        s_netLastSwap = NetClock::now();
++        s_netDrawMs = std::chrono::duration<double, std::milli>(s_netLastSwap - netDrawStart).count();
+     };
+ 
++    // Online presenter state (see s_netSwapAt above).
++    const bool netPresent = !legacyPresent && !ps2_input_latency::presentOnTick() && netPresentEnabled();
++    // Lead: the picture's swap is held at least this long after its vblank (floor), and follows the recent GS-ready times
++    // above it (the <pct>th percentile of the last 64 pictures' vblank -> ready, plus draw + swap) up to <max>.
++    const double netLeadMs = netEnvMs("TEKKEN4_NET_PRESENT_LEAD_MS", 3.0, 0.0, 12.0);
++    const double netLeadMaxMs = std::max(netLeadMs, netEnvMs("TEKKEN4_NET_PRESENT_LEAD_MAX_MS", 10.0, 0.0, 16.0));
++    const double netPct = netEnvMs("TEKKEN4_NET_PRESENT_PCT", 90.0, 50.0, 100.0);
++    const double netCapMs = netEnvMs("TEKKEN4_NET_PRESENT_CAP_MS", 6.0, 0.0, 12.0);
++    uint64_t netSeenTick = std::numeric_limits<uint64_t>::max();
++    bool netPending = false;
++    NetClock::time_point netTarget{}, netTickAt{};
++    std::array<double, 64> netReadyHist{};
++    std::array<double, 16> netDrawHist{};
++    size_t netHistN = 0, netReadyN = 0;
++    if (netPresent)
++        std::cerr << "[present] online presenter on: lead " << netLeadMs << ".." << netLeadMaxMs << " ms (p" << netPct
++                  << " of the GS-ready time), cap " << netCapMs << " ms (TEKKEN4_NET_PRESENT=legacy turns it off)" << std::endl;
++
+     uint64_t tick = 0;
+     uint64_t shownTick = std::numeric_limits<uint64_t>::max();
+     auto nextPaced = std::chrono::steady_clock::now();
+@@ -2854,7 +2931,71 @@ void PS2Runtime::run()
+ 
+             }
+         });
+-        if (!legacyPresent)
++        if (netPresent)
++        {
++            const auto now = NetClock::now();
++            const uint64_t guestTick = m_eeScheduler->currentVSyncTick();
++            // A new live picture. Re-simulated frames (rollback) are never shown; a re-simulation ends with the live
++            // tick again, and the tick's vblank time is the last time it changed.
++            if (guestTick != netSeenTick && !ps2_rollback::cutActive(ps2_rollback::CutPresent))
++            {
++                netSeenTick = guestTick;
++                double since = ps2_input_latency::msSinceVBlank(guestTick);
++                if (since < 0.0 || since > 40.0)
++                    since = 0.0;
++                netTickAt = now - std::chrono::microseconds(static_cast<int64_t>(since * 1000.0));
++                // Where this picture may be shown: the floor lead, or the usual GS-ready time when that is later.
++                double leadMs = netLeadMs;
++                if (netReadyN >= 8)
++                {
++                    std::array<double, 64> sorted = netReadyHist;
++                    const size_t n = std::min(netReadyN, sorted.size());
++                    std::sort(sorted.begin(), sorted.begin() + static_cast<std::ptrdiff_t>(n));
++                    const double ready = sorted[std::min(n - 1, static_cast<size_t>(static_cast<double>(n) * netPct / 100.0))];
++                    leadMs = std::min(netLeadMaxMs, std::max(netLeadMs, ready + s_netDrawHoldMs + 0.3));
++                }
++                const auto ready = netTickAt + std::chrono::microseconds(static_cast<int64_t>(leadMs * 1000.0));
++                auto target = ready;
++                if (s_netLastSwap != NetClock::time_point{})
++                {
++                    // One frame after the previous swap (a hair less, so a queued-up delay drains), but never more than
++                    // <cap> after the picture is allowed to show.
++                    const auto even = s_netLastSwap + std::chrono::microseconds(16667 - 100);
++                    target = std::max(ready, std::min(even, ready + std::chrono::microseconds(static_cast<int64_t>(netCapMs * 1000.0))));
++                }
++                netTarget = target;
++                netPending = true;
++            }
++            // Start at once: the latch and the wait for the GS happen now, the present holds the picture until netTarget.
++            const bool due = netPending;
++            const bool idleDue = now >= nextIdle;
++            if (!due && !idleDue)
++            {
++                ps2_input_latency::waitMessage(1);
++                PollInputEvents();
++                padBackend().publishHostPads();
++                if (WindowShouldClose())
++                {
++                    RUNTIME_LOG("[run] window close requested, breaking out of loop");
++                    requestStop();
++                    break;
++                }
++                continue;
++            }
++            s_netSwapAt = due ? netTarget : NetClock::time_point{};
++            s_netTickAt = due ? netTickAt : NetClock::time_point{};
++            presentHostFrame();
++            s_netSwapAt = NetClock::time_point{};
++            if (due)
++                netReadyHist[netReadyN++ % netReadyHist.size()] = s_netReadyMs;
++            s_netTickAt = NetClock::time_point{};
++            netPending = false;
++            netDrawHist[netHistN % netDrawHist.size()] = s_netDrawMs;
++            ++netHistN;
++            s_netDrawHoldMs = std::min(3.0, std::max(0.5, *std::max_element(netDrawHist.begin(), netDrawHist.end())));
++            nextIdle = NetClock::now() + std::chrono::milliseconds(100);
++        }
++        else if (!legacyPresent)
+         {
+             const uint64_t guestTick = m_eeScheduler->currentVSyncTick();
+             const auto now = std::chrono::steady_clock::now();
+-- 
+2.55.0.windows.3
+
